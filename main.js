@@ -14,15 +14,7 @@ const NAV_ITEMS = [
   { id: 'defi', label: 'DeFi Scanner', icon: 'layers' },
   { id: 'command', label: 'AI Command Center', icon: 'terminal' },
   { id: 'alerts', label: 'Alerts & Notifications', icon: 'bell' },
-  { id: 'settings', label: 'Settings & Subscription', icon: 'settings' },
-  { id: 'simulations', label: 'Simulation Engine', icon: 'terminal' }
-];
-
-let simulations = [
-  { id: 1, asset: 'SOL', type: 'Scalp', entry: 164.20, target: 168.50, stop: 162.00, status: 'Target Hit', pnl: '+2.6%' },
-  { id: 2, asset: 'BTC', type: 'Swing', entry: 62500, target: 68000, stop: 61000, status: 'Target Hit', pnl: '+8.4%' },
-  { id: 3, asset: 'ETH', type: 'Day Trade', entry: 3420, target: 3600, stop: 3350, status: 'Stopped Out', pnl: '-2.0%' },
-  { id: 4, asset: 'LINK', type: 'Scalp', entry: 18.20, target: 19.50, stop: 17.80, status: 'Active', pnl: '+1.1%' }
+  { id: 'settings', label: 'Settings & Subscription', icon: 'settings' }
 ];
 
 // --- Mock Data ---
@@ -145,12 +137,10 @@ function initApp() {
   renderSentimentPage();
   renderTechnicalPage();
   renderDefiPage();
-  renderSimulationsPage();
   setupCommandCenter();
   setupAiResearchChat();
   setupModals();
   setupTradingEvents();
-  setupSimulationEngine();
   
   // Sync live APIs
   syncLiveApis();
@@ -343,9 +333,10 @@ function navigateToPage(pageId) {
     document.getElementById('page-title').textContent = pageInfo.label;
   }
   
+  document.querySelectorAll('.page').forEach(page => {
+    page.classList.remove('active');
+  });
   document.getElementById(`page-${pageId}`).classList.add('active');
-  
-  if (pageId === 'simulations') renderSimulationsPage();
 }
 
 function updateTime() {
@@ -660,82 +651,6 @@ function renderDefiPage() {
   `).join('');
 }
 
-function renderSimulationsPage() {
-  const tbody = document.getElementById('simulation-log');
-  if(!tbody) return;
-
-  tbody.innerHTML = simulations.map(sim => `
-    <tr>
-      <td><strong>${sim.asset}</strong></td>
-      <td><span class="badge bg-primary">${sim.type}</span></td>
-      <td style="font-family: var(--font-mono)">$${formatPrice(sim.entry)}</td>
-      <td style="font-family: var(--font-mono)" class="text-green">$${formatPrice(sim.target)}</td>
-      <td style="font-family: var(--font-mono)" class="text-red">$${formatPrice(sim.stop)}</td>
-      <td>
-        <span class="status-text ${sim.status.includes('Hit') ? 'text-green' : 'text-primary'}">
-          <span class="status-dot ${sim.status === 'Active' ? 'pulse' : ''} mr-2"></span>
-          ${sim.status}
-        </span>
-      </td>
-      <td style="font-family: var(--font-mono)" class="${sim.pnl.includes('+') ? 'text-green' : 'text-red'}"><strong>${sim.pnl}</strong></td>
-    </tr>
-  `).reverse().join('');
-}
-
-function setupSimulationEngine() {
-  const btn = document.getElementById('run-new-sim');
-  if(!btn) return;
-
-  btn.addEventListener('click', async () => {
-    btn.disabled = true;
-    btn.innerHTML = `<span class="ai-cursor"></span> Synthesizing...`;
-    
-    // Pick a high alpha asset
-    const best = [...assets].sort((a,b) => b.score - a.score)[0];
-    
-    // Get AI setup
-    const prompt = `Provide a professional Day Trade setup for ${best.symbol}. Just give me 3 numbers: Entry, TP, and SL. No other text. Format: Entry: X, TP: Y, SL: Z`;
-    const aiResponse = await fetchAIAnalysis(prompt);
-    
-    let entry = best.price, tp = best.price * 1.05, sl = best.price * 0.97;
-    
-    if (aiResponse) {
-       const parts = aiResponse.match(/[\d\.]+/g);
-       if(parts && parts.length >= 3) {
-          entry = parseFloat(parts[0]);
-          tp = parseFloat(parts[1]);
-          sl = parseFloat(parts[2]);
-       }
-    }
-
-    const newSim = {
-      id: simulations.length + 1,
-      asset: best.symbol,
-      type: 'Day Trade',
-      entry: entry,
-      target: tp,
-      stop: sl,
-      status: 'Active',
-      pnl: '0.00%'
-    };
-
-    simulations.push(newSim);
-    renderSimulationsPage();
-    showToast(`AI Simulation started for ${best.symbol}`);
-    
-    btn.disabled = false;
-    btn.innerHTML = `+ Start Simulation`;
-
-    // Mock "Result" after some time
-    setTimeout(() => {
-       newSim.status = Math.random() > 0.3 ? 'Target Hit' : 'Stopped Out';
-       newSim.pnl = newSim.status === 'Target Hit' ? `+${((tp/entry - 1)*100).toFixed(2)}%` : `-${((1 - sl/entry)*100).toFixed(2)}%`;
-       renderSimulationsPage();
-       showToast(`Simulation for ${best.symbol} completed: ${newSim.status}`);
-    }, 10000);
-  });
-}
-
 function setupCommandCenter() {
   const input = document.getElementById('command-input-large');
   const btn = document.getElementById('command-submit-large');
@@ -763,14 +678,7 @@ function setupCommandCenter() {
 
     setTimeout(async () => {
       // Try to fetch real AI response
-      const groqRes = await fetchAIAnalysis(`You are Nexus, an institutional-grade quantitative crypto trading AI. The user says: "${val}". 
-      
-Provide a highly professional, data-driven trading analysis and actionable insights. If the user asks for a trade setup, analysis, or coin recommendation, you MUST provide explicit setups for 3 timeframes:
-1. Scalping (Minutes to Hours)
-2. Day Trading (Intraday)
-3. Swing Trading (Multi-day)
-
-Include precise Entry Zones, Take Profit (TP) targets, and Stop Loss (SL) levels for each timeframe based on current market context. Max 3-4 short paragraphs. Output strictly in HTML formatting using <div>, <strong>, <ul>, and <li>. Use <span class="text-green"> for bullish metrics and <span class="text-red"> for bearish metrics. Do NOT use markdown code blocks.`);
+      const groqRes = await fetchAIAnalysis(`You are Nexus, an advanced quantitative crypto trading AI. The user says: "${val}". Provide a short, highly professional, data-driven trading analysis based on live context. Include bias, entry zone, and targets if asked. Max 3 short paragraphs. Output strictly in HTML formatting. Use bolding and color classes like <span class="text-green"> for bullish or <span class="text-red"> for bearish. Do NOT use markdown code blocks, just raw HTML.`);
       
       res.removeChild(loadingBlock);
       
@@ -889,9 +797,7 @@ function setupAiResearchChat() {
     history.scrollTop = history.scrollHeight;
 
     // Fetch AI
-    const groqRes = await fetchAIAnalysis(`You are Nexus, an institutional-grade quantitative crypto research analyst. The user asks: "${val}". 
-    
-Provide a highly professional, actionable insight report. If asked for trade setups, explicitly break down your analysis into actionable strategies for Scalping, Day Trading, and Swing Trading, including specific entry and exit targets. Keep it concise. Output strictly in HTML formatting. Use <span class="text-green"> for bullish or <span class="text-red"> for bearish. Do NOT use markdown code blocks.`);
+    const groqRes = await fetchAIAnalysis(`You are Nexus, an advanced quantitative crypto trading AI. The user says: "${val}". Provide a short, highly professional, data-driven trading analysis based on live context. Max 2 short paragraphs. Output strictly in HTML formatting. Use bolding and color classes like <span class="text-green"> for bullish or <span class="text-red"> for bearish. Do NOT use markdown code blocks, just raw HTML.`);
 
     history.removeChild(loadingMsg);
 
