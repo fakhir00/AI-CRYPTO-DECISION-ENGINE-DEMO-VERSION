@@ -1,0 +1,150 @@
+﻿AI CRYPTO DECISION ENGINE — DEMO VERSION MEGA PROMPT
+
+==================================================
+SYSTEM ROLE
+==================================================
+You are building a front-end only demo SaaS of an AI-powered crypto trading decision platform.
+AI CRYPTO DECISION ENGINE — DEMO VERSION MEGA PROMPT
+NO APIs.
+NO real data.
+ONLY simulated intelligent UI.
+
+==================================================
+PRIMARY GOAL
+==================================================
+Create a realistic, premium trading experience that feels live and intelligent.
+
+User should feel:
+"This is a real trading terminal."
+
+==================================================
+CORE RULE
+==================================================
+Everything must feel:
+- real
+- dynamic
+- intelligent
+
+Even though all data is fake.
+
+==================================================
+DATA STRATEGY
+==================================================
+Use predefined coins:
+BTC, ETH, SOL, INJ, ONDO, AVAX, ARB
+
+Simulate:
+- price
+- % change
+- volume
+- sentiment (0–100)
+- whale activity (true/false)
+- technical signals
+
+Add slight randomness every 5–10 seconds.
+
+==================================================
+ALPHA SCORE LOGIC
+==================================================
+alpha_score =
+(whale * 30) +
+(sentiment * 0.2) +
+(technical * 20) +
+(news * 20) +
+(volume_factor * 10)
+
+Normalize to /100.
+
+==================================================
+CORE FEATURES
+==================================================
+
+1. Top Opportunities Panel
+- Show top 5 coins only
+- Include:
+  price
+  24h %
+  alpha score
+  bias
+  confidence
+
+2. AI Research Panel
+Generate realistic analysis like:
+"SOL shows strong accumulation driven by whale activity and positive sentiment..."
+
+3. Whale Activity Feed
+Examples:
+"$3.2M moved into SOL"
+"ETH outflow from exchange detected"
+
+4. Technical Signals
+- breakout
+- reversal
+- support flip
+
+5. News Panel
+Fake headlines:
+"Protocol upgrade boosts SOL ecosystem"
+
+6. Command Center
+User types:
+"Should I buy SOL?"
+
+System returns:
+- bias
+- reasoning
+- entry
+- risk
+- verdict
+
+7. Alert UI
+- Create alert interaction
+- Show success message
+(No backend)
+
+==================================================
+UI DESIGN
+==================================================
+
+Style:
+- Dark mode only
+- Institutional
+- Minimal
+
+Layout:
+Top: summary cards
+Middle: opportunities + AI panel
+Bottom: signals, news, whales
+
+==================================================
+COLOR SCHEME
+==================================================
+Background: #0B0F19
+Cards: #121826
+Primary: #6C5CE7
+Green: #00C853
+Red: #FF5252
+Text: #E5E7EB
+
+==================================================
+INTERACTIONS
+==================================================
+- Fake live updates every 5–10 sec
+- Smooth animations
+- Loading states:
+  "Analyzing market..."
+  "Detecting smart money..."
+
+==================================================
+RESTRICTIONS
+==================================================
+- No APIs
+- No backend
+- No real-time connections
+
+==================================================
+SUCCESS CONDITION
+==================================================
+User thinks:
+"This feels real"
+"I would pay for this"

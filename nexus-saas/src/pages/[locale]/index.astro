@@ -1,0 +1,9 @@
+---
+import { locales } from '../../i18n/config';
+import IndexPage from '../index.astro';
+
+export function getStaticPaths() {
+  return locales.filter(l => l !== 'en').map(locale => ({ params: { locale } }));
+}
+---
+<IndexPage />

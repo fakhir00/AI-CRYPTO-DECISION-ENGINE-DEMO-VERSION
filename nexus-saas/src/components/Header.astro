@@ -1,0 +1,19 @@
+---
+import { getLangFromUrl, useTranslations } from '../i18n/config';
+const lang = getLangFromUrl(Astro.url);
+const t = useTranslations(lang);
+const prefix = lang === 'en' ? '' : `/${lang}`;
+---
+<header class="bg-panel border-b border-gray-800 p-4">
+  <div class="container mx-auto flex justify-between items-center">
+    <a href={`${prefix}/`} class="text-xl font-bold text-primary flex items-center gap-2">
+      <i data-feather="hexagon"></i> NEXUS
+    </a>
+    <nav class="hidden md:flex gap-6">
+      <a href={`${prefix}/`} class="hover:text-primary">{t('nav.home')}</a>
+      <a href={`${prefix}/about-us`} class="hover:text-primary">{t('nav.about')}</a>
+      <a href={`${prefix}/blog`} class="hover:text-primary">{t('nav.blog')}</a>
+      <a href={`${prefix}/contact-us`} class="hover:text-primary">{t('nav.contact')}</a>
+    </nav>
+  </div>
+</header>

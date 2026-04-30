@@ -1,0 +1,553 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="description" content="AI-powered crypto trading decision engine with real-time market intelligence, whale tracking, and alpha scoring." />
+  <title>NEXUS — AI Crypto Decision Engine</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+  <!-- Feather Icons -->
+  <script src="https://unpkg.com/feather-icons"></script>
+  <!-- Chart.js -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <!-- TradingView -->
+  <script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script>
+</head>
+<body>
+  <div id="app">
+    <!-- Loading Screen -->
+    <div id="loading-screen" class="loading-screen">
+      <div class="loading-content">
+        <div class="loading-logo">
+          <div class="logo-hex">
+            <svg viewBox="0 0 60 60" width="60" height="60">
+              <polygon points="30,2 54,16 54,44 30,58 6,44 6,16" fill="none" stroke="#6C5CE7" stroke-width="2"/>
+              <polygon points="30,10 46,20 46,40 30,50 14,40 14,20" fill="none" stroke="#6C5CE7" stroke-width="1" opacity="0.5"/>
+              <text x="30" y="35" text-anchor="middle" fill="#6C5CE7" font-size="16" font-weight="700" font-family="Inter">N</text>
+            </svg>
+          </div>
+          <h1 class="loading-title">NEXUS</h1>
+          <p class="loading-subtitle">QUANTITATIVE AI TRADING CORE</p>
+        </div>
+        <div class="loading-bar-container">
+          <div class="loading-bar"></div>
+        </div>
+        <div class="loading-status" id="loading-status">Connecting to liquidity pools...</div>
+      </div>
+    </div>
+
+    <!-- Main App -->
+    <div id="main-app" class="main-app hidden">
+      
+      <!-- Sidebar Navigation -->
+      <aside class="sidebar">
+        <div class="sidebar-header">
+          <div class="logo">
+            <svg viewBox="0 0 40 40" width="28" height="28">
+              <polygon points="20,2 36,11 36,29 20,38 4,29 4,11" fill="none" stroke="#6C5CE7" stroke-width="2"/>
+              <text x="20" y="25" text-anchor="middle" fill="#6C5CE7" font-size="12" font-weight="700" font-family="Inter">N</text>
+            </svg>
+            <span class="logo-text">NEXUS <span class="logo-badge">PRO</span></span>
+          </div>
+        </div>
+        <nav class="sidebar-nav" id="sidebar-nav">
+          <!-- Populated by JS -->
+        </nav>
+        <div class="sidebar-footer">
+          <div class="user-profile">
+            <div class="user-avatar">FB</div>
+            <div class="user-info">
+              <div class="user-name">Fakhir Baig</div>
+              <div class="user-plan">Pro Plan • Live</div>
+            </div>
+          </div>
+        </div>
+      </aside>
+
+      <!-- Main Content Area -->
+      <div class="main-wrapper">
+        <!-- Header -->
+        <header class="header" id="header">
+          <div class="header-left">
+            <h1 class="page-title" id="page-title">Dashboard Overview</h1>
+          </div>
+          <div class="header-center">
+            <div class="market-status">
+              <span class="status-dot pulse"></span>
+              <span class="status-text">Network Synced</span>
+              <span class="status-separator">|</span>
+              <span class="market-time" id="market-time"></span>
+            </div>
+          </div>
+          <div class="header-right">
+            <button class="header-btn" id="search-btn" title="Global Search">
+              <i data-feather="search"></i>
+            </button>
+            <button class="header-btn" id="alert-btn" title="Set Alert">
+              <i data-feather="bell"></i>
+              <span class="notification-dot"></span>
+            </button>
+          </div>
+        </header>
+
+        <!-- Dynamic Pages Container -->
+        <main class="page-container" id="page-container">
+          
+          <!-- 1. Dashboard Overview -->
+          <div class="page active" id="page-dashboard">
+            <section class="summary-row" id="dashboard-summary"></section>
+            
+            <!-- Main Chart Area -->
+            <div class="panel mb-4">
+               <div class="panel-header">
+                  <h2 class="panel-title"><i data-feather="activity"></i> Total Market Cap Trend (24h)</h2>
+                  <div class="panel-actions">
+                     <button class="panel-action-btn">1H</button>
+                     <button class="panel-action-btn active">24H</button>
+                     <button class="panel-action-btn">7D</button>
+                  </div>
+               </div>
+               <div class="panel-body chart-wrapper" style="height: 250px;">
+                  <canvas id="mainMarketChart"></canvas>
+               </div>
+            </div>
+
+            <div class="dashboard-grid">
+              <!-- Top Opportunities Mini -->
+              <div class="panel">
+                <div class="panel-header">
+                  <h2 class="panel-title"><i data-feather="trending-up"></i> Live Opportunities</h2>
+                  <button class="panel-action-btn view-all" data-target="opportunities">View All</button>
+                </div>
+                <div class="panel-body" id="dash-opportunities-list"></div>
+              </div>
+
+              <!-- AI Research Mini -->
+              <div class="panel">
+                <div class="panel-header">
+                  <h2 class="panel-title"><i data-feather="cpu"></i> AI Research Stream</h2>
+                  <span class="panel-badge ai-badge">GPT-4 TURBO</span>
+                </div>
+                <div class="panel-body ai-body">
+                  <div class="ai-research-content" id="dash-ai-research-content"></div>
+                </div>
+              </div>
+
+              <!-- Whale Tracker Mini -->
+              <div class="panel">
+                <div class="panel-header">
+                  <h2 class="panel-title"><i data-feather="anchor"></i> Whale Flow</h2>
+                  <span class="panel-badge whale-badge">TRACKING</span>
+                </div>
+                <div class="panel-body feed-list" id="dash-whale-list"></div>
+              </div>
+
+              <!-- Alpha Source Mini -->
+              <div class="panel">
+                <div class="panel-header">
+                  <h2 class="panel-title"><i data-feather="key"></i> Alpha Sources</h2>
+                </div>
+                <div class="panel-body feed-list" id="dash-alpha-list"></div>
+              </div>
+
+              <!-- Sentiment Mini -->
+              <div class="panel">
+                <div class="panel-header">
+                  <h2 class="panel-title"><i data-feather="smile"></i> Network Sentiment</h2>
+                </div>
+                <div class="panel-body sentiment-body">
+                  <div class="sentiment-meter">
+                    <div class="meter-label">Fear & Greed Index</div>
+                    <div class="meter-value" id="dash-greed-value">72</div>
+                    <div class="meter-status text-green">Greed</div>
+                    <div class="meter-bar-container">
+                      <div class="meter-bar" style="width: 72%; background: linear-gradient(90deg, #FF5252, #FFC107, #00C853);"></div>
+                    </div>
+                  </div>
+                  <div class="sentiment-stats" id="dash-sentiment-stats">
+                    <!-- Populated via JS -->
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- 2. Top Opportunities -->
+          <div class="page" id="page-opportunities">
+            <div class="panel full-height">
+              <div class="panel-header">
+                <h2 class="panel-title"><i data-feather="list"></i> Quant Ranked Assets</h2>
+                <div class="panel-actions">
+                  <button class="panel-action-btn active" data-sort="alpha">Alpha Score</button>
+                  <button class="panel-action-btn" data-sort="change">24h Change</button>
+                  <button class="panel-action-btn" data-sort="volume">Volume</button>
+                </div>
+              </div>
+              <div class="panel-body table-responsive">
+                <table class="data-table table-hover">
+                  <thead>
+                    <tr>
+                      <th>#</th>
+                      <th>Coin</th>
+                      <th>Price</th>
+                      <th>24h %</th>
+                      <th>Alpha Score</th>
+                      <th>Algorithmic Bias</th>
+                      <th>Model Confidence</th>
+                      <th>Action</th>
+                    </tr>
+                  </thead>
+                  <tbody id="opportunities-table-body"></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+
+          <!-- Trading Terminal -->
+          <div class="page" id="page-trading">
+             <div class="panel full-height" style="padding: 0; overflow: hidden; display: flex; flex-direction: column;">
+                <div class="panel-header">
+                  <h2 class="panel-title"><i data-feather="bar-chart-2"></i> Advanced Pro Terminal</h2>
+                  <div class="panel-actions">
+                     <select id="tv-pair-select" style="background: transparent; color: var(--text-main); border: none; outline: none; font-family: var(--font-mono); font-weight: 600;">
+                        <option value="BINANCE:BTCUSDT">BTC/USDT</option>
+                        <option value="BINANCE:ETHUSDT">ETH/USDT</option>
+                        <option value="BINANCE:SOLUSDT" selected>SOL/USDT</option>
+                        <option value="BINANCE:LINKUSDT">LINK/USDT</option>
+                        <option value="BINANCE:ARBUSDT">ARB/USDT</option>
+                     </select>
+                  </div>
+                </div>
+                <div class="panel-body" style="padding: 0; flex: 1; overflow: hidden;">
+                   <div id="tradingview-widget" style="width: 100%; height: 100%;"></div>
+                </div>
+             </div>
+          </div>
+
+          <!-- 3. AI Research Analyst -->
+          <div class="page" id="page-ai-research">
+            <div class="ai-research-grid">
+              <div class="panel chat-panel">
+                <div class="panel-header">
+                  <h2 class="panel-title"><i data-feather="message-square"></i> Nexus AI Assistant</h2>
+                  <span class="text-muted text-sm">Context: Live Markets</span>
+                </div>
+                <div class="panel-body chat-body" id="ai-chat-history">
+                  <div class="chat-message ai">
+                    <div class="avatar"><i data-feather="cpu"></i></div>
+                    <div class="bubble">System operational. I have analyzed 240,000 data points across social, on-chain, and price metrics in the last 60 seconds. How can I assist?</div>
+                  </div>
+                </div>
+                <div class="chat-input-area">
+                  <input type="text" id="ai-chat-input" placeholder="Ask for a token analysis, market summary, or macro thesis..." />
+                  <button id="ai-chat-submit"><i data-feather="send"></i></button>
+                </div>
+              </div>
+              <div class="panel">
+                <div class="panel-header">
+                  <h2 class="panel-title"><i data-feather="file-text"></i> Deep Dive Reports</h2>
+                </div>
+                <div class="panel-body report-list" id="ai-report-list">
+                  <div class="report-card">
+                     <h4>Solana Ecosystem Boom</h4>
+                     <p>On-chain volume outpaces Ethereum L1. Analysis of DEX activity and TVL growth.</p>
+                     <button class="btn-sm btn-secondary mt-2">Read Report</button>
+                  </div>
+                  <div class="report-card">
+                     <h4>Restaking Narrative</h4>
+                     <p>Eigenlayer and liquid restaking tokens (LRTs) risk analysis and yield projections.</p>
+                     <button class="btn-sm btn-secondary mt-2">Read Report</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- 4. Whale & Smart Money -->
+          <div class="page" id="page-whale">
+            <div class="summary-row" id="whale-summary"></div>
+            <div class="panel full-height mt-4">
+              <div class="panel-header">
+                <h2 class="panel-title"><i data-feather="anchor"></i> Smart Money Tracker</h2>
+                <div class="panel-actions">
+                  <button class="panel-action-btn active">All Flow</button>
+                  <button class="panel-action-btn">CEX Outflows</button>
+                  <button class="panel-action-btn">DEX Swaps</button>
+                </div>
+              </div>
+              <div class="panel-body table-responsive">
+                <table class="data-table">
+                  <thead>
+                    <tr>
+                      <th>Time</th>
+                      <th>Asset</th>
+                      <th>Signal</th>
+                      <th>Amount</th>
+                      <th>Value (USD)</th>
+                      <th>Vector</th>
+                    </tr>
+                  </thead>
+                  <tbody id="whale-table-body"></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+
+          <!-- 5. News & Catalysts -->
+          <div class="page" id="page-news">
+             <div class="news-grid">
+                <div class="panel span-2">
+                  <div class="panel-header">
+                    <h2 class="panel-title"><i data-feather="globe"></i> Live Alpha Feed</h2>
+                  </div>
+                  <div class="panel-body feed-list" id="news-full-list"></div>
+                </div>
+                <div class="panel">
+                  <div class="panel-header">
+                    <h2 class="panel-title"><i data-feather="calendar"></i> Catalyst Calendar</h2>
+                  </div>
+                  <div class="panel-body" id="events-list"></div>
+                </div>
+             </div>
+          </div>
+
+          <!-- 6. Sentiment & Narratives -->
+          <div class="page" id="page-sentiment">
+            <div class="sentiment-grid">
+               <div class="panel">
+                 <div class="panel-header">
+                   <h2 class="panel-title"><i data-feather="bar-chart-2"></i> Emerging Narratives</h2>
+                 </div>
+                 <div class="panel-body" id="narratives-list"></div>
+               </div>
+               <div class="panel">
+                 <div class="panel-header">
+                   <h2 class="panel-title"><i data-feather="twitter"></i> Social Volume Momentum</h2>
+                 </div>
+                 <div class="panel-body center-content chart-wrapper">
+                    <canvas id="socialChart"></canvas>
+                 </div>
+               </div>
+            </div>
+          </div>
+
+          <!-- 7. Technical Signals -->
+          <div class="page" id="page-technical">
+            <div class="panel full-height">
+              <div class="panel-header">
+                <h2 class="panel-title"><i data-feather="activity"></i> Algorithmic Setups</h2>
+              </div>
+              <div class="panel-body table-responsive">
+                <table class="data-table">
+                  <thead>
+                    <tr>
+                      <th>Ticker</th>
+                      <th>Pattern Detected</th>
+                      <th>Timeframe</th>
+                      <th>Signal Strength</th>
+                      <th>Win Rate (Backtested)</th>
+                      <th>Action</th>
+                    </tr>
+                  </thead>
+                  <tbody id="technical-table-body"></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+
+          <!-- 8. DeFi Scanner -->
+          <div class="page" id="page-defi">
+             <div class="panel full-height">
+              <div class="panel-header">
+                <h2 class="panel-title"><i data-feather="layers"></i> Yield Optimization Engine</h2>
+              </div>
+              <div class="panel-body table-responsive">
+                <table class="data-table">
+                  <thead>
+                    <tr>
+                      <th>Protocol</th>
+                      <th>Strategy</th>
+                      <th>Category</th>
+                      <th>Base APY</th>
+                      <th>Liquidity (TVL)</th>
+                      <th>Smart Contract Risk</th>
+                    </tr>
+                  </thead>
+                  <tbody id="defi-table-body"></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+
+          <!-- 9. AI Command Center -->
+          <div class="page" id="page-command">
+             <section class="command-center-large" id="command-center">
+              <div class="command-header-large">
+                <h2 class="panel-title">
+                  <i data-feather="terminal"></i> Executive Command Interface
+                </h2>
+                <span class="command-hint">Execute complex market queries via natural language.</span>
+              </div>
+              
+              <div class="command-response-large" id="command-response-large">
+                 <div class="welcome-msg">
+                    > NEXUS OS v2.4.1<br>
+                    > Connection secured.<br>
+                    > Synthesizing data lakes... Done.<br>
+                    > Ready for query.
+                 </div>
+              </div>
+
+              <div class="command-input-wrapper-large">
+                <span class="command-prompt">root@nexus:~#</span>
+                <input type="text" id="command-input-large" class="command-input-large" placeholder="E.g., Compare SOL and ETH on-chain metrics for the last 7 days..." autocomplete="off" />
+                <button class="command-submit-large" id="command-submit-large">
+                  <i data-feather="corner-down-left"></i>
+                </button>
+              </div>
+            </section>
+          </div>
+
+          <!-- 10. Alerts -->
+          <div class="page" id="page-alerts">
+            <div class="panel full-height">
+              <div class="panel-header">
+                <h2 class="panel-title"><i data-feather="bell"></i> Active Triggers</h2>
+                <button class="btn-primary btn-sm" id="new-alert-page-btn"><i data-feather="plus"></i> New Trigger</button>
+              </div>
+              <div class="panel-body table-responsive">
+                <table class="data-table">
+                  <thead>
+                    <tr>
+                      <th>Target</th>
+                      <th>Metric</th>
+                      <th>Condition</th>
+                      <th>Method</th>
+                      <th>Status</th>
+                      <th>Manage</th>
+                    </tr>
+                  </thead>
+                  <tbody id="alerts-table-body">
+                     <!-- Default Alerts -->
+                     <tr>
+                        <td><strong>SOL</strong></td>
+                        <td>Price</td>
+                        <td>Crosses above $170.00</td>
+                        <td><span class="badge bg-primary">Push + Telegram</span></td>
+                        <td><span class="text-green"><span class="status-dot pulse mr-2" style="display:inline-block"></span> Active</span></td>
+                        <td><button class="icon-btn text-red"><i data-feather="trash-2"></i></button></td>
+                     </tr>
+                     <tr>
+                        <td><strong>BTC</strong></td>
+                        <td>Whale Flow</td>
+                        <td>Inflow > $1M (1H)</td>
+                        <td><span class="badge bg-warning">In-App</span></td>
+                        <td><span class="text-green"><span class="status-dot pulse mr-2" style="display:inline-block"></span> Active</span></td>
+                        <td><button class="icon-btn text-red"><i data-feather="trash-2"></i></button></td>
+                     </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+
+          <!-- 11. Settings -->
+          <div class="page" id="page-settings">
+             <div class="settings-grid">
+               <div class="panel">
+                  <div class="panel-header">
+                     <h2 class="panel-title"><i data-feather="user"></i> Trader Identity</h2>
+                  </div>
+                  <div class="panel-body form-body">
+                     <div class="form-group">
+                        <label>Display Name</label>
+                        <input type="text" class="form-input" value="Fakhir Baig" />
+                     </div>
+                     <div class="form-group">
+                        <label>Contact Email</label>
+                        <input type="email" class="form-input" value="fakhir@example.com" />
+                     </div>
+                     <div class="form-group">
+                        <label>Telegram Handle (For Bot)</label>
+                        <input type="text" class="form-input" value="@fakhir_trades" />
+                     </div>
+                     <button class="btn-primary mt-2">Update Identity</button>
+                  </div>
+               </div>
+               <div class="panel">
+                  <div class="panel-header">
+                     <h2 class="panel-title"><i data-feather="zap"></i> Platform Access tier</h2>
+                  </div>
+                  <div class="panel-body subscription-body">
+                     <div class="plan-card active">
+                        <div class="plan-header">
+                           <h3>Institutional Pro</h3>
+                           <div class="price">$199<span>/mo</span></div>
+                        </div>
+                        <ul class="plan-features">
+                           <li><i data-feather="check" class="text-green"></i> Unrestricted AI Command Line</li>
+                           <li><i data-feather="check" class="text-green"></i> Millisecond Whale Tracking</li>
+                           <li><i data-feather="check" class="text-green"></i> VIP Telegram Alert Bot</li>
+                           <li><i data-feather="check" class="text-green"></i> API Access (1M calls/mo)</li>
+                           <li><i data-feather="check" class="text-green"></i> Dedicated Quant Support</li>
+                        </ul>
+                        <button class="btn-secondary w-100">Manage Billing</button>
+                     </div>
+                  </div>
+               </div>
+             </div>
+          </div>
+
+        </main>
+      </div>
+
+      <!-- Alert Modal -->
+      <div class="modal-overlay" id="alert-modal">
+        <div class="modal">
+          <div class="modal-header">
+            <h3>Configure Algorithmic Trigger</h3>
+            <button class="modal-close" id="modal-close"><i data-feather="x"></i></button>
+          </div>
+          <div class="modal-body">
+            <div class="form-group">
+              <label>Target Asset</label>
+              <select id="alert-asset" class="form-select">
+                <option value="BTC">Bitcoin (BTC)</option>
+                <option value="ETH">Ethereum (ETH)</option>
+                <option value="SOL">Solana (SOL)</option>
+                <option value="INJ">Injective (INJ)</option>
+                <option value="ONDO">Ondo (ONDO)</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>Trigger Logic</label>
+              <select id="alert-condition" class="form-select">
+                <option value="alpha">Nexus Alpha Score > 80</option>
+                <option value="whale">Smart Money Inflow > $2M</option>
+                <option value="price-above">Price crosses resistance</option>
+                <option value="sentiment">Sentiment shift to Extreme Greed</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>Delivery Method</label>
+              <select class="form-select">
+                 <option>Push Notification + Telegram</option>
+                 <option>Webhook (JSON)</option>
+                 <option>SMS</option>
+              </select>
+            </div>
+            <button class="btn-primary" id="create-alert-btn">Deploy Trigger</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Toast Notification -->
+      <div class="toast-container" id="toast-container"></div>
+    </div>
+  </div>
+  <script type="module" src="/main.js"></script>
+</body>
+</html>

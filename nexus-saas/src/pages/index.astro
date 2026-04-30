@@ -1,0 +1,41 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+import { getLangFromUrl, useTranslations } from '../i18n/config';
+
+const lang = getLangFromUrl(Astro.url);
+const t = useTranslations(lang);
+---
+<BaseLayout title="Home" description="NEXUS AI Crypto Engine">
+  <section class="text-center py-20">
+    <h1 class="text-5xl font-extrabold mb-6 text-transparent bg-clip-text bg-gradient-to-r from-primary to-blue-400">
+      {t('hero.title')}
+    </h1>
+    <p class="text-xl text-gray-400 mb-8 max-w-2xl mx-auto">
+      {t('hero.subtitle')}
+    </p>
+    <a href="/dashboard" class="bg-primary hover:bg-opacity-80 text-white font-bold py-3 px-8 rounded-lg inline-block">
+      {t('hero.cta')}
+    </a>
+  </section>
+
+  <section class="py-12">
+    <h2 class="text-3xl font-bold mb-8 text-center">How NEXUS Works</h2>
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-8">
+      <div class="bg-panel p-6 rounded-xl border border-gray-800">
+        <i data-feather="database" class="text-primary mb-4 w-8 h-8"></i>
+        <h3 class="text-xl font-bold mb-2">1. Data Ingestion</h3>
+        <p class="text-gray-400">We analyze millions of on-chain transactions and social data points per second.</p>
+      </div>
+      <div class="bg-panel p-6 rounded-xl border border-gray-800">
+        <i data-feather="cpu" class="text-primary mb-4 w-8 h-8"></i>
+        <h3 class="text-xl font-bold mb-2">2. AI Processing</h3>
+        <p class="text-gray-400">Our quantitative models score assets based on momentum, sentiment, and whale activity.</p>
+      </div>
+      <div class="bg-panel p-6 rounded-xl border border-gray-800">
+        <i data-feather="bell" class="text-primary mb-4 w-8 h-8"></i>
+        <h3 class="text-xl font-bold mb-2">3. Real-time Alerts</h3>
+        <p class="text-gray-400">Get instant notifications via Telegram when high-probability setups occur.</p>
+      </div>
+    </div>
+  </section>
+</BaseLayout>
