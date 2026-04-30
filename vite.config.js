@@ -8,10 +8,10 @@ export default defineConfig({
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/api\/cmc/, '')
       },
-      '/api/groq': {
-        target: 'https://api.groq.com/openai',
+      '/api/openai': {
+        target: 'https://api.openai.com',
         changeOrigin: true,
-        rewrite: (path) => path.replace(/^\/api\/groq/, '')
+        rewrite: (path) => path.replace(/^\/api\/openai/, '')
       }
     }
   }

@@ -3,7 +3,7 @@ const KEYS = {
   coingecko: 'CG-7gTv8kk2qS7r8kj515m2rVQJ',
   cmc: 'e7080786d0f14b3abfc6c58de5f61adc',
   etherscan: 'CRSWB6SIH2SAAPCPFGBK2NN473EC5JIS9M',
-  groq: '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'
+  openai: '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'
 };
 
 // 1. CoinGecko (Market Data)
@@ -84,17 +84,17 @@ export async function fetchSentiment() {
   }
 }
 
-// 5. Groq AI Engine via Vite Proxy
+// 5. OpenAI Engine via Vite Proxy
 export async function fetchAIAnalysis(promptText) {
   try {
-    const res = await fetch('/api/groq/v1/chat/completions', {
+    const res = await fetch('/api/openai/v1/chat/completions', {
       method: 'POST',
       headers: {
-        'Authorization': `Bearer ${KEYS.groq}`,
+        'Authorization': `Bearer ${KEYS.openai}`,
         'Content-Type': 'application/json'
       },
       body: JSON.stringify({
-        model: "llama3-8b-8192",
+        model: "gpt-3.5-turbo",
         messages: [{ role: "user", content: promptText }]
       })
     });
@@ -102,7 +102,7 @@ export async function fetchAIAnalysis(promptText) {
     if(data.choices && data.choices[0]) return data.choices[0].message.content;
     return null;
   } catch(e) {
-    console.error("Groq AI Fetch failed", e);
+    console.error("OpenAI Fetch failed", e);
     return null;
   }
 }

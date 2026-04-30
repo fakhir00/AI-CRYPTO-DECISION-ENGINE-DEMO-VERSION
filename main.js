@@ -670,7 +670,7 @@ function setupCommandCenter() {
     // Create loading block
     const loadingBlock = document.createElement('div');
     loadingBlock.className = 'cmd-res-block text-muted';
-    loadingBlock.innerHTML = `> Querying Live Groq AI Engine... <span class="ai-cursor"></span>`;
+    loadingBlock.innerHTML = `> Querying Live OpenAI Engine... <span class="ai-cursor"></span>`;
     res.appendChild(loadingBlock);
     
     input.value = '';
@@ -692,7 +692,7 @@ function setupCommandCenter() {
       
       if (groqRes) {
          responseBlock.innerHTML = `
-            <div class="text-primary mb-2" style="margin-bottom: 1rem; font-weight: 700;">Live Groq AI Synthesis</div>
+            <div class="text-primary mb-2" style="margin-bottom: 1rem; font-weight: 700;">Live OpenAI Synthesis</div>
             <div style="color: #BAC2DE; line-height: 1.7;">${groqRes}</div>
          `;
       } else {
