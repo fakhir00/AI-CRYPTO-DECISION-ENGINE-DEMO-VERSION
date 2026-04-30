@@ -2,8 +2,7 @@
 const KEYS = {
   coingecko: 'CG-7gTv8kk2qS7r8kj515m2rVQJ',
   cmc: 'e7080786d0f14b3abfc6c58de5f61adc',
-  etherscan: 'CRSWB6SIH2SAAPCPFGBK2NN473EC5JIS9M',
-  openai: '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'
+  etherscan: 'CRSWB6SIH2SAAPCPFGBK2NN473EC5JIS9M'
 };
 
 // 1. CoinGecko (Market Data)
@@ -84,13 +83,12 @@ export async function fetchSentiment() {
   }
 }
 
-// 5. OpenAI Engine via Vite Proxy
+// 5. OpenAI Engine via Vite Proxy or Vercel Function
 export async function fetchAIAnalysis(promptText) {
   try {
-    const res = await fetch('/api/openai/v1/chat/completions', {
+    const res = await fetch('/api/chat', {
       method: 'POST',
       headers: {
-        'Authorization': `Bearer ${KEYS.openai}`,
         'Content-Type': 'application/json'
       },
       body: JSON.stringify({
