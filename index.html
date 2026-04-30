@@ -501,6 +501,38 @@
              </div>
           </div>
 
+          <!-- 12. Simulation Engine -->
+          <div class="page" id="page-simulations">
+            <div class="dashboard-grid">
+              <div class="panel span-2" style="height: calc(100vh - 140px);">
+                <div class="panel-header">
+                  <h2 class="panel-title"><i data-feather="cpu"></i> Quantitative Alpha Simulations</h2>
+                  <div class="panel-actions">
+                    <button class="btn-primary btn-sm" id="run-new-sim" style="padding: 0.4rem 1rem; font-size: 0.75rem;">+ Start Simulation</button>
+                  </div>
+                </div>
+                <div class="panel-body">
+                  <table class="data-table table-hover">
+                    <thead>
+                      <tr>
+                        <th>Asset</th>
+                        <th>Strategy</th>
+                        <th>Entry</th>
+                        <th>Target (TP)</th>
+                        <th>Stop (SL)</th>
+                        <th>Status</th>
+                        <th>P/L Expectancy</th>
+                      </tr>
+                    </thead>
+                    <tbody id="simulation-log">
+                      <!-- Sim logs will appear here -->
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          </div>
+
         </main>
       </div>
 

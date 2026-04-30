@@ -11,9 +11,9 @@ export default defineConfig(({ mode }) => {
           rewrite: (path) => path.replace(/^\/api\/cmc/, '')
         },
         '/api/chat': {
-          target: 'https://api.openai.com/v1/chat/completions',
+          target: 'https://api.openai.com',
           changeOrigin: true,
-          rewrite: (path) => '',
+          rewrite: (path) => '/v1/chat/completions',
           configure: (proxy, options) => {
             proxy.on('proxyReq', (proxyReq, req, res) => {
               proxyReq.setHeader('Authorization', `Bearer ${env.OPENAI_API_KEY}`);
