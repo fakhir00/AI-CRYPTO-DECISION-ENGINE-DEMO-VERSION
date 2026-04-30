@@ -117,7 +117,8 @@ body {
   border-right: 1px solid var(--border-color);
   display: flex; flex-direction: column; flex-shrink: 0;
   box-shadow: 5px 0 30px rgba(0,0,0,0.2);
-  z-index: 100;
+  z-index: 1000;
+  transition: transform 0.4s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 .sidebar-header {
@@ -229,6 +230,38 @@ body {
 .notification-dot {
   position: absolute; top: 10px; right: 10px; width: 8px; height: 8px;
   background-color: var(--red); border-radius: 50%; box-shadow: 0 0 8px var(--red);
+}
+
+.mobile-toggle {
+  display: none;
+  background: transparent;
+  border: none;
+  color: var(--text-main);
+  cursor: pointer;
+  padding: 0.5rem;
+  margin-right: 0.5rem;
+  border-radius: 8px;
+  transition: background 0.2s;
+}
+
+.mobile-toggle:hover {
+  background: rgba(255,255,255,0.05);
+}
+
+.sidebar-overlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.5);
+  backdrop-filter: blur(4px);
+  z-index: 999;
+  opacity: 0;
+  transition: opacity 0.3s;
+}
+
+.sidebar-overlay.active {
+  display: block;
+  opacity: 1;
 }
 
 /* Page Container */
@@ -523,3 +556,158 @@ body {
 .plan-features li i { width: 18px; height: 18px; filter: drop-shadow(0 0 5px var(--green-glow)); }
 
 .center-content { display: flex; justify-content: center; align-items: center; }
+
+/* --- Media Queries for Responsiveness --- */
+
+/* Tablet View (Laptops/Large Tablets) */
+@media screen and (max-width: 1200px) {
+  .dashboard-grid {
+    grid-template-columns: 1fr;
+  }
+  
+  .news-grid, .sentiment-grid, .settings-grid, .ai-research-grid {
+    grid-template-columns: 1fr;
+    height: auto;
+  }
+  
+  .span-2 {
+    grid-column: span 1;
+  }
+  
+  .panel.full-height {
+    height: auto;
+    min-height: 500px;
+  }
+}
+
+/* Tablet/Mobile Transition */
+@media screen and (max-width: 1024px) {
+  --sidebar-width: 260px;
+  
+  .header-center {
+    display: none; /* Hide market status text on smaller headers */
+  }
+}
+
+/* Mobile View */
+@media screen and (max-width: 768px) {
+  .sidebar {
+    position: fixed;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    transform: translateX(-100%);
+  }
+  
+  .sidebar.active {
+    transform: translateX(0);
+  }
+  
+  .mobile-toggle {
+    display: block;
+  }
+  
+  .header {
+    padding: 0 1rem;
+    height: 70px;
+  }
+  
+  .page-container {
+    padding: 1rem;
+  }
+  
+  .summary-row {
+    grid-template-columns: 1fr;
+  }
+  
+  .page-title {
+    font-size: 1.1rem;
+  }
+  
+  .header-right {
+    gap: 0.5rem;
+  }
+  
+  .header-btn {
+    width: 38px;
+    height: 38px;
+  }
+  
+  .summary-card {
+    padding: 1.25rem;
+  }
+  
+  .card-value {
+    font-size: 1.8rem;
+  }
+  
+  /* Tables on mobile */
+  .table-responsive {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+  
+  .data-table th, .data-table td {
+    padding: 1rem 0.75rem;
+    font-size: 0.85rem;
+  }
+  
+  .asset-row {
+    padding: 0.75rem 0.25rem;
+  }
+  
+  .asset-info {
+    width: auto;
+    gap: 0.5rem;
+  }
+  
+  .asset-icon {
+    width: 30px;
+    height: 30px;
+    font-size: 0.75rem;
+  }
+  
+  .asset-name {
+    font-size: 0.9rem;
+  }
+  
+  /* Modal responsive */
+  .modal {
+    width: 95%;
+    max-height: 90vh;
+    overflow-y: auto;
+  }
+  
+  /* Command Center mobile */
+  .command-center-large {
+    height: calc(100vh - 100px);
+  }
+  
+  .command-prompt {
+    display: none; /* Hide root prompt on very small mobile to save space */
+  }
+  
+  .command-input-wrapper-large {
+    padding: 1rem;
+  }
+}
+
+/* Very Small Devices */
+@media screen and (max-width: 480px) {
+  .logo-text {
+    display: none; /* Only show icon on tiny headers */
+  }
+  
+  .header-btn i {
+    width: 18px;
+    height: 18px;
+  }
+  
+  .card-value {
+    font-size: 1.5rem;
+  }
+  
+  .meter-value {
+    font-size: 3rem;
+  }
+}

@@ -298,6 +298,9 @@ async function syncLiveApis() {
 // --- Navigation ---
 function setupSidebar() {
   const navContainer = document.getElementById('sidebar-nav');
+  const sidebar = document.querySelector('.sidebar');
+  const overlay = document.getElementById('sidebar-overlay');
+  const toggle = document.getElementById('mobile-toggle');
   
   navContainer.innerHTML = NAV_ITEMS.map((item, index) => `
     <div class="nav-item ${index === 0 ? 'active' : ''}" data-page="${item.id}">
@@ -312,6 +315,12 @@ function setupSidebar() {
     item.addEventListener('click', (e) => {
       const pageId = e.currentTarget.dataset.page;
       navigateToPage(pageId);
+      
+      // Close sidebar on mobile
+      if (window.innerWidth <= 768) {
+        sidebar.classList.remove('active');
+        overlay.classList.remove('active');
+      }
     });
   });
 
@@ -319,8 +328,27 @@ function setupSidebar() {
   document.querySelectorAll('[data-target]').forEach(btn => {
     btn.addEventListener('click', (e) => {
       navigateToPage(e.currentTarget.dataset.target);
+      
+      // Close sidebar on mobile
+      if (window.innerWidth <= 768) {
+        sidebar.classList.remove('active');
+        overlay.classList.remove('active');
+      }
     });
   });
+
+  // Mobile Toggle Logic
+  if (toggle && overlay) {
+    toggle.addEventListener('click', () => {
+      sidebar.classList.add('active');
+      overlay.classList.add('active');
+    });
+
+    overlay.addEventListener('click', () => {
+      sidebar.classList.remove('active');
+      overlay.classList.remove('active');
+    });
+  }
 }
 
 function navigateToPage(pageId) {
