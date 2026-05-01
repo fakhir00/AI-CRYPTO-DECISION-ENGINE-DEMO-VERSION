@@ -128,7 +128,8 @@ export async function fetchAIAnalysis(promptText) {
 
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
-      throw new Error(err?.error?.message || `HTTP ${res.status}`);
+      const errMsg = (typeof err?.error === 'string') ? err.error : err?.error?.message;
+      throw new Error(errMsg || `HTTP ${res.status}`);
     }
 
     const data = await res.json();
@@ -136,10 +137,10 @@ export async function fetchAIAnalysis(promptText) {
       console.log('✅ OpenAI response received');
       return data.choices[0].message.content;
     }
-    return null;
+    return `[OpenAI Error: No valid content returned]`;
   } catch (e) {
     console.error('❌ OpenAI failed:', e.message);
-    return null;
+    return `[OpenAI API Error: ${e.message}]`;
   }
 }
 
@@ -155,80 +156,30 @@ export function calculateAlphaScore(whaleActive, sentimentScore, techScore, news
   return Math.min(100, Math.max(0, Math.round(raw)));
 }
 
-// ─── 7. Hermes AI (NousResearch via Groq) — Quantitative Prediction Engine ───
-// Hermes-3 is a reasoning-focused model ideal for structured trade analysis
-export async function fetchHermesAnalysis(promptText) {
-  try {
-    const res = await fetch('/api/hermes', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: 'llama-3.3-70b-versatile', // Hermes-based reasoning on Groq
-        messages: [
-          {
-            role: 'system',
-            content: `You are Hermes, a quantitative crypto prediction model. If the user asks for a general analysis, produce STRUCTURED outputs: Price target, Probability score, Key risk factors. BUT if the user asks for a "signal" or a trade setup, you MUST output exactly in this format using HTML <br> tags:
-📪 #[COIN]/USDT<br><br>Exchange: Binance Future,Kucoin,Bybit,Huobi.pro,OKX<br>Leverage: Cross (20X)<br><br>Entry:[Price]-[Price]-[Price]<br><br>Target 1: [Price]<br>Target 2: [Price]<br>Target 3: [Price]<br>Target 4: [Price]<br><br>Stop loss: [Price]<br><br> predictum Pro Autotrade Signals`
-          },
-          { role: 'user', content: promptText }
-        ],
-        max_tokens: 600,
-        temperature: 0.4 // Lower temp = more deterministic predictions
-      })
-    });
 
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(err?.error?.message || `HTTP ${res.status}`);
-    }
-
-    const data = await res.json();
-    if (data.choices?.[0]?.message?.content) {
-      console.log('✅ Hermes AI prediction received');
-      return data.choices[0].message.content;
-    }
-    return null;
-  } catch (e) {
-    console.error('❌ Hermes AI failed:', e.message);
-    return null;
-  }
-}
-
-// ─── 8. Dual AI Fusion — Combines Hermes + OpenAI for maximum insight ────────
-// Use this for the highest quality responses in the Command Center
+// ─── 8. AI Analysis Handler ────────────────────────────────────────────────────
+// Connects to OpenAI for Command Center responses
 export async function fetchDualAI(userQuery, assetContext = '') {
   const context = assetContext
     ? `Current context: ${assetContext}. User query: ${userQuery}`
     : userQuery;
 
-  // Fire both in parallel
-  const [hermesResult, openaiResult] = await Promise.allSettled([
-    fetchHermesAnalysis(context),
-    fetchAIAnalysis(context)
-  ]);
-
-  const hermes = hermesResult.status === 'fulfilled' ? hermesResult.value : null;
-  const openai = openaiResult.status === 'fulfilled' ? openaiResult.value : null;
-
-  if (hermes && openai) {
-    // Both succeeded — show fusion output
-    return `
-      <div style="margin-bottom:1.5rem;">
-        <div style="font-size:0.7rem;font-weight:800;letter-spacing:0.1em;color:var(--primary);margin-bottom:0.75rem;text-transform:uppercase;">
-          🔮 Hermes Quantitative Prediction
-        </div>
-        <div style="color:#BAC2DE;line-height:1.7;">${hermes}</div>
-      </div>
-      <hr style="border-color:var(--border-color);margin:1rem 0;"/>
-      <div>
-        <div style="font-size:0.7rem;font-weight:800;letter-spacing:0.1em;color:#10B981;margin-bottom:0.75rem;text-transform:uppercase;">
-          🧠 GPT Contextual Analysis
-        </div>
-        <div style="color:#BAC2DE;line-height:1.7;">${openai}</div>
-      </div>`;
+  // Since Groq was removed, we just return the OpenAI result directly.
+  // The function is still called fetchDualAI to maintain compatibility with main.js
+  const result = await fetchAIAnalysis(context);
+  
+  if (!result || result.startsWith('[OpenAI')) {
+     // If it failed or returned an error string
+     return result || null; 
   }
 
-  // Fallback to whichever responded
-  return hermes || openai || null;
+  // Format it nicely for the UI
+  return `
+    <div>
+      <div style="font-size:0.7rem;font-weight:800;letter-spacing:0.1em;color:#10B981;margin-bottom:0.75rem;text-transform:uppercase;">
+        🧠 Nexus AI Analysis
+      </div>
+      <div style="color:#BAC2DE;line-height:1.7;">${result}</div>
+    </div>`;
 }
 

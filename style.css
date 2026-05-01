@@ -824,8 +824,9 @@ body {
 
 /* Tablet/Mobile Transition */
 @media screen and (max-width: 1024px) {
-  --sidebar-width: 260px;
-  
+  :root {
+    --sidebar-width: 260px;
+  }
   .header-center {
     display: none; /* Hide market status text on smaller headers */
   }
