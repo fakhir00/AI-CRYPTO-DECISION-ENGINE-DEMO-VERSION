@@ -5,6 +5,10 @@
       "destination": "https://pro-api.coinmarketcap.com/:match*"
     },
     {
+      "source": "/api/(.*)",
+      "destination": "/api/$1"
+    },
+    {
       "source": "/(.*)",
       "destination": "/index.html"
     }
