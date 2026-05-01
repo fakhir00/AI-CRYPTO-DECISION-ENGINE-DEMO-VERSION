@@ -1,5 +1,5 @@
 import './style.css';
-import { fetchMarketData, fetchGlobalMarketData, fetchWhaleActivity, fetchSentiment, fetchAIAnalysis, calculateAlphaScore } from './api.js';
+import { fetchMarketData, fetchGlobalMarketData, fetchWhaleActivity, fetchSentiment, fetchAIAnalysis, fetchHermesAnalysis, fetchDualAI, calculateAlphaScore } from './api.js';
 
 // --- Navigation & Setup ---
 const NAV_ITEMS = [
@@ -698,15 +698,16 @@ function setupCommandCenter() {
     // Create loading block
     const loadingBlock = document.createElement('div');
     loadingBlock.className = 'cmd-res-block text-muted';
-    loadingBlock.innerHTML = `> Querying Live OpenAI Engine... <span class="ai-cursor"></span>`;
+    loadingBlock.innerHTML = `> Engaging Dual AI Engine (Hermes + GPT)... <span class="ai-cursor"></span>`;
     res.appendChild(loadingBlock);
     
     input.value = '';
     res.scrollTop = res.scrollHeight;
 
     setTimeout(async () => {
-      // Try to fetch real AI response
-      const groqRes = await fetchAIAnalysis(`You are Nexus, an advanced quantitative crypto trading AI. The user says: "${val}". Provide a short, highly professional, data-driven trading analysis based on live context. Include bias, entry zone, and targets if asked. Max 3 short paragraphs. Output strictly in HTML formatting. Use bolding and color classes like <span class="text-green"> for bullish or <span class="text-red"> for bearish. Do NOT use markdown code blocks, just raw HTML.`);
+      // Fire Dual AI: Hermes (prediction) + OpenAI (analysis) in parallel
+      const assetContext = assets.slice(0,3).map(a => `${a.symbol}:$${a.price}(${a.change>0?'+':''}${a.change.toFixed(1)}%)`).join(', ');
+      const dualRes = await fetchDualAI(val, `Live market data — ${assetContext}`);
       
       res.removeChild(loadingBlock);
       
@@ -718,10 +719,10 @@ function setupCommandCenter() {
       responseBlock.style.borderRadius = '8px';
       responseBlock.style.marginTop = '1rem';
       
-      if (groqRes) {
+      if (dualRes) {
          responseBlock.innerHTML = `
-            <div class="text-primary mb-2" style="margin-bottom: 1rem; font-weight: 700;">Live OpenAI Synthesis</div>
-            <div style="color: #BAC2DE; line-height: 1.7;">${groqRes}</div>
+            <div style="font-size:0.7rem;font-weight:800;letter-spacing:0.1em;color:var(--text-muted);margin-bottom:1rem;text-transform:uppercase;">⚡ Dual AI Engine Response</div>
+            ${dualRes}
          `;
       } else {
         // Fallback to local logic
@@ -824,18 +825,19 @@ function setupAiResearchChat() {
     if (typeof feather !== 'undefined') feather.replace();
     history.scrollTop = history.scrollHeight;
 
-    // Fetch AI
-    const groqRes = await fetchAIAnalysis(`You are Nexus, an advanced quantitative crypto trading AI. The user says: "${val}". Provide a short, highly professional, data-driven trading analysis based on live context. Max 2 short paragraphs. Output strictly in HTML formatting. Use bolding and color classes like <span class="text-green"> for bullish or <span class="text-red"> for bearish. Do NOT use markdown code blocks, just raw HTML.`);
+    // Fetch from Dual AI (Hermes + GPT)
+    const assetCtx = assets.slice(0,3).map(a => `${a.symbol}:$${a.price}`).join(', ');
+    const dualRes = await fetchDualAI(val, `Live data — ${assetCtx}`);
 
     history.removeChild(loadingMsg);
 
     const aiMsg = document.createElement('div');
     aiMsg.className = 'chat-message ai';
     
-    if (groqRes) {
+    if (dualRes) {
       aiMsg.innerHTML = `
         <div class="avatar"><i data-feather="cpu"></i></div>
-        <div class="bubble">${groqRes}</div>
+        <div class="bubble">${dualRes}</div>
       `;
     } else {
       aiMsg.innerHTML = `
