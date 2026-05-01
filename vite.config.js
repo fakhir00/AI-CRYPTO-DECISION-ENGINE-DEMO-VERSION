@@ -24,6 +24,17 @@ export default defineConfig(({ mode }) => {
               if (openaiKey) proxyReq.setHeader('Authorization', `Bearer ${openaiKey}`);
             });
           }
+        },
+        // Groq Hermes — quantitative prediction engine
+        '/api/hermes': {
+          target: 'https://api.groq.com',
+          changeOrigin: true,
+          rewrite: () => '/openai/v1/chat/completions',
+          configure: (proxy) => {
+            proxy.on('proxyReq', (proxyReq) => {
+              if (groqKey) proxyReq.setHeader('Authorization', `Bearer ${groqKey}`);
+            });
+          }
         }
       }
     }

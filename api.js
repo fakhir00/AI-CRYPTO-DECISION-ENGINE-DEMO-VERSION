@@ -159,23 +159,87 @@ export function calculateAlphaScore(whaleActive, sentimentScore, techScore, news
 }
 
 
+// ─── 7. Hermes AI (NousResearch via Groq) — Quantitative Prediction Engine ───
+export async function fetchHermesAnalysis(promptText) {
+  try {
+    const res = await fetch('/api/hermes', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'llama-3.3-70b-versatile',
+        messages: [
+          {
+            role: 'system',
+            content: `You are Hermes, a quantitative crypto prediction model. You are a trade assistant. You must use the real-time prices and market data provided in the context to calculate realistic entries, profit targets, and stop losses based on standard technical analysis and risk management.
+If the user asks for a trading "signal", you MUST output exactly in this format using HTML <br> tags: 
+📪 #[COIN]/USDT<br><br>Exchange: Binance Future,Kucoin,Bybit,Huobi.pro,OKX<br>Leverage: Cross (20X)<br><br>Entry:[Entry Price]-[Entry Price]-[Entry Price]<br><br>Target 1: [Target Price]<br>Target 2: [Target Price]<br>Target 3: [Target Price]<br>Target 4: [Target Price]<br><br>Stop loss: [Stop Price]<br><br> predictum Pro Autotrade Signals`
+          },
+          { role: 'user', content: promptText }
+        ],
+        max_tokens: 600,
+        temperature: 0.4
+      })
+    });
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      const errMsg = (typeof err?.error === 'string') ? err.error : err?.error?.message;
+      throw new Error(errMsg || `HTTP ${res.status}`);
+    }
+
+    const data = await res.json();
+    if (data.choices?.[0]?.message?.content) {
+      console.log('✅ Hermes AI prediction received');
+      return data.choices[0].message.content;
+    }
+    return `[Groq Error: No valid content returned]`;
+  } catch (e) {
+    console.error('❌ Hermes AI failed:', e.message);
+    return `[Groq Hermes API Error: ${e.message}]`;
+  }
+}
+
 // ─── 8. AI Analysis Handler ────────────────────────────────────────────────────
-// Connects to OpenAI for Command Center responses
+// Connects to OpenAI and Hermes for Command Center responses
 export async function fetchDualAI(userQuery, assetContext = '') {
   const context = assetContext
     ? `Current context: ${assetContext}. User query: ${userQuery}`
     : userQuery;
 
-  // Since Groq was removed, we just return the OpenAI result directly.
-  // The function is still called fetchDualAI to maintain compatibility with main.js
-  const result = await fetchAIAnalysis(context);
+  // Fire both in parallel
+  const [hermesResult, openaiResult] = await Promise.allSettled([
+    fetchHermesAnalysis(context),
+    fetchAIAnalysis(context)
+  ]);
+
+  const hermes = hermesResult.status === 'fulfilled' ? hermesResult.value : null;
+  const openai = openaiResult.status === 'fulfilled' ? openaiResult.value : null;
+
+  // Format it nicely for the UI if both succeed
+  if (hermes && openai && !hermes.startsWith('[') && !openai.startsWith('[')) {
+    return `
+      <div style="margin-bottom:1.5rem;">
+        <div style="font-size:0.7rem;font-weight:800;letter-spacing:0.1em;color:var(--primary);margin-bottom:0.75rem;text-transform:uppercase;">
+          🔮 Hermes Quantitative Prediction
+        </div>
+        <div style="color:#BAC2DE;line-height:1.7;">${hermes}</div>
+      </div>
+      <hr style="border-color:var(--border-color);margin:1rem 0;"/>
+      <div>
+        <div style="font-size:0.7rem;font-weight:800;letter-spacing:0.1em;color:#10B981;margin-bottom:0.75rem;text-transform:uppercase;">
+          🧠 GPT Contextual Analysis
+        </div>
+        <div style="color:#BAC2DE;line-height:1.7;">${openai}</div>
+      </div>`;
+  }
+
+  // Fallback if one failed, or just show whatever we got
+  const result = hermes || openai || null;
   
-  if (!result || result.startsWith('[OpenAI')) {
-     // If it failed or returned an error string
+  if (!result || result.startsWith('[')) {
      return result || null; 
   }
 
-  // Format it nicely for the UI
   return `
     <div>
       <div style="font-size:0.7rem;font-weight:800;letter-spacing:0.1em;color:#10B981;margin-bottom:0.75rem;text-transform:uppercase;">

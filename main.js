@@ -1,5 +1,5 @@
 import './style.css';
-import { fetchMarketData, fetchGlobalMarketData, fetchWhaleActivity, fetchSentiment, fetchAIAnalysis, fetchDualAI, calculateAlphaScore } from './api.js';
+import { fetchMarketData, fetchGlobalMarketData, fetchWhaleActivity, fetchSentiment, fetchAIAnalysis, fetchHermesAnalysis, fetchDualAI, calculateAlphaScore } from './api.js';
 
 // --- Navigation & Setup ---
 const NAV_ITEMS = [
