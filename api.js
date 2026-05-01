@@ -109,9 +109,15 @@ export async function fetchSentiment() {
 // ─── 5. OpenAI: AI analysis via secure Vite proxy / Vercel Function ──────────
 export async function fetchAIAnalysis(promptText) {
   try {
-    const res = await fetch('/api/chat', {
+    const apiKey = import.meta.env.VITE_OPENAI_API_KEY;
+    if (!apiKey) throw new Error("Missing VITE_OPENAI_API_KEY");
+
+    const res = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`
+      },
       body: JSON.stringify({
         model: 'gpt-3.5-turbo',
         messages: [
@@ -159,9 +165,15 @@ export function calculateAlphaScore(whaleActive, sentimentScore, techScore, news
 // Hermes-3 is a reasoning-focused model ideal for structured trade analysis
 export async function fetchHermesAnalysis(promptText) {
   try {
-    const res = await fetch('/api/hermes', {
+    const apiKey = import.meta.env.VITE_GROQ_API_KEY;
+    if (!apiKey) throw new Error("Missing VITE_GROQ_API_KEY");
+
+    const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`
+      },
       body: JSON.stringify({
         model: 'llama-3.3-70b-versatile', // Hermes-based reasoning on Groq
         messages: [
