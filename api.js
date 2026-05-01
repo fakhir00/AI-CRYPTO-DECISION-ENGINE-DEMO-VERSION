@@ -158,15 +158,43 @@ export function calculateAlphaScore(whaleActive, sentimentScore, techScore, news
   return Math.min(100, Math.max(0, Math.round(raw)));
 }
 
+// ─── 7. Markdown to HTML Renderer ─────────────────────────────────────────────
+// Converts raw markdown from AI responses into styled HTML
+function renderMarkdown(md) {
+  if (!md) return '';
+  let html = md
+    // Code blocks (```lang ... ```)
+    .replace(/```(\w*)\n([\s\S]*?)```/g, '<pre style="background:rgba(0,0,0,0.4);padding:1rem;border-radius:8px;overflow-x:auto;border:1px solid rgba(255,255,255,0.08);margin:0.75rem 0;font-size:0.82rem;"><code>$2</code></pre>')
+    // Inline code
+    .replace(/`([^`]+)`/g, '<code style="background:rgba(139,120,255,0.15);padding:0.15rem 0.4rem;border-radius:4px;font-size:0.85em;color:var(--primary);">$1</code>')
+    // Bold
+    .replace(/\*\*(.+?)\*\*/g, '<strong style="color:#fff;">$1</strong>')
+    // Italic
+    .replace(/\*(.+?)\*/g, '<em>$1</em>')
+    // Headers
+    .replace(/^### (.+)$/gm, '<div style="font-size:0.95rem;font-weight:800;color:#fff;margin:1rem 0 0.5rem;border-bottom:1px solid rgba(255,255,255,0.08);padding-bottom:0.4rem;">$1</div>')
+    .replace(/^## (.+)$/gm, '<div style="font-size:1.05rem;font-weight:800;color:#fff;margin:1.25rem 0 0.5rem;border-bottom:1px solid rgba(255,255,255,0.08);padding-bottom:0.4rem;">$1</div>')
+    .replace(/^# (.+)$/gm, '<div style="font-size:1.15rem;font-weight:900;color:#fff;margin:1.25rem 0 0.5rem;">$1</div>')
+    // Unordered lists
+    .replace(/^[-•] (.+)$/gm, '<div style="padding-left:1rem;margin:0.3rem 0;display:flex;gap:0.5rem;"><span style="color:var(--primary);flex-shrink:0;">▸</span><span>$1</span></div>')
+    // Numbered lists
+    .replace(/^\d+\.\s(.+)$/gm, '<div style="padding-left:1rem;margin:0.3rem 0;">$1</div>')
+    // Horizontal rules
+    .replace(/^---$/gm, '<hr style="border:none;border-top:1px solid rgba(255,255,255,0.08);margin:1rem 0;"/>')
+    // Line breaks
+    .replace(/\n\n/g, '<div style="margin-bottom:0.75rem;"></div>')
+    .replace(/\n/g, '<br/>');
+  return html;
+}
 
-// ─── 7. Hermes AI (NousResearch via Groq) — Quantitative Prediction Engine ───
+// ─── 8. Hermes AI — Quantitative Prediction Engine (via OpenAI) ──────────────
 export async function fetchHermesAnalysis(promptText) {
   try {
-    const res = await fetch('/api/hermes', {
+    const res = await fetch('/api/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        model: 'llama-3.3-70b-versatile',
+        model: 'gpt-4o-mini',
         messages: [
           {
             role: 'system',
@@ -192,21 +220,20 @@ If the user asks for a trading "signal", you MUST output exactly in this format 
       console.log('✅ Hermes AI prediction received');
       return data.choices[0].message.content;
     }
-    return `[Groq Error: No valid content returned]`;
+    return null;
   } catch (e) {
     console.error('❌ Hermes AI failed:', e.message);
-    return `[Groq Hermes API Error: ${e.message}]`;
+    return null;
   }
 }
 
-// ─── 8. AI Analysis Handler ────────────────────────────────────────────────────
-// Connects to OpenAI and Hermes for Command Center responses
+// ─── 9. Dual AI Fusion — Combines Hermes + GPT for maximum insight ───────────
 export async function fetchDualAI(userQuery, assetContext = '') {
   const context = assetContext
     ? `Current context: ${assetContext}. User query: ${userQuery}`
     : userQuery;
 
-  // Fire both in parallel
+  // Fire both in parallel (both use OpenAI now)
   const [hermesResult, openaiResult] = await Promise.allSettled([
     fetchHermesAnalysis(context),
     fetchAIAnalysis(context)
@@ -215,37 +242,34 @@ export async function fetchDualAI(userQuery, assetContext = '') {
   const hermes = hermesResult.status === 'fulfilled' ? hermesResult.value : null;
   const openai = openaiResult.status === 'fulfilled' ? openaiResult.value : null;
 
-  // Format it nicely for the UI if both succeed
-  if (hermes && openai && !hermes.startsWith('[') && !openai.startsWith('[')) {
+  // Both succeeded — show fusion output
+  if (hermes && openai) {
     return `
       <div style="margin-bottom:1.5rem;">
         <div style="font-size:0.7rem;font-weight:800;letter-spacing:0.1em;color:var(--primary);margin-bottom:0.75rem;text-transform:uppercase;">
           🔮 Hermes Quantitative Prediction
         </div>
-        <div style="color:#BAC2DE;line-height:1.7;">${hermes}</div>
+        <div style="color:#BAC2DE;line-height:1.7;">${renderMarkdown(hermes)}</div>
       </div>
       <hr style="border-color:var(--border-color);margin:1rem 0;"/>
       <div>
         <div style="font-size:0.7rem;font-weight:800;letter-spacing:0.1em;color:#10B981;margin-bottom:0.75rem;text-transform:uppercase;">
           🧠 GPT Contextual Analysis
         </div>
-        <div style="color:#BAC2DE;line-height:1.7;">${openai}</div>
+        <div style="color:#BAC2DE;line-height:1.7;">${renderMarkdown(openai)}</div>
       </div>`;
   }
 
-  // Fallback if one failed, or just show whatever we got
+  // Fallback to whichever responded
   const result = hermes || openai || null;
-  
-  if (!result || result.startsWith('[')) {
-     return result || null; 
-  }
+  if (!result) return null;
 
   return `
     <div>
       <div style="font-size:0.7rem;font-weight:800;letter-spacing:0.1em;color:#10B981;margin-bottom:0.75rem;text-transform:uppercase;">
         🧠 Nexus AI Analysis
       </div>
-      <div style="color:#BAC2DE;line-height:1.7;">${result}</div>
+      <div style="color:#BAC2DE;line-height:1.7;">${renderMarkdown(result)}</div>
     </div>`;
 }
 
