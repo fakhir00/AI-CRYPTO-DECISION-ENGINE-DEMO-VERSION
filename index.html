@@ -245,7 +245,14 @@
                     <div class="bubble">System operational. I have analyzed 240,000 data points across social, on-chain, and price metrics in the last 60 seconds. How can I assist?</div>
                   </div>
                 </div>
-                <div class="chat-input-area">
+                <div style="padding: 1rem 1.5rem 0; display: flex; gap: 0.5rem; flex-wrap: wrap; background: rgba(0,0,0,0.2); border-top: 1px solid var(--border-color);">
+                  <div style="font-size: 0.65rem; color: var(--text-muted); font-weight: 800; letter-spacing: 0.1em; text-transform: uppercase; width: 100%; margin-bottom: 0.25rem;">MCP Connectors Active</div>
+                  <button class="mcp-chip" onclick="triggerMcp('Analyze On-Chain Smart Money Flow (0xMovez model)')"><i data-feather="database"></i> On-Chain Flow</button>
+                  <button class="mcp-chip" onclick="triggerMcp('Run Whale Wallet Tracking Scan')"><i data-feather="eye"></i> Whale Scan</button>
+                  <button class="mcp-chip" onclick="triggerMcp('Pull Live Global Crypto News & Sentiment')"><i data-feather="globe"></i> News Feed</button>
+                  <button class="mcp-chip" onclick="triggerMcp('Generate Auto-Trade Setup for top asset')"><i data-feather="zap"></i> Trade Agent</button>
+                </div>
+                <div class="chat-input-area" style="border-top: none;">
                   <input type="text" id="ai-chat-input" placeholder="Ask for a token analysis, market summary, or macro thesis..." />
                   <button id="ai-chat-submit"><i data-feather="send"></i></button>
                 </div>
