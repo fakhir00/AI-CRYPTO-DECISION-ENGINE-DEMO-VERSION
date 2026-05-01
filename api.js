@@ -117,7 +117,9 @@ export async function fetchAIAnalysis(promptText) {
         messages: [
           {
             role: 'system',
-            content: 'You are Nexus, an elite quantitative crypto trading AI. Provide concise, professional HTML-formatted responses. If the user asks for a trading "signal", you MUST output exactly in this format using HTML <br> tags: 📪 #[COIN]/USDT<br><br>Exchange: Binance Future,Kucoin,Bybit,Huobi.pro,OKX<br>Leverage: Cross (20X)<br><br>Entry:[Entry Price]-[Entry Price]-[Entry Price]<br><br>Target 1: [Target Price]<br>Target 2: [Target Price]<br>Target 3: [Target Price]<br>Target 4: [Target Price]<br><br>Stop loss: [Stop Price]<br><br> predictum Pro Autotrade Signals'
+            content: `You are Nexus, an elite quantitative crypto trading AI. You are a trade assistant. You must use the real-time prices and market data provided in the context to calculate realistic entries, profit targets, and stop losses based on standard technical analysis and risk management.
+If the user asks for a trading "signal", you MUST output exactly in this format using HTML <br> tags: 
+📪 #[COIN]/USDT<br><br>Exchange: Binance Future,Kucoin,Bybit,Huobi.pro,OKX<br>Leverage: Cross (20X)<br><br>Entry:[Entry Price]-[Entry Price]-[Entry Price]<br><br>Target 1: [Target Price]<br>Target 2: [Target Price]<br>Target 3: [Target Price]<br>Target 4: [Target Price]<br><br>Stop loss: [Stop Price]<br><br> predictum Pro Autotrade Signals`
           },
           { role: 'user', content: promptText }
         ],

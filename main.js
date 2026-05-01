@@ -567,9 +567,33 @@ function renderTradingPage(symbol = 'BINANCE:SOLUSDT') {
       "hide_legend": false,
       "save_image": false,
       "container_id": "tradingview-widget",
-      "toolbar_bg": "#0E1320"
+      "toolbar_bg": "#0E1320",
+      "allow_symbol_change": true,
+      "hide_side_toolbar": false
     });
   }
+}
+
+window.openTradingChart = function(coin) {
+  // 1. Switch UI to trading page
+  switchPage('nav-trading', 'page-trading');
+  
+  // 2. Format symbol
+  const symbol = \`BINANCE:\${coin}USDT\`;
+  
+  // 3. Update select dropdown dynamically if needed
+  const tvSelect = document.getElementById('tv-pair-select');
+  if(tvSelect) {
+     let optionExists = Array.from(tvSelect.options).some(opt => opt.value === symbol);
+     if(!optionExists) {
+         const newOpt = new Option(\`\${coin}/USDT\`, symbol);
+         tvSelect.add(newOpt);
+     }
+     tvSelect.value = symbol;
+  }
+  
+  // 4. Render the chart
+  renderTradingPage(symbol);
 }
 
 function setupTradingEvents() {
@@ -668,7 +692,7 @@ function renderTechnicalPage() {
       <td><span class="badge bg-primary">${s.tf}</span></td>
       <td><span class="text-${s.strength === 'Strong' ? 'green' : 'warning'}">${s.strength}</span></td>
       <td style="font-family: var(--font-mono)">${s.conf}</td>
-      <td><button class="action-btn">View Chart</button></td>
+      <td><button class="action-btn" onclick="openTradingChart('${s.coin}')">View Chart</button></td>
     </tr>
   `).join('');
 }
@@ -832,9 +856,9 @@ function setupAiResearchChat() {
     if (typeof feather !== 'undefined') feather.replace();
     history.scrollTop = history.scrollHeight;
 
-    // Fetch from Dual AI (Hermes + GPT)
-    const assetCtx = assets.slice(0,3).map(a => `${a.symbol}:$${a.price}`).join(', ');
-    const dualRes = await fetchDualAI(val, `Live data — ${assetCtx}`);
+    // Fetch from AI with full platform context
+    const assetCtx = assets.map(a => `${a.symbol}: Price $${a.price}, Trend: ${a.bias}, AI Score: ${a.score}, Conf: ${a.confidence}%`).join(' | ');
+    const dualRes = await fetchDualAI(val, `Live Market Context: ${assetCtx}`);
 
     history.removeChild(loadingMsg);
 
