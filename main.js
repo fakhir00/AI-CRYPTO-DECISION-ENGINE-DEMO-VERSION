@@ -144,10 +144,13 @@ function initApp() {
   setupTradingEvents();
   setupBacktester();
   
-  // Sync live APIs
+  // Sync live APIs on load
   syncLiveApis();
   
-  // Heartbeat loops
+  // Real live data polling (every 60 seconds to respect CoinGecko limits)
+  setInterval(syncLiveApis, 60000);
+  
+  // UI Visual Heartbeat (flashes text and updates fake chart lines, but DOES NOT alter real prices)
   setInterval(simulateMarketTick, 3000);
 }
 
@@ -890,17 +893,10 @@ function showToast(msg) {
 }
 
 function simulateMarketTick() {
-  assets = assets.map(a => {
-    // Random walk
-    const move = (Math.random() - 0.5) * 0.4;
-    return {
-      ...a,
-      price: a.price * (1 + (move/100)),
-      change: a.change + (move * 0.1)
-    };
-  });
+  // 100% REAL DATA MODE: We NO LONGER fake the price drift here.
+  // Prices only update when syncLiveApis() pulls from CoinGecko every 60s.
   
-  // Update Charts
+  // Update purely visual Chart lines (so the UI doesn't look completely frozen)
   updateChartData();
   
   // Update UI Elements softly
@@ -988,61 +984,48 @@ function deploySignalTrades() {
   const top = [...assets].sort((a, b) => b.score - a.score).slice(0, 5);
   const totalScore = top.reduce((s, a) => s + a.score, 0) || 1;
 
-  // Trade counts per strategy (enough for meaningful win rate stats)
+  // Trade plans
   const TRADE_PLAN = [
-    // { strategy, count, isClosed }
-    { strategy: 'scalp', count: 5,  isClosed: true  },
-    { strategy: 'day',   count: 3,  isClosed: true  },
-    { strategy: 'swing', count: 2,  isClosed: false } // swing stays OPEN — live tracking
+    { strategy: 'scalp', count: 1 },
+    { strategy: 'day',   count: 1 },
+    { strategy: 'swing', count: 1 }
   ];
-
-  // Helper: win probability based on alpha score + bias
-  function winProb(asset, strategy) {
-    const base = BT_STRATEGIES[strategy].winRateBase;
-    const alphaBonus = (asset.score - 50) / 500; // small bonus from alpha
-    const biasBonus  = asset.bias === 'bullish' ? 0.05 : (asset.bias === 'bearish' ? -0.02 : 0);
-    return Math.min(0.85, Math.max(0.35, base + alphaBonus + biasBonus));
-  }
 
   top.forEach(asset => {
     const allocation = (asset.score / totalScore) * BT_CAPITAL;
-    const perTradeAlloc = allocation / (TRADE_PLAN.reduce((s, p) => s + p.count, 0));
+    const perTradeAlloc = allocation / 3;
+
+    // Generate the signal to get exact targets and stop loss
+    const sig = generateSignalForAsset(asset);
 
     TRADE_PLAN.forEach(plan => {
-      const cfg  = BT_STRATEGIES[plan.strategy];
-      const prob = winProb(asset, plan.strategy);
+      // Different strategies use different targets
+      // Scalp = Target 1, Day = Target 2, Swing = Target 4
+      const targetMap = { scalp: sig.t1, day: sig.t2, swing: sig.t4 };
+      const targetPrice = targetMap[plan.strategy];
 
-      for (let i = 0; i < plan.count; i++) {
-        const isWin   = Math.random() < prob;
-        const dir     = isWin ? 1 : -1;
-        const drift   = dir * (cfg.driftMul * (0.5 + Math.random() * 1.5));
-        const curPrc  = asset.price * (1 + drift);
-        const pnlUsd  = perTradeAlloc * drift;
-        const pnlPct  = drift * 100;
-
-        // Age offset (minutes ago) for realism — scalp = minutes, day = hours
-        const ageMap  = { scalp: 5 + i * 20, day: 60 + i * 180, swing: 24 * 60 + i * 720 };
-
-        btTrades.push({
-          coin:         asset.symbol,
-          name:         asset.name,
-          strategy:     plan.strategy,
-          allocated:    perTradeAlloc,
-          entryPrice:   asset.price,
-          currentPrice: curPrc,
-          pnlUsd,
-          pnlPct,
-          status:       plan.isClosed ? (isWin ? 'WIN' : 'LOSS') : 'OPEN',
-          score:        asset.score,
-          minsAgo:      ageMap[plan.strategy]
-        });
-      }
+      btTrades.push({
+        coin:         asset.symbol,
+        name:         asset.name,
+        strategy:     plan.strategy,
+        allocated:    perTradeAlloc,
+        entryPrice:   asset.price,
+        currentPrice: asset.price,
+        targetPrice:  targetPrice,
+        stopLoss:     sig.sl,
+        isBull:       sig.isBull,
+        pnlUsd:       0,
+        pnlPct:       0,
+        status:       'OPEN',
+        score:        asset.score,
+        minsAgo:      0
+      });
     });
   });
 
   const badge = document.getElementById('bt-status-badge');
   if (badge) {
-    badge.textContent = 'LIVE TRACKING';
+    badge.textContent = 'REAL-TIME TRACKING';
     badge.style.background = 'rgba(0,230,118,0.15)';
     badge.style.color = 'var(--green)';
   }
@@ -1051,21 +1034,35 @@ function deploySignalTrades() {
   renderBtStrategyBreakdown();
   renderBtTradeLog();
 
-  // Live tick: swing trades update every 4s, scalp closes step by step
+  // True Real-Time Tracking: Update every 3 seconds against live asset prices
   btInterval = setInterval(() => {
     btTrades.forEach(trade => {
       if (trade.status === 'OPEN') {
-        const cfg  = BT_STRATEGIES[trade.strategy];
-        const tick = (Math.random() - 0.46) * cfg.driftMul * trade.entryPrice;
-        trade.currentPrice += tick;
-        trade.pnlUsd  = (trade.currentPrice - trade.entryPrice) / trade.entryPrice * trade.allocated;
-        trade.pnlPct  = ((trade.currentPrice - trade.entryPrice) / trade.entryPrice) * 100;
-        trade.minsAgo = (trade.minsAgo || 0) + 0.067; // +4 seconds per tick
+        // Find current live price
+        const liveAsset = assets.find(a => a.symbol === trade.coin);
+        if (liveAsset) {
+          trade.currentPrice = liveAsset.price;
+          
+          const diff = trade.currentPrice - trade.entryPrice;
+          trade.pnlUsd = (trade.isBull ? diff : -diff) / trade.entryPrice * trade.allocated;
+          trade.pnlPct = (trade.isBull ? diff : -diff) / trade.entryPrice * 100;
+          
+          // Check conditions
+          if (trade.isBull) {
+             if (trade.currentPrice >= trade.targetPrice) trade.status = 'WIN';
+             if (trade.currentPrice <= trade.stopLoss) trade.status = 'LOSS';
+          } else {
+             if (trade.currentPrice <= trade.targetPrice) trade.status = 'WIN';
+             if (trade.currentPrice >= trade.stopLoss) trade.status = 'LOSS';
+          }
+        }
+        trade.minsAgo += 0.05; // 3 seconds = 0.05 mins
       }
     });
     renderBtKPIs();
+    renderBtStrategyBreakdown();
     renderBtTradeLog();
-  }, 4000);
+  }, 3000);
 }
 
 function renderBtKPIs() {
