@@ -14,7 +14,7 @@ const NAV_ITEMS = [
   { id: 'defi', label: 'DeFi Scanner', icon: 'layers' },
   { id: 'command', label: 'AI Command Center', icon: 'terminal' },
   { id: 'alerts', label: 'Alerts & Notifications', icon: 'bell' },
-  { id: 'paper-trading', label: 'Paper Trading Lab', icon: 'flask', badge: 'BETA' },
+  { id: 'paper-trading', label: 'Paper Trading Lab', icon: 'zap', badge: 'BETA' },
   { id: 'settings', label: 'Settings & Subscription', icon: 'settings' }
 ];
 
