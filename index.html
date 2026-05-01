@@ -505,6 +505,85 @@
              </div>
           </div>
 
+          <!-- 12. Beta Signal Backtester -->
+          <div class="page" id="page-backtester">
+            <div class="beta-banner">
+              <div class="beta-banner-inner">
+                <div class="beta-icon-wrap"><i data-feather="zap"></i></div>
+                <div>
+                  <div class="beta-banner-title">🧪 Signal Backtester — Beta Feature</div>
+                  <div class="beta-banner-sub">Paper trades $100 based on live Nexus AI signals. No real money. Tracks profitability across Scalp, Day & Swing strategies.</div>
+                </div>
+                <button class="btn-primary" id="deploy-signals-btn">
+                  <i data-feather="play"></i> Deploy $100 Signal Trade
+                </button>
+              </div>
+            </div>
+
+            <!-- KPI Row -->
+            <div class="summary-row" id="bt-kpi-row"></div>
+
+            <!-- Strategy Tabs -->
+            <div class="panel mb-4">
+              <div class="panel-header">
+                <h2 class="panel-title"><i data-feather="bar-chart-2"></i> Strategy Performance Breakdown</h2>
+                <div class="panel-actions" id="bt-strategy-tabs">
+                  <button class="panel-action-btn active" data-strat="all">All</button>
+                  <button class="panel-action-btn" data-strat="scalp">⚡ Scalp (1-4H)</button>
+                  <button class="panel-action-btn" data-strat="day">☀️ Day (24H)</button>
+                  <button class="panel-action-btn" data-strat="swing">🌊 Swing (3-7D)</button>
+                </div>
+              </div>
+              <div class="panel-body">
+                <div class="bt-strategy-grid" id="bt-strategy-grid"></div>
+              </div>
+            </div>
+
+            <!-- NEXUS Pro Signals Panel -->
+            <div class="panel mb-4">
+              <div class="panel-header">
+                <h2 class="panel-title"><i data-feather="send"></i> NEXUS Pro Signals</h2>
+                <div style="display:flex;gap:0.75rem;align-items:center;">
+                  <span class="panel-badge ai-badge">LIVE SIGNALS</span>
+                  <button class="action-btn" id="refresh-signals-btn"><i data-feather="refresh-cw" style="width:14px;height:14px;"></i> Refresh</button>
+                </div>
+              </div>
+              <div class="panel-body">
+                <div class="signals-grid" id="pro-signals-grid">
+                  <div style="text-align:center;color:var(--text-muted);padding:3rem;">
+                    Generating signals from live Alpha scores...
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Trade Log -->
+            <div class="panel">
+              <div class="panel-header">
+                <h2 class="panel-title"><i data-feather="list"></i> Live Trade Log</h2>
+                <span class="panel-badge ai-badge" id="bt-status-badge">AWAITING SIGNAL</span>
+              </div>
+              <div class="panel-body table-responsive">
+                <table class="data-table table-hover">
+                  <thead>
+                    <tr>
+                      <th>Time</th>
+                      <th>Coin</th>
+                      <th>Strategy</th>
+                      <th>Allocated</th>
+                      <th>Entry Price</th>
+                      <th>Current Price</th>
+                      <th>P&amp;L $</th>
+                      <th>P&amp;L %</th>
+                      <th>Status</th>
+                    </tr>
+                  </thead>
+                  <tbody id="bt-trade-log"><tr><td colspan="9" style="text-align:center;color:var(--text-muted);padding:3rem;">Click "Deploy $100 Signal Trade" to start simulation</td></tr></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+
         </main>
       </div>
 

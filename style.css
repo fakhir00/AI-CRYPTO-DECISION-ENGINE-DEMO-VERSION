@@ -555,7 +555,249 @@ body {
 .plan-features li { display: flex; align-items: center; gap: 0.75rem; margin-bottom: 1rem; font-weight: 500; }
 .plan-features li i { width: 18px; height: 18px; filter: drop-shadow(0 0 5px var(--green-glow)); }
 
-.center-content { display: flex; justify-content: center; align-items: center; }
+
+/* ===== SIGNAL BACKTESTER BETA STYLES ===== */
+
+/* Beta Banner */
+.beta-banner {
+  background: linear-gradient(135deg, rgba(139,120,255,0.12) 0%, rgba(0,230,118,0.06) 100%);
+  border: 1px solid rgba(139,120,255,0.3);
+  border-radius: 16px;
+  margin-bottom: 2rem;
+  position: relative;
+  overflow: hidden;
+}
+
+.beta-banner::before {
+  content: 'BETA';
+  position: absolute; top: 1rem; right: 1.5rem;
+  font-size: 0.65rem; font-weight: 900; letter-spacing: 0.15em;
+  color: var(--primary); opacity: 0.5;
+}
+
+.beta-banner-inner {
+  display: flex; align-items: center; gap: 1.5rem;
+  padding: 1.75rem 2rem;
+  flex-wrap: wrap;
+}
+
+.beta-icon-wrap {
+  width: 52px; height: 52px; border-radius: 14px; flex-shrink: 0;
+  background: rgba(139,120,255,0.15); display: flex; align-items: center; justify-content: center;
+  border: 1px solid var(--primary-glow);
+  box-shadow: 0 0 20px rgba(139,120,255,0.2);
+}
+
+.beta-icon-wrap i { color: var(--primary); width: 24px; height: 24px; filter: drop-shadow(0 0 6px var(--primary-glow)); }
+.beta-banner-title { font-size: 1.15rem; font-weight: 800; margin-bottom: 0.25rem; }
+.beta-banner-sub { font-size: 0.875rem; color: var(--text-muted); line-height: 1.5; max-width: 560px; }
+.beta-banner-inner .btn-primary { margin-left: auto; white-space: nowrap; flex-shrink: 0; }
+
+/* Strategy cards grid */
+.bt-strategy-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1.5rem;
+}
+
+.bt-strat-card {
+  background: rgba(255,255,255,0.02);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  padding: 1.5rem;
+  transition: all 0.25s;
+}
+
+.bt-strat-card:hover {
+  border-color: var(--primary);
+  transform: translateY(-3px);
+  box-shadow: 0 8px 20px rgba(139,120,255,0.15);
+}
+
+.bt-strat-header {
+  display: flex; align-items: center; gap: 0.85rem;
+  margin-bottom: 1.25rem;
+}
+
+.bt-strat-emoji { font-size: 1.75rem; line-height: 1; }
+.bt-strat-name { font-weight: 700; font-size: 1rem; }
+.bt-strat-tf { font-size: 0.75rem; color: var(--text-muted); margin-top: 0.15rem; }
+
+.bt-strat-pnl {
+  font-size: 2rem; font-weight: 900;
+  font-family: var(--font-mono);
+  margin-bottom: 0.4rem;
+  line-height: 1;
+}
+
+.bt-strat-sub {
+  font-size: 0.82rem; color: var(--text-muted);
+  margin-bottom: 1rem;
+}
+
+.bt-strat-bar-bg {
+  height: 6px; background: rgba(0,0,0,0.4);
+  border-radius: 4px; overflow: hidden;
+}
+
+.bt-strat-bar-fill {
+  height: 100%; border-radius: 4px;
+  transition: width 0.6s cubic-bezier(0.4,0,0.2,1);
+  box-shadow: 0 0 10px currentColor;
+}
+
+/* Sidebar beta badge */
+.nav-item .nav-beta-badge {
+  font-size: 0.55rem; font-weight: 900; padding: 0.15rem 0.4rem;
+  border-radius: 4px; letter-spacing: 0.06em; text-transform: uppercase;
+  background: rgba(139,120,255,0.2); color: var(--primary);
+  border: 1px solid var(--primary-glow);
+  margin-left: auto;
+  box-shadow: 0 0 8px var(--primary-glow);
+}
+
+/* Responsive for backtester */
+@media screen and (max-width: 1024px) {
+  .bt-strategy-grid { grid-template-columns: 1fr; }
+}
+
+@media screen and (max-width: 768px) {
+  .beta-banner-inner { flex-direction: column; align-items: flex-start; }
+  .beta-banner-inner .btn-primary { margin-left: 0; width: 100%; }
+}
+
+/* ===== NEXUS PRO SIGNALS — Telegram-Style Signal Cards ===== */
+
+.signals-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 1.5rem;
+}
+
+.signal-card {
+  background: linear-gradient(160deg, rgba(16, 20, 36, 0.95) 0%, rgba(10, 14, 24, 0.98) 100%);
+  border: 1px solid rgba(139, 120, 255, 0.2);
+  border-top: 2px solid var(--primary);
+  border-radius: 16px;
+  overflow: hidden;
+  transition: transform 0.25s, box-shadow 0.25s, border-color 0.25s;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+}
+
+.signal-card:hover {
+  transform: translateY(-4px);
+  border-color: rgba(139, 120, 255, 0.5);
+  box-shadow: 0 16px 40px rgba(139, 120, 255, 0.15);
+}
+
+.signal-card-header {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 1.25rem 1.5rem 1rem;
+  background: rgba(139, 120, 255, 0.06);
+  border-bottom: 1px solid rgba(255,255,255,0.05);
+}
+
+.signal-pair {
+  display: flex; align-items: center; gap: 0.65rem;
+}
+
+.signal-envelope { font-size: 1.1rem; }
+
+.signal-symbol {
+  font-size: 1.1rem; font-weight: 900;
+  letter-spacing: 0.04em;
+  background: linear-gradient(135deg, #fff 0%, #BAC2DE 100%);
+  -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+}
+
+.signal-dir-badge {
+  font-size: 0.65rem; font-weight: 800; padding: 0.2rem 0.55rem;
+  border-radius: 5px; letter-spacing: 0.06em; text-transform: uppercase;
+}
+
+.sig-long  { background: rgba(0,230,118,0.15); color: var(--green); border: 1px solid var(--green-glow); }
+.sig-short { background: rgba(255,51,102,0.15); color: var(--red);   border: 1px solid var(--red-glow); }
+
+.signal-strength {
+  font-size: 0.7rem; font-weight: 800; letter-spacing: 0.06em;
+}
+
+.signal-row {
+  display: flex; align-items: baseline; gap: 0.75rem;
+  padding: 0.65rem 1.5rem;
+  border-bottom: 1px solid rgba(255,255,255,0.03);
+  font-size: 0.875rem;
+}
+
+.signal-label {
+  color: var(--text-muted); min-width: 90px; font-weight: 600;
+  font-size: 0.8rem; flex-shrink: 0;
+}
+
+.signal-value {
+  color: var(--text-main); font-weight: 500; flex: 1;
+}
+
+.signal-mono { font-family: var(--font-mono); font-weight: 600; }
+
+.signal-divider {
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(139,120,255,0.3), transparent);
+  margin: 0.25rem 1.5rem;
+}
+
+.signal-targets {
+  padding: 0.25rem 1.5rem;
+  display: flex; flex-direction: column; gap: 0;
+}
+
+.signal-target-row {
+  display: flex; align-items: center;
+  padding: 0.55rem 0;
+  border-bottom: 1px solid rgba(255,255,255,0.025);
+  gap: 0.75rem;
+  font-size: 0.875rem;
+}
+
+.target-num {
+  min-width: 100px; font-size: 0.8rem; color: var(--text-muted); font-weight: 600;
+}
+
+.target-pct {
+  margin-left: auto; font-family: var(--font-mono);
+  font-size: 0.75rem; font-weight: 700;
+  background: rgba(0,230,118,0.08); padding: 0.1rem 0.4rem;
+  border-radius: 4px;
+}
+
+.signal-sl-row {
+  padding: 0.8rem 1.5rem;
+  background: rgba(255,51,102,0.05);
+  border-top: 1px solid rgba(255,51,102,0.1) !important;
+}
+
+.signal-sl-row .target-pct {
+  background: rgba(255,51,102,0.1);
+}
+
+.signal-footer {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 0.85rem 1.5rem;
+  background: rgba(0,0,0,0.2);
+  font-size: 0.78rem;
+  border-top: 1px solid rgba(255,255,255,0.05);
+}
+
+.signal-brand {
+  color: var(--primary); font-weight: 700;
+  font-size: 0.72rem; letter-spacing: 0.04em;
+  opacity: 0.8;
+}
+
+@media screen and (max-width: 768px) {
+  .signals-grid { grid-template-columns: 1fr; }
+}
+
 
 /* --- Media Queries for Responsiveness --- */
 
