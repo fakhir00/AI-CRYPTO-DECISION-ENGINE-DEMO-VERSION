@@ -465,6 +465,22 @@ function renderDashboard() {
 
   renderSmartMoneyFlow();
   renderNarrativeMomentum();
+
+  // Alpha Mini
+  const dashAlpha = document.getElementById('dash-alpha-list');
+  if (dashAlpha) {
+    dashAlpha.innerHTML = ALPHA_SIGNALS.slice(0,3).map(action => `
+      <div class="feed-item news-impact">
+        <div class="feed-header">
+          <span class="feed-time">${action.time}</span>
+          <span class="feed-tag" style="background: rgba(108, 92, 231, 0.2); color: var(--primary);">ALPHA</span>
+        </div>
+        <div class="feed-content">
+          ${action.text}
+        </div>
+      </div>
+    `).join('');
+  }
 }
 
 function renderSmartMoneyFlow() {
@@ -514,28 +530,7 @@ window.triggerMcp = async function(type) {
   input.value = type;
   btn.click();
 }
-      <div class="feed-content">
-        ${action.text} <span class="amount">${action.amount}</span>
-      </div>
-    </div>
-  `).join('');
 
-  // Alpha Mini
-  const dashAlpha = document.getElementById('dash-alpha-list');
-  if (dashAlpha) {
-    dashAlpha.innerHTML = ALPHA_SIGNALS.slice(0,3).map(action => `
-      <div class="feed-item news-impact">
-        <div class="feed-header">
-          <span class="feed-time">${action.time}</span>
-          <span class="feed-tag" style="background: rgba(108, 92, 231, 0.2); color: var(--primary);">ALPHA</span>
-        </div>
-        <div class="feed-content">
-          ${action.text}
-        </div>
-      </div>
-    `).join('');
-  }
-}
 
 function typeWriterEffect(element, lines, speed = 20) {
    element.innerHTML = '';
@@ -641,14 +636,14 @@ window.openTradingChart = function(coin) {
   switchPage('nav-trading', 'page-trading');
   
   // 2. Format symbol
-  const symbol = \`BINANCE:\${coin}USDT\`;
+  const symbol = `BINANCE:${coin}USDT`;
   
   // 3. Update select dropdown dynamically if needed
   const tvSelect = document.getElementById('tv-pair-select');
   if(tvSelect) {
      let optionExists = Array.from(tvSelect.options).some(opt => opt.value === symbol);
      if(!optionExists) {
-         const newOpt = new Option(\`\${coin}/USDT\`, symbol);
+         const newOpt = new Option(`${coin}/USDT`, symbol);
          tvSelect.add(newOpt);
      }
      tvSelect.value = symbol;
