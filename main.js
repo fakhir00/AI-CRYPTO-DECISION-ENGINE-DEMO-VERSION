@@ -80,6 +80,13 @@ const NARRATIVES = [
   { name: 'Layer 2 Scaling', change: '-12.8%', val: '71' }
 ];
 
+const SMART_MONEY_FLOWS = [
+  { amount: '$12.5M', asset: 'SOL', type: 'inflow', wallet: 'Multicoin Cap', time: '12m ago', tag: 'accumulation' },
+  { amount: '$4.2M', asset: 'LINK', type: 'inflow', wallet: 'Smart Money #42', time: '24m ago', tag: 'accumulation' },
+  { amount: '$8.9M', asset: 'ETH', type: 'outflow', wallet: 'Whale #092', time: '42m ago', tag: 'distribution' },
+  { amount: '$2.1M', asset: 'RNDR', type: 'inflow', wallet: 'Fresh Wallet', time: '1h ago', tag: 'accumulation' }
+];
+
 let assets = [...ASSETS];
 
 // Chart Instances
@@ -450,8 +457,63 @@ function renderDashboard() {
     <div class="feed-item whale-${action.type}">
       <div class="feed-header">
         <span class="feed-time">${action.time}</span>
-        <span class="feed-tag">${action.type.toUpperCase()}</span>
+        <span class="feed-tag">${action.exchange}</span>
       </div>
+      <div class="feed-content">${action.text} <strong>${action.amount}</strong></div>
+    </div>
+  `).join('');
+
+  renderSmartMoneyFlow();
+  renderNarrativeMomentum();
+}
+
+function renderSmartMoneyFlow() {
+  const container = document.getElementById('smart-money-list');
+  if (!container) return;
+  container.innerHTML = SMART_MONEY_FLOWS.map(flow => `
+    <div class="flow-card">
+      <div class="flow-icon ${flow.type}">
+        ${flow.type === 'inflow' ? '📥' : '📤'}
+      </div>
+      <div class="flow-details">
+        <div class="flow-amount">${flow.amount} ${flow.asset} ${flow.type === 'inflow' ? 'Inflow' : 'Outflow'}</div>
+        <div class="flow-meta">
+          <span>${flow.wallet}</span>
+          <span class="text-muted">• ${flow.time}</span>
+        </div>
+      </div>
+      <div class="flow-tag ${flow.tag}">${flow.tag}</div>
+    </div>
+  `).join('');
+}
+
+function renderNarrativeMomentum() {
+  const container = document.getElementById('narrative-momentum-list');
+  if (!container) return;
+  container.innerHTML = NARRATIVES.map((n, i) => `
+    <div class="narrative-card">
+      <div class="narrative-left">
+        <div class="narrative-rank">#${i + 1}</div>
+        <div class="narrative-name">${n.name}</div>
+      </div>
+      <div class="narrative-right">
+        <div class="narrative-score text-green">${n.change}</div>
+        <div class="narrative-bar-bg">
+          <div class="narrative-bar-fill" style="width: ${n.val}%"></div>
+        </div>
+      </div>
+    </div>
+  `).join('');
+}
+
+window.triggerMcp = async function(type) {
+  const input = document.getElementById('ai-chat-input');
+  const btn = document.getElementById('ai-chat-submit');
+  if (!input || !btn) return;
+
+  input.value = type;
+  btn.click();
+}
       <div class="feed-content">
         ${action.text} <span class="amount">${action.amount}</span>
       </div>
