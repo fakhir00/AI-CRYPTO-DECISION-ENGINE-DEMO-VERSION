@@ -472,7 +472,7 @@ Your capabilities:
 
 When the user asks for a trade setup or signal, combine both skills into one optimized answer. Provide your thesis first, followed by the exact numbers.
 Use this exact HTML format for the trade signal portion:
-📪 #[COIN]/USDT<br><br>Exchange: Binance Future,Kucoin,Bybit,Huobi.pro,OKX<br>Leverage: Cross (20X)<br><br>Entry:[Price]-[Price]-[Price]<br><br>Target 1: [Price]<br>Target 2: [Price]<br>Target 3: [Price]<br>Target 4: [Price]<br><br>Stop loss: [Price]<br><br>⚡ NEXUS Pro Autotrade Signals
+📪 #[COIN]/USDT<br><br>Direction: <strong style="color:var(--text-green)">[LONG]</strong> or <strong style="color:var(--text-red)">[SHORT]</strong><br>Exchange: Binance Future,Kucoin,Bybit,Huobi.pro,OKX<br>Leverage: Cross (20X)<br><br>Entry:[Price]-[Price]-[Price]<br><br>Target 1: [Price]<br>Target 2: [Price]<br>Target 3: [Price]<br>Target 4: [Price]<br><br>Stop loss: [Price]<br><br>⚡ NEXUS Pro Autotrade Signals
 
 For all other queries, provide a single, highly optimized, data-driven response. Do not separate your answer into "Hermes" and "GPT" sections. Write as one unified intelligence. Use markdown headers, bold text, and bullet points for readability.`
           },
