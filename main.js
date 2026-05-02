@@ -1,5 +1,5 @@
 import './style.css';
-import { fetchMarketData, fetchGlobalMarketData, fetchWhaleActivity, fetchSentiment, fetchFearAndGreed, fetchAIAnalysis, fetchHermesAnalysis, fetchDualAI, calculateAlphaScore, fetchDefiPools, fetchNews, fetchTechnicalSignals, fetchTrendingNarratives, fetchChartData, fetchFundingRates, fetchOpenInterest, fetchOrderBookDepth, fetchBtcOnChain } from './api.js';
+import { fetchMarketData, fetchGlobalMarketData, fetchWhaleActivity, fetchSentiment, fetchFearAndGreed, fetchAIAnalysis, fetchHermesAnalysis, fetchDualAI, calculateAlphaScore, fetchDefiPools, fetchNews, fetchTechnicalSignals, fetchTrendingNarratives, fetchChartData, fetchFundingRates, fetchOpenInterest, fetchOrderBookDepth, fetchBtcOnChain, addToAIMemory, clearAIMemory, getAIMemory } from './api.js';
 
 
 // --- Navigation & Setup ---
@@ -41,6 +41,79 @@ let LIVE_FUNDING = [];   // Binance funding rates
 let LIVE_OI = [];        // Binance open interest
 let LIVE_DEPTH = null;   // BTC order book depth
 let LIVE_BTC_CHAIN = null; // BTC on-chain health
+
+// ─── Data Persistence Layer (localStorage) ───────────────────────────────────
+// Ensures identical data across refreshes and devices using the same browser.
+const DATA_CACHE_KEY = 'nexus_data_cache';
+const DATA_CACHE_TTL = 60 * 60 * 1000; // 1 hour TTL
+
+function saveDataCache() {
+  try {
+    const cache = {
+      timestamp: Date.now(),
+      assets,
+      WHALE_ACTIONS: [...WHALE_ACTIONS],
+      SMART_MONEY_FLOWS: [...SMART_MONEY_FLOWS],
+      NARRATIVES: [...NARRATIVES],
+      NEWS: [...NEWS],
+      DEFI_POOLS: [...DEFI_POOLS],
+      ALPHA_SIGNALS: [...ALPHA_SIGNALS],
+      LIVE_SENTIMENT,
+      LIVE_FNG,
+      LIVE_CATALYSTS: [...LIVE_CATALYSTS]
+    };
+    localStorage.setItem(DATA_CACHE_KEY, JSON.stringify(cache));
+    console.log('💾 Data cache saved to localStorage');
+  } catch(e) { console.warn('⚠️ Cache save failed:', e.message); }
+}
+
+function loadDataCache() {
+  try {
+    const raw = localStorage.getItem(DATA_CACHE_KEY);
+    if (!raw) return false;
+    const cache = JSON.parse(raw);
+    
+    // Check TTL
+    if (Date.now() - cache.timestamp > DATA_CACHE_TTL) {
+      localStorage.removeItem(DATA_CACHE_KEY);
+      console.log('🗑️ Cache expired, fetching fresh data');
+      return false;
+    }
+    
+    // Hydrate all data stores
+    if (cache.assets && cache.assets.length > 0) {
+      assets = cache.assets;
+      WHALE_ACTIONS.length = 0; cache.WHALE_ACTIONS?.forEach(w => WHALE_ACTIONS.push(w));
+      SMART_MONEY_FLOWS.length = 0; cache.SMART_MONEY_FLOWS?.forEach(s => SMART_MONEY_FLOWS.push(s));
+      NARRATIVES.length = 0; cache.NARRATIVES?.forEach(n => NARRATIVES.push(n));
+      NEWS.length = 0; cache.NEWS?.forEach(n => NEWS.push(n));
+      DEFI_POOLS.length = 0; cache.DEFI_POOLS?.forEach(d => DEFI_POOLS.push(d));
+      ALPHA_SIGNALS.length = 0; cache.ALPHA_SIGNALS?.forEach(a => ALPHA_SIGNALS.push(a));
+      if (cache.LIVE_SENTIMENT) LIVE_SENTIMENT = cache.LIVE_SENTIMENT;
+      if (cache.LIVE_FNG) LIVE_FNG = cache.LIVE_FNG;
+      if (cache.LIVE_CATALYSTS) LIVE_CATALYSTS = cache.LIVE_CATALYSTS;
+      
+      console.log('✅ Data cache loaded from localStorage (' + assets.length + ' assets, age: ' + Math.round((Date.now() - cache.timestamp) / 1000) + 's)');
+      return true;
+    }
+    return false;
+  } catch(e) {
+    console.warn('⚠️ Cache load failed:', e.message);
+    return false;
+  }
+}
+
+// Deterministic seeded random for stable generated values
+function seededRandom(seed) {
+  let s = seed;
+  return function() {
+    s = (s * 16807) % 2147483647;
+    return (s - 1) / 2147483646;
+  };
+}
+// Global seed based on current hour (so all devices produce same values within the same hour)
+const HOUR_SEED = Math.floor(Date.now() / (60 * 60 * 1000));
+const stableRandom = seededRandom(HOUR_SEED);
 
 // Chart Instances
 let mainMarketChart;
@@ -86,10 +159,16 @@ function initApp() {
   updateTime();
   setInterval(updateTime, 1000);
   
+  // Load cached data instantly for zero-delay UI hydration
+  const hasCachedData = loadDataCache();
+  if (hasCachedData) {
+    console.log('⚡ Instant hydration from cache — UI is ready');
+  }
+
   // Setup Charts
   initCharts();
 
-  // Initial renders
+  // Initial renders (will use cached data if available)
   renderDashboard();
   renderOpportunitiesPage();
   renderTradingPage();
@@ -98,6 +177,7 @@ function initApp() {
   renderSentimentPage();
   renderTechnicalPage();
   renderDefiPage();
+  if (hasCachedData) renderProSignals();
 
   setupAiResearchChat();
   setupAiReports();
@@ -106,7 +186,7 @@ function initApp() {
   setupTradingEvents();
   setupBacktester();
   
-  // Sync live APIs on load
+  // Sync live APIs on load (will overwrite cache with fresh data)
   syncLiveApis();
   
   // Real live data polling (every 60 seconds to respect CoinGecko limits)
@@ -526,6 +606,7 @@ async function syncLiveApis() {
       renderDashboard();
       renderOpportunitiesPage();
       renderProSignals();
+      saveDataCache(); // Persist to localStorage for cross-device consistency
       if(statusEl) statusEl.textContent = "Live Feed Synced";
     }
   } catch(e) {
@@ -1567,10 +1648,19 @@ function generateSignalForAsset(asset) {
   const atr = emaInfo ? emaInfo.atr : p * 0.035; // fallback: 3.5% of price
   const atrPct = atr / p; 
   
-  // Dynamic entry zones based on volatility
-  const entry1 = p * (1 - atrPct * 0.1); 
-  const entry2 = p * (1 - atrPct * 0.5);  
-  const entry3 = p * (1 - atrPct * 1.0); 
+  // Dynamic entry zones based on volatility and direction
+  // LONG: entries below price (buy dips), displayed high → low
+  // SHORT: entries above price (sell rallies), displayed low → high
+  let entry1, entry2, entry3;
+  if (isBull) {
+    entry1 = p * (1 - atrPct * 0.1);   // closest to price (highest)
+    entry2 = p * (1 - atrPct * 0.5);   // mid dip
+    entry3 = p * (1 - atrPct * 1.0);   // deepest dip (lowest)
+  } else {
+    entry1 = p * (1 + atrPct * 0.1);   // closest to price (lowest)
+    entry2 = p * (1 + atrPct * 0.5);   // mid rally
+    entry3 = p * (1 + atrPct * 1.0);   // highest rally entry
+  }
   
   // Dynamic targets: use strict Risk/Reward geometry
   const dir = isBull ? 1 : -1;

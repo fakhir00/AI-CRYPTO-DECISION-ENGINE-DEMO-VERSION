@@ -10,6 +10,48 @@ const KEYS = {
   lunarcrush: '8a0hxklrnp6i5kfiowg77edxjemoobmyiw0g62whp'
 };
 
+// ─── 0. AI Conversation Memory Buffer ────────────────────────────────────────
+// Maintains a rolling history of the last 10 user+assistant message pairs.
+// This gives the AI full conversational context so users don't have to repeat coin names.
+const AI_MEMORY = {
+  history: [],   // Array of { role: 'user'|'assistant', content: string }
+  maxPairs: 10,  // Keep last 10 exchanges (20 messages total)
+  
+  add(role, content) {
+    this.history.push({ role, content });
+    // Trim to max capacity (maxPairs * 2 messages)
+    while (this.history.length > this.maxPairs * 2) {
+      this.history.shift();
+    }
+    // Persist to localStorage for cross-refresh consistency
+    try { localStorage.setItem('nexus_ai_memory', JSON.stringify(this.history)); } catch(e) {}
+  },
+  
+  getMessages() {
+    return [...this.history];
+  },
+  
+  clear() {
+    this.history = [];
+    try { localStorage.removeItem('nexus_ai_memory'); } catch(e) {}
+  },
+  
+  load() {
+    try {
+      const saved = localStorage.getItem('nexus_ai_memory');
+      if (saved) this.history = JSON.parse(saved);
+    } catch(e) { this.history = []; }
+  }
+};
+
+// Load any persisted memory on startup
+AI_MEMORY.load();
+
+// Exported helpers for main.js
+export function addToAIMemory(role, content) { AI_MEMORY.add(role, content); }
+export function clearAIMemory() { AI_MEMORY.clear(); }
+export function getAIMemory() { return AI_MEMORY.getMessages(); }
+
 // ─── 1. CoinGecko: Real-time price, market cap, volume ───────────────────────
 export async function fetchMarketData() {
   const coins = [
@@ -453,31 +495,45 @@ export async function fetchChartData(symbol = 'BTC', interval = '1h', limit = 48
 }
 
 // ─── 5. OpenAI: Dual Engine Fusion (Contextual + Quantitative) ───────────────
+// Now uses AI_MEMORY for full conversation context.
 export async function fetchAIAnalysis(promptText) {
+  // Store the user message in memory
+  AI_MEMORY.add('user', promptText);
+  
   try {
-    const res = await fetch('/api/chat', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: 'gpt-4o-mini', // Upgraded to 4o-mini for better unified reasoning
-        messages: [
-          {
-            role: 'system',
-            content: `You are Nexus, the elite Dual-Engine AI powering the NEXUS Crypto Intelligence Platform. You combine the deep contextual reasoning of GPT with the precise quantitative prediction modeling of Hermes. 
+    const systemMessage = {
+      role: 'system',
+      content: `You are Nexus, the elite Dual-Engine AI powering the NEXUS Crypto Intelligence Platform. You combine the deep contextual reasoning of GPT with the precise quantitative prediction modeling of Hermes. 
 You have FULL ACCESS to live market data, on-chain analytics, whale tracking, social sentiment, and news feeds — all provided to you in the user's message context. NEVER say you cannot access data or that something is unavailable. The data in the context IS your live feed.
+
+CRITICAL: You have conversation memory. If the user previously mentioned a coin (e.g. "Analyze BTC") and then asks a follow-up like "What's the stop loss?" or "Give me targets", you MUST refer back to the coin from the previous message. Never ask them to repeat the coin name.
 
 Your capabilities:
 1. Quantitative Modeling: Calculate precise price targets, entries, stop losses, and risk/reward ratios.
 2. Contextual Synthesis: Analyze Smart Money flow, whale accumulation, social sentiment, and macro news to build a cohesive narrative.
 
 When the user asks for a trade setup or signal, combine both skills into one optimized answer. Provide your thesis first, followed by the exact numbers.
+
+CRITICAL ENTRY ORDERING RULES:
+- For LONG trades: Entry prices MUST go from HIGH to LOW (descending). Example: Entry: 0.953 - 0.921 - 0.899. You are buying dips, so the first entry is closest to the current price and each subsequent entry is a deeper dip.
+- For SHORT trades: Entry prices MUST go from LOW to HIGH (ascending). Example: Entry: 3.70 - 3.75 - 3.80. You are selling rallies, so the first entry is closest to the current price and each subsequent entry is a higher rally.
+NEVER reverse this order. This is a non-negotiable institutional standard.
+
 Use this exact HTML format for the trade signal portion:
 📪 #[COIN]/USDT<br><br>Direction: <strong style="color:var(--text-green)">[LONG]</strong> or <strong style="color:var(--text-red)">[SHORT]</strong><br>Exchange: Binance Future,Kucoin,Bybit,Huobi.pro,OKX<br>Leverage: Cross (20X)<br><br>Entry:[Price]-[Price]-[Price]<br><br>Target 1: [Price]<br>Target 2: [Price]<br>Target 3: [Price]<br>Target 4: [Price]<br><br>Stop loss: [Price]<br><br>⚡ NEXUS Pro Autotrade Signals
 
 For all other queries, provide a single, highly optimized, data-driven response. Do not separate your answer into "Hermes" and "GPT" sections. Write as one unified intelligence. Use markdown headers, bold text, and bullet points for readability.`
-          },
-          { role: 'user', content: promptText }
-        ],
+    };
+
+    // Build messages array: system + full conversation history
+    const messages = [systemMessage, ...AI_MEMORY.getMessages()];
+
+    const res = await fetch('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'gpt-4o-mini',
+        messages,
         max_tokens: 800,
         temperature: 0.5
       })
@@ -491,8 +547,11 @@ For all other queries, provide a single, highly optimized, data-driven response.
 
     const data = await res.json();
     if (data.choices?.[0]?.message?.content) {
-      console.log('✅ OpenAI response received');
-      return data.choices[0].message.content;
+      const reply = data.choices[0].message.content;
+      // Store the AI response in memory
+      AI_MEMORY.add('assistant', reply);
+      console.log('✅ OpenAI response received (memory depth:', AI_MEMORY.history.length, 'messages)');
+      return reply;
     }
     return `[OpenAI Error: No valid content returned]`;
   } catch (e) {
