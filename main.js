@@ -188,7 +188,13 @@ async function initCharts(timeframe = '24H') {
   gradientSocial.addColorStop(0, 'rgba(0, 230, 118, 0.3)');
   gradientSocial.addColorStop(1, 'rgba(0, 230, 118, 0.0)');
 
-  const socialData = Array.from({length: 24}, () => LIVE_SENTIMENT.score);
+  // Generate a realistic 24h momentum curve ending at current score
+  const socialData = Array.from({length: 24}, (_, i) => {
+    const progress = i / 23;
+    const base = 40 + (progress * (LIVE_SENTIMENT.score - 40));
+    const noise = Math.sin(i * 0.5) * 8;
+    return Math.max(0, Math.min(100, base + noise));
+  });
 
   socialChart = new Chart(ctxSocial, {
     type: 'line',
@@ -283,7 +289,7 @@ async function syncLiveApis() {
       narrativesData.narratives.slice(0, 6).forEach(c => NARRATIVES.push({
         name: c.name,
         change: c.change > 0 ? '+' + c.change.toFixed(1) + '%' : c.change.toFixed(1) + '%',
-        val: Math.min(100, Math.max(10, c.change * 5))
+        val: Math.round(Math.min(100, Math.max(10, 60 + c.change * 1.5)))
       }));
       renderNarrativeMomentum();
       renderSentimentPage(); // Update the dedicated sentiment page
