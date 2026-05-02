@@ -572,30 +572,35 @@ async function syncLiveApis() {
     if (marketData && marketData.length > 0) {
       assets = marketData.map(coin => {
          const symbol = coin.symbol.toUpperCase();
-         const hasWhale = whales.some(w => w.token === symbol || w.amount === symbol); 
-         const techScore = coin.price_change_percentage_24h > 0 ? 1 : 0.5;
-         const newsScore = sentiment.score > 50 ? 1 : 0.5;
          
-         // Fix: Relative Volume Score
+         // ═══ DETERMINISTIC ALPHA SCORE ═══
+         // Uses ONLY CoinGecko data so every device produces identical rankings.
+         // Volatile APIs (whales, sentiment, EMA) feed their own UI pages but do NOT affect this score.
+         
+         const change24h = coin.price_change_percentage_24h || 0;
          const volRatio = coin.market_cap > 0 ? (coin.total_volume / coin.market_cap) : 0;
-         const volScore = volRatio > 0.08 ? 1 : 0.5;
+         const mcapRank = coin.market_cap_rank || 50;
          
-         // EMA confluence score (0 to 1)
-         let emaConfluence = 0;
-         const emaInfo = techSignals.ema ? techSignals.ema[symbol] : null;
-         if (emaInfo) {
-           if (emaInfo.ema9 > emaInfo.ema21 && coin.current_price > emaInfo.ema9) emaConfluence = 1;
-           else if (emaInfo.ema9 < emaInfo.ema21 && coin.current_price < emaInfo.ema9) emaConfluence = 0.8;
-           else emaConfluence = 0.4;
-         }
+         // Component 1: Momentum (0-35 pts) — strong positive change = high score
+         const momentumRaw = Math.min(35, Math.max(0, 17.5 + (change24h * 2.5)));
          
-         const alpha = calculateAlphaScore(hasWhale, sentiment.score, techScore, newsScore, volScore, 0.8, emaConfluence);
+         // Component 2: Volume Conviction (0-25 pts) — high vol/mcap ratio = institutional interest
+         const volConviction = Math.min(25, volRatio * 250);
+         
+         // Component 3: Market Cap Tier (0-20 pts) — top-ranked coins get higher base score
+         const mcapTier = Math.min(20, Math.max(5, 20 - (mcapRank * 0.3)));
+         
+         // Component 4: Price Stability (0-20 pts) — moderate moves score higher than extremes
+         const absChange = Math.abs(change24h);
+         const stability = absChange < 1 ? 10 : (absChange < 5 ? 18 : (absChange < 10 ? 15 : 8));
+         
+         const alpha = Math.round(Math.min(100, Math.max(0, momentumRaw + volConviction + mcapTier + stability)));
          
          return {
            symbol: symbol,
            name: coin.name,
            price: coin.current_price,
-           change: coin.price_change_percentage_24h || 0,
+           change: change24h,
            score: alpha,
            bias: alpha > 75 ? 'bullish' : (alpha < 50 ? 'bearish' : 'neutral'),
            confidence: Math.min(99, alpha),
