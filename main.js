@@ -167,12 +167,16 @@ function initApp() {
 }
 
 // --- Charts Setup (Chart.js) ---
-function initCharts() {
+function initCharts(timeframe = '24H') {
   // Chart defaults for dark mode
   Chart.defaults.color = '#94A3B8';
   Chart.defaults.font.family = "'JetBrains Mono', monospace";
   Chart.defaults.scale.grid.color = 'rgba(255, 255, 255, 0.05)';
   
+  // Destroy existing charts if they exist
+  if (mainMarketChart) mainMarketChart.destroy();
+  if (socialChart) socialChart.destroy();
+
   // Main Market Trend Chart (Dashboard)
   const ctxMain = document.getElementById('mainMarketChart').getContext('2d');
   
@@ -181,18 +185,32 @@ function initCharts() {
   gradient.addColorStop(0, 'rgba(108, 92, 231, 0.5)');
   gradient.addColorStop(1, 'rgba(108, 92, 231, 0.0)');
 
-  // Generate mock random walk data
+  // Adjust data points and labels based on timeframe
   let dataPoints = [];
-  let currentVal = 2.80; // Trillions
-  for(let i=0; i<48; i++) {
-    currentVal += (Math.random() - 0.45) * 0.05; // slight upward drift
+  let labels = [];
+  let currentVal = 2.87; // Baseline Market Cap
+  let count = 48;
+  
+  if (timeframe === '1H') {
+    count = 60;
+    labels = Array.from({length: count}, (_, i) => `${count - i}m ago`);
+  } else if (timeframe === '24H') {
+    count = 48;
+    labels = Array.from({length: count}, (_, i) => `${Math.floor((count - i)/2)}h ago`);
+  } else if (timeframe === '7D') {
+    count = 84;
+    labels = Array.from({length: count}, (_, i) => `${Math.floor((count - i)/12)}d ago`);
+  }
+
+  for(let i=0; i<count; i++) {
+    currentVal += (Math.random() - 0.48) * 0.03; 
     dataPoints.push(currentVal);
   }
 
   mainMarketChart = new Chart(ctxMain, {
     type: 'line',
     data: {
-      labels: Array.from({length: 48}, (_, i) => `${Math.floor(i/2)}h ago`).reverse(),
+      labels: labels,
       datasets: [{
         label: 'Total Market Cap (T)',
         data: dataPoints,
@@ -769,12 +787,12 @@ function setupAllButtons() {
   // 1. Dashboard Timeframe Buttons
   document.querySelectorAll('#page-dashboard .panel-action-btn').forEach(btn => {
     btn.addEventListener('click', (e) => {
+      const tf = e.target.textContent;
       const parent = e.target.closest('.panel-actions');
       parent.querySelectorAll('.panel-action-btn').forEach(b => b.classList.remove('active'));
       e.target.classList.add('active');
-      showToast(`Market chart updated to ${e.target.textContent} timeframe`);
-      // Re-init chart with mock timeframe shift
-      initCharts();
+      showToast(`Market chart updated to ${tf} timeframe`);
+      initCharts(tf);
     });
   });
 
