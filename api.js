@@ -5,7 +5,8 @@
 const KEYS = {
   coingecko: 'CG-7gTv8kk2qS7r8kj515m2rVQJ',
   cmc: 'e7080786d0f14b3abfc6c58de5f61adc',
-  etherscan: 'CRSWB6SIH2SAAPCPFGBK2NN473EC5JIS9M'
+  etherscan: 'CRSWB6SIH2SAAPCPFGBK2NN473EC5JIS9M',
+  taapi: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJjbHVlIjoiNjlmNWJjMTVlZTAzMzMxMWE0ZjJjOGRiIiwiaWF0IjoxNzc3NzEyMTQ5LCJleHAiOjMzMjgyMTc2MTQ5fQ.8Htit-r6kGZC5LZn7_EZLozYC7yOyCu4Z1WzhuPIH34'
 };
 
 // ─── 1. CoinGecko: Real-time price, market cap, volume ───────────────────────
@@ -103,6 +104,137 @@ export async function fetchSentiment() {
   } catch (e) {
     console.warn('⚠️ Reddit failed:', e.message);
     return { bullish: 5, bearish: 3, score: 62 };
+  }
+}
+
+// ─── 4A. DefiLlama: Real-time DeFi Pools (Free API) ──────────────────────────
+export async function fetchDefiPools() {
+  try {
+    const res = await fetch('https://yields.llama.fi/pools');
+    if (!res.ok) throw new Error(`DefiLlama HTTP ${res.status}`);
+    const data = await res.json();
+    console.log('✅ DefiLlama pools fetched');
+    // Get top 10 highest TVL pools
+    const topPools = data.data
+      .filter(p => p.tvlUsd > 10000000) // minimum 10M TVL to filter junk
+      .sort((a, b) => b.tvlUsd - a.tvlUsd)
+      .slice(0, 10);
+    return topPools;
+  } catch (e) {
+    console.warn('⚠️ DefiLlama failed:', e.message);
+    return null;
+  }
+}
+
+// ─── 4B. Aggregated RSS News Feed ──────────────────────────────────────────────
+export async function fetchNews() {
+  const feeds = [
+    'https://cointelegraph.com/rss',
+    'https://cryptoslate.com/feed/',
+    'https://decrypt.co/feed',
+    'https://www.newsbtc.com/feed/'
+  ];
+
+  try {
+    const fetchPromises = feeds.map(feed => 
+      fetch(`https://api.rss2json.com/v1/api.json?rss_url=${encodeURIComponent(feed)}`)
+        .then(res => res.ok ? res.json() : null)
+        .catch(() => null)
+    );
+
+    const results = await Promise.allSettled(fetchPromises);
+    
+    let allNews = [];
+    results.forEach(result => {
+      if (result.status === 'fulfilled' && result.value && result.value.items) {
+        allNews = allNews.concat(result.value.items);
+      }
+    });
+
+    if (allNews.length === 0) throw new Error('All news feeds failed');
+
+    // Sort by publication date (newest first)
+    allNews.sort((a, b) => new Date(b.pubDate) - new Date(a.pubDate));
+    
+    // Filter out duplicates by title (sometimes news is cross-posted)
+    const uniqueNews = [];
+    const titles = new Set();
+    for (const item of allNews) {
+      if (!titles.has(item.title)) {
+        uniqueNews.push(item);
+        titles.add(item.title);
+      }
+    }
+
+    console.log(`✅ Aggregated ${uniqueNews.length} news items from multiple sources`);
+    return uniqueNews.slice(0, 15);
+  } catch (e) {
+    console.warn('⚠️ Aggregated News fetch failed:', e.message);
+    return null;
+  }
+}
+
+// ─── 4C. Binance & TAAPI: Technical Signals ──────────────────────────────────
+export async function fetchTechnicalSignals(symbols = ['BTC', 'ETH', 'SOL']) {
+  try {
+    // 1. Fetch 24h ticker data from Binance for volume/price action
+    const binancePromises = symbols.map(sym => 
+      fetch(`https://api.binance.com/api/v3/ticker/24hr?symbol=${sym}USDT`)
+        .then(r => r.json())
+        .catch(() => null)
+    );
+    const binanceData = await Promise.all(binancePromises);
+
+    // 2. Fetch RSI for the primary asset (BTC) from TAAPI (Free tier = 1 call per 15s)
+    let btcRsi = null;
+    try {
+      const taapiRes = await fetch(`https://api.taapi.io/rsi?secret=${KEYS.taapi}&exchange=binance&symbol=BTC/USDT&interval=1h`);
+      if (taapiRes.ok) {
+        const taapiJson = await taapiRes.json();
+        btcRsi = taapiJson.value;
+        console.log('✅ TAAPI RSI fetched:', btcRsi);
+      }
+    } catch(err) {
+      console.warn('⚠️ TAAPI rate limit or error:', err.message);
+    }
+
+    return { binance: binanceData, rsi: btcRsi };
+  } catch (e) {
+    console.warn('⚠️ Binance/TAAPI failed:', e.message);
+    return null;
+  }
+}
+
+// ─── 4D. CoinGecko Categories: Narratives & Sectors ──────────────────────────
+export async function fetchNarratives() {
+  try {
+    const res = await fetch(`https://api.coingecko.com/api/v3/coins/categories?x_cg_demo_api_key=${KEYS.coingecko}`);
+    if (!res.ok) throw new Error(`CoinGecko Categories HTTP ${res.status}`);
+    const data = await res.json();
+    console.log('✅ Narratives fetched');
+    // Filter out categories with null market cap and sort
+    const validData = data.filter(c => c.market_cap !== null && c.volume_24h !== null);
+    return validData.slice(0, 10);
+  } catch (e) {
+    console.warn('⚠️ Narratives fetch failed:', e.message);
+    return null;
+  }
+}
+
+// ─── 4E. Binance Klines: Real Chart Data ─────────────────────────────────────
+export async function fetchChartData(symbol = 'BTC') {
+  try {
+    // Fetch 1h candles, last 50 hours
+    const res = await fetch(`https://api.binance.com/api/v3/klines?symbol=${symbol}USDT&interval=1h&limit=50`);
+    if (!res.ok) throw new Error(`Binance Klines HTTP ${res.status}`);
+    const data = await res.json();
+    // Binance returns an array of arrays. Index 4 is the closing price.
+    const closePrices = data.map(candle => parseFloat(candle[4]));
+    console.log(`✅ Chart data fetched for ${symbol}`);
+    return closePrices;
+  } catch (e) {
+    console.warn('⚠️ Chart data fetch failed:', e.message);
+    return null;
   }
 }
 
