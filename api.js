@@ -218,7 +218,35 @@ export async function fetchTechnicalSignals(symbols = ['BTC', 'ETH', 'SOL', 'INJ
     );
     const binanceData = await Promise.all(binancePromises);
 
-    // 2. Fetch RSI for the primary asset (BTC) from TAAPI (Free tier = 1 call per 15s)
+    // 2. Fetch 4H klines for multi-timeframe confluence (last 50 candles = ~8 days)
+    const klinePromises = symbols.map(sym =>
+      fetch(`https://api.binance.com/api/v3/klines?symbol=${sym}USDT&interval=4h&limit=50`)
+        .then(r => r.json())
+        .catch(() => null)
+    );
+    const klineData = await Promise.all(klinePromises);
+
+    // 3. Compute EMA-9 and EMA-21 from 4H klines for each symbol
+    const emaData = {};
+    symbols.forEach((sym, idx) => {
+      const klines = klineData[idx];
+      if (klines && klines.length >= 21) {
+        const closes = klines.map(k => parseFloat(k[4]));
+        const highs = klines.map(k => parseFloat(k[2]));
+        const lows = klines.map(k => parseFloat(k[3]));
+        
+        const ema9 = computeEMA(closes, 9);
+        const ema21 = computeEMA(closes, 21);
+        
+        // ATR proxy: average of (high - low) over last 14 candles
+        const atrSlice = highs.slice(-14).map((h, i) => h - lows.slice(-14)[i]);
+        const atr = atrSlice.reduce((s, v) => s + v, 0) / atrSlice.length;
+        
+        emaData[sym] = { ema9, ema21, atr, lastClose: closes[closes.length - 1] };
+      }
+    });
+
+    // 4. Fetch RSI for BTC from TAAPI (Free tier = 1 call per 15s)
     let btcRsi = null;
     try {
       const taapiRes = await fetch(`https://api.taapi.io/rsi?secret=${KEYS.taapi}&exchange=binance&symbol=BTC/USDT&interval=1h`);
@@ -231,11 +259,22 @@ export async function fetchTechnicalSignals(symbols = ['BTC', 'ETH', 'SOL', 'INJ
       console.warn('⚠️ TAAPI rate limit or error:', err.message);
     }
 
-    return { binance: binanceData, rsi: btcRsi };
+    console.log('✅ Multi-indicator technical data fetched for', symbols.length, 'assets');
+    return { binance: binanceData, rsi: btcRsi, ema: emaData };
   } catch (e) {
     console.warn('⚠️ Binance/TAAPI failed:', e.message);
     return null;
   }
+}
+
+// Helper: Compute Exponential Moving Average
+function computeEMA(data, period) {
+  const k = 2 / (period + 1);
+  let ema = data.slice(0, period).reduce((s, v) => s + v, 0) / period;
+  for (let i = period; i < data.length; i++) {
+    ema = data[i] * k + ema * (1 - k);
+  }
+  return ema;
 }
 
 // ─── 4D. CoinGecko Categories: Narratives & Sectors ──────────────────────────
@@ -319,15 +358,31 @@ For all other queries, provide a single, highly optimized, data-driven response.
   }
 }
 
-// ─── 6. Alpha Score Engine ────────────────────────────────────────────────────
-export function calculateAlphaScore(whaleActive, sentimentScore, techScore, newsScore, volScore, alphaSources) {
+// ─── 6. Alpha Score Engine (Adaptive Market Regime) ───────────────────────────
+export function calculateAlphaScore(whaleActive, sentimentScore, techScore, newsScore, volScore, alphaSources, emaConfluence = 0) {
+  // Detect market regime: trending (sentiment > 65 or < 35) vs ranging
+  const isTrending = sentimentScore > 65 || sentimentScore < 35;
+  
+  // Adaptive weights: In trending markets, tech and whale signals matter more.
+  // In ranging markets, volume and sentiment divergences matter more.
+  let whaleWeight, sentWeight, techWeight, newsWeight, volWeight, alphaWeight, emaWeight;
+  
+  if (isTrending) {
+    whaleWeight = 20;   sentWeight = 0.15;  techWeight = 22;
+    newsWeight = 12;    volWeight = 8;      alphaWeight = 10;   emaWeight = 15;
+  } else {
+    whaleWeight = 15;   sentWeight = 0.25;  techWeight = 15;
+    newsWeight = 15;    volWeight = 15;     alphaWeight = 12;   emaWeight = 8;
+  }
+  
   const raw =
-    (whaleActive ? 25 : 0) +
-    (sentimentScore * 0.2) +
-    (techScore * 20) +
-    (newsScore * 15) +
-    (volScore * 10) +
-    (alphaSources * 15);
+    (whaleActive ? whaleWeight : 0) +
+    (sentimentScore * sentWeight) +
+    (techScore * techWeight) +
+    (newsScore * newsWeight) +
+    (volScore * volWeight) +
+    (alphaSources * alphaWeight) +
+    (emaConfluence * emaWeight);
   return Math.min(100, Math.max(0, Math.round(raw)));
 }
 

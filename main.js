@@ -412,30 +412,75 @@ async function syncLiveApis() {
       renderNewsPage();
     }
 
-    // Update Technical Signals using Binance/TAAPI data
+    // Update Technical Signals using Binance + EMA confluence
     if (techSignals && techSignals.binance && techSignals.binance.length > 0) {
       SIGNALS.length = 0;
+      
+      // Store EMA data globally for generateSignalForAsset
+      window._liveEmaData = techSignals.ema || {};
+      
       techSignals.binance.forEach(b => {
         if(b) {
+          const sym = b.symbol.replace('USDT', '');
           const change = parseFloat(b.priceChangePercent);
+          const last = parseFloat(b.lastPrice);
+          const high = parseFloat(b.highPrice);
+          const low = parseFloat(b.lowPrice);
+          const vol = parseFloat(b.quoteVolume);
+          const emaInfo = techSignals.ema[sym];
           
+          // Multi-indicator pattern detection
           let pattern = 'Neutral / Range';
-          if (change > 7) pattern = 'Impulsive Breakout';
-          else if (change > 3) pattern = 'Bullish Momentum';
-          else if (change < -7) pattern = 'Bearish Breakdown';
-          else if (change < -3) pattern = 'Selling Pressure';
-
+          let confluence = 0;
+          
+          // 1. Price action analysis
+          if (change > 7) { pattern = 'Impulsive Breakout'; confluence += 2; }
+          else if (change > 3) { pattern = 'Bullish Momentum'; confluence += 1; }
+          else if (change < -7) { pattern = 'Bearish Breakdown'; confluence += 2; }
+          else if (change < -3) { pattern = 'Selling Pressure'; confluence += 1; }
+          
+          // 2. EMA crossover analysis (4H timeframe)
+          if (emaInfo) {
+            if (emaInfo.ema9 > emaInfo.ema21 && last > emaInfo.ema9) {
+              if (pattern === 'Neutral / Range') pattern = 'EMA Bullish Cross';
+              confluence += 1;
+            } else if (emaInfo.ema9 < emaInfo.ema21 && last < emaInfo.ema9) {
+              if (pattern === 'Neutral / Range') pattern = 'EMA Bearish Cross';
+              confluence += 1;
+            }
+          }
+          
+          // 3. Volume confirmation
+          if (vol > 500000000) confluence += 1; // >$500M daily volume
+          
+          // 4. Range position (near high = bullish, near low = bearish)
+          const range = high - low;
+          if (range > 0) {
+            const posInRange = (last - low) / range;
+            if (posInRange > 0.85 && change > 0) {
+              if (pattern === 'Neutral / Range') pattern = 'Bull Flag Forming';
+              confluence += 1;
+            } else if (posInRange < 0.15 && change < 0) {
+              if (pattern === 'Neutral / Range') pattern = 'Double Bottom Test';
+              confluence += 1;
+            }
+          }
+          
+          const strength = confluence >= 4 ? 'Strong' : (confluence >= 2 ? 'Medium' : 'Weak');
+          
           SIGNALS.push({
-            coin: b.symbol.replace('USDT', ''),
+            coin: sym,
             signal: pattern,
-            tf: '24H',
-            strength: Math.abs(change) > 8 ? 'Strong' : 'Medium',
-            conf: Math.min(99, 60 + Math.abs(change) * 1.5).toFixed(0) + '%'
+            tf: '4H / 24H',
+            strength: strength,
+            conf: Math.min(99, 50 + confluence * 10).toFixed(0) + '%'
           });
         }
       });
       if (techSignals.rsi) {
-        SIGNALS[0].signal = `RSI Reversal (${techSignals.rsi.toFixed(1)})`;
+        const rsiVal = techSignals.rsi.toFixed(1);
+        const rsiLabel = techSignals.rsi > 70 ? 'Overbought' : (techSignals.rsi < 30 ? 'Oversold' : 'Neutral');
+        SIGNALS[0].signal = `RSI ${rsiVal} (${rsiLabel})`;
       }
       renderTechnicalPage();
     }
@@ -465,7 +510,16 @@ async function syncLiveApis() {
          const newsScore = sentiment.score > 50 ? 1 : 0.5;
          const volScore = coin.total_volume > 100000000 ? 1 : 0.5;
          
-         const alpha = calculateAlphaScore(hasWhale, sentiment.score, techScore, newsScore, volScore, 0.8);
+         // EMA confluence score (0 to 1)
+         let emaConfluence = 0;
+         const emaInfo = techSignals.ema ? techSignals.ema[symbol] : null;
+         if (emaInfo) {
+           if (emaInfo.ema9 > emaInfo.ema21 && coin.current_price > emaInfo.ema9) emaConfluence = 1;
+           else if (emaInfo.ema9 < emaInfo.ema21 && coin.current_price < emaInfo.ema9) emaConfluence = 0.8;
+           else emaConfluence = 0.4;
+         }
+         
+         const alpha = calculateAlphaScore(hasWhale, sentiment.score, techScore, newsScore, volScore, 0.8, emaConfluence);
          
          return {
            symbol: symbol,
@@ -1544,18 +1598,32 @@ function generateSignalForAsset(asset) {
   const bias = asset.bias;
   const isBull = bias === 'bullish';
   const score = asset.score || 75;
-
-  const entry1 = p * 0.999;
-  const entry2 = p * 0.985;
-  const entry3 = p * 0.965;
+  const sym = asset.symbol;
   
+  // Use live ATR if available, otherwise use a percentage-based proxy
+  const emaInfo = window._liveEmaData ? window._liveEmaData[sym] : null;
+  const atr = emaInfo ? emaInfo.atr : p * 0.025; // fallback: 2.5% of price
+  const atrPct = atr / p; // ATR as percentage of price
+  
+  // Dynamic entry zones based on volatility
+  const entry1 = p * (1 - atrPct * 0.05);  // ~0.1% below
+  const entry2 = p * (1 - atrPct * 0.6);   // ~1.5% below 
+  const entry3 = p * (1 - atrPct * 1.2);   // ~3% below
+  
+  // Dynamic targets: use ATR multiples (1R, 2R, 3R, 5R)
   const dir = isBull ? 1 : -1;
-  const t1 = p * (1 + dir * 0.012);
-  const t2 = p * (1 + dir * 0.025);
-  const t3 = p * (1 + dir * 0.05);
-  const t4 = p * (1 + dir * 0.08);
+  const t1 = p * (1 + dir * atrPct * 0.8);   // ~1R target
+  const t2 = p * (1 + dir * atrPct * 1.6);   // ~2R target
+  const t3 = p * (1 + dir * atrPct * 3.0);   // ~3R target
+  const t4 = p * (1 + dir * atrPct * 5.0);   // ~5R target (swing)
 
-  const sl = entry3 * (isBull ? 0.96 : 1.04);
+  // Stop loss: 1.5 ATR below entry zone
+  const sl = isBull ? entry3 * (1 - atrPct * 1.5) : entry3 * (1 + atrPct * 1.5);
+  
+  // Risk/Reward ratio
+  const riskPerUnit = Math.abs(p - sl);
+  const rewardT2 = Math.abs(t2 - p);
+  const rrRatio = riskPerUnit > 0 ? (rewardT2 / riskPerUnit).toFixed(1) : '2.0';
 
   const exchanges = ['Binance', 'Bybit', 'OKX'];
   const leverage = isBull ? '5x-10x Cross' : '3x Isolated';
@@ -1566,7 +1634,7 @@ function generateSignalForAsset(asset) {
                  : score >= 70 ? { label: 'MEDIUM', cls: 'text-warning' }
                  : { label: 'WATCH', cls: 'text-muted' };
 
-  return { entry1, entry2, entry3, t1, t2, t3, t4, sl, exchanges, leverage, strength, isBull, type };
+  return { entry1, entry2, entry3, t1, t2, t3, t4, sl, exchanges, leverage, strength, isBull, type, rrRatio, atrPct };
 }
 
 function renderProSignals() {
@@ -1662,8 +1730,10 @@ function renderProSignals() {
 
         <!-- Footer -->
         <div class="signal-footer">
-          <span>Alpha Score: <strong class="text-primary">${asset.score}/100</strong></span>
-          <span class="signal-brand">⚡ NEXUS Pro Autotrade Signals</span>
+          <span>Alpha: <strong class="text-primary">${asset.score}/100</strong></span>
+          <span>R:R <strong class="text-green">1:${sig.rrRatio}</strong></span>
+          <span>Vol: <strong class="text-warning">${(sig.atrPct * 100).toFixed(1)}%</strong></span>
+          <span class="signal-brand">⚡ NEXUS Pro</span>
         </div>
       </div>
     `;
