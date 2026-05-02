@@ -898,7 +898,10 @@ function renderOpportunitiesPage() {
       const row = e.target.closest('tr');
       const symbol = row.querySelector('.live-price').dataset.symbol;
       
-      triggerMcp(`Give me a trade setup for ${symbol} with entry and exit targets`);
+      navigateToPage('ai-research'); // Switch to AI Research Analyst Page
+      setTimeout(() => {
+         triggerMcp(`Give me a quantitative algorithmic trade setup for ${symbol} with entry and exit targets, stop loss, and R:R.`);
+      }, 100);
     });
   });
 }
@@ -1538,35 +1541,51 @@ function renderBtStrategyBreakdown() {
 
 function generateSignalForAsset(asset) {
   const p = asset.price;
+  const score = asset.score || 50;
+  const sym = asset.symbol;
+  
+  // THE WAIT PROTOCOL (Institutional Capital Preservation)
+  // If the Alpha Score is < 75, we do not trade.
+  if (score < 75) {
+      return {
+          type: 'WAIT',
+          isBull: null,
+          strength: { label: 'NO TRADE ZONE', cls: 'text-muted' },
+          exchanges: ['Binance', 'Bybit'],
+          leverage: 'None',
+          entry1: 0, entry2: 0, entry3: 0,
+          t1: 0, t2: 0, t3: 0, t4: 0, sl: 0, rrRatio: '0.0',
+          waitReason: 'Alpha score too low. Macro structure is choppy.'
+      };
+  }
+
   const bias = asset.bias;
   const isBull = bias === 'bullish';
-  const score = asset.score || 75;
-  const sym = asset.symbol;
   
   // Use live ATR if available, otherwise use a percentage-based proxy
   const emaInfo = window._liveEmaData ? window._liveEmaData[sym] : null;
-  const atr = emaInfo ? emaInfo.atr : p * 0.025; // fallback: 2.5% of price
-  const atrPct = atr / p; // ATR as percentage of price
+  const atr = emaInfo ? emaInfo.atr : p * 0.035; // fallback: 3.5% of price
+  const atrPct = atr / p; 
   
   // Dynamic entry zones based on volatility
-  const entry1 = p * (1 - atrPct * 0.05);  // ~0.1% below
-  const entry2 = p * (1 - atrPct * 0.6);   // ~1.5% below 
-  const entry3 = p * (1 - atrPct * 1.2);   // ~3% below
+  const entry1 = p * (1 - atrPct * 0.1); 
+  const entry2 = p * (1 - atrPct * 0.5);  
+  const entry3 = p * (1 - atrPct * 1.0); 
   
-  // Dynamic targets: use ATR multiples (1R, 2R, 3R, 5R)
+  // Dynamic targets: use strict Risk/Reward geometry
   const dir = isBull ? 1 : -1;
-  const t1 = p * (1 + dir * atrPct * 0.8);   // ~1R target
-  const t2 = p * (1 + dir * atrPct * 1.6);   // ~2R target
-  const t3 = p * (1 + dir * atrPct * 3.0);   // ~3R target
-  const t4 = p * (1 + dir * atrPct * 5.0);   // ~5R target (swing)
+  const t1 = p * (1 + dir * atrPct * 1.0);   
+  const t2 = p * (1 + dir * atrPct * 2.0);   
+  const t3 = p * (1 + dir * atrPct * 3.5);   
+  const t4 = p * (1 + dir * atrPct * 5.0);   
 
-  // Stop loss: 1.5 ATR below entry zone
-  const sl = isBull ? entry3 * (1 - atrPct * 1.5) : entry3 * (1 + atrPct * 1.5);
+  // Strict Macro Order Book Stoppage (1.2 ATR)
+  const sl = isBull ? p * (1 - atrPct * 1.2) : p * (1 + atrPct * 1.2);
   
-  // Risk/Reward ratio
+  // Risk/Reward ratio calculation
   const riskPerUnit = Math.abs(p - sl);
   const rewardT2 = Math.abs(t2 - p);
-  const rrRatio = riskPerUnit > 0 ? (rewardT2 / riskPerUnit).toFixed(1) : '2.0';
+  const rrRatio = riskPerUnit > 0 ? (rewardT2 / riskPerUnit).toFixed(1) : '2.5';
 
   const exchanges = ['Binance', 'Bybit', 'OKX'];
   
@@ -1577,12 +1596,9 @@ function generateSignalForAsset(asset) {
   else levNum = '5x-10x';                     // <3% ATR: lower risk, higher leverage allowed
   
   const leverage = `${levNum} ${isBull ? 'Cross' : 'Isolated'}`;
-  
-  const type = score > 85 ? 'SWING' : (score > 70 ? 'INTRADAY' : 'SCALP');
-  
-  const strength = score >= 85 ? { label: 'STRONG', cls: 'text-green' }
-                 : score >= 70 ? { label: 'MEDIUM', cls: 'text-warning' }
-                 : { label: 'WATCH', cls: 'text-muted' };
+  const type = score > 85 ? 'SWING' : 'DAY';
+  const strength = score >= 85 ? { label: 'STRONG CONVICTION', cls: 'text-green' }
+                 : { label: 'MEDIUM CONVICTION', cls: 'text-primary' };
 
   return { entry1, entry2, entry3, t1, t2, t3, t4, sl, exchanges, leverage, strength, isBull, type, rrRatio, atrPct };
 }
@@ -1601,6 +1617,25 @@ function renderProSignals() {
 
   grid.innerHTML = top.map((asset, index) => {
     const sig = generateSignalForAsset(asset);
+    
+    if (sig.type === 'WAIT') {
+      return `
+        <div class="signal-card" id="signal-${asset.symbol}">
+          <div class="signal-card-header">
+            <div class="signal-pair">
+              <span class="signal-symbol">#${asset.symbol}/USDT</span>
+              <span class="badge" style="background:var(--bg-lighter); color:var(--text-muted); font-size: 0.65rem;">WAIT</span>
+            </div>
+            <div class="signal-strength ${sig.strength.cls}">${sig.strength.label}</div>
+          </div>
+          <div style="padding: 2rem 0; text-align: center; color: var(--text-muted);">
+            <i data-feather="shield" style="margin-bottom: 1rem; opacity: 0.5;"></i>
+            <p style="font-size: 0.85rem;">${sig.waitReason}</p>
+          </div>
+        </div>
+      `;
+    }
+
     const dirIcon = sig.isBull ? '📈' : '📉';
     const dirLabel = sig.isBull ? 'LONG' : 'SHORT';
     const dirClass = sig.isBull ? 'text-green' : 'text-red';
