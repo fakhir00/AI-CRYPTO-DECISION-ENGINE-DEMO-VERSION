@@ -1,5 +1,6 @@
 import './style.css';
-import { fetchMarketData, fetchGlobalMarketData, fetchWhaleActivity, fetchSentiment, fetchAIAnalysis, fetchHermesAnalysis, fetchDualAI, calculateAlphaScore, fetchDefiPools, fetchNews, fetchTechnicalSignals, fetchNarratives, fetchChartData } from './api.js';
+import { fetchMarketData, fetchGlobalMarketData, fetchWhaleActivity, fetchSentiment, fetchFearAndGreed, fetchAIAnalysis, fetchHermesAnalysis, fetchDualAI, calculateAlphaScore, fetchDefiPools, fetchNews, fetchTechnicalSignals, fetchNarratives, fetchChartData } from './api.js';
+
 
 // --- Navigation & Setup ---
 const NAV_ITEMS = [
@@ -89,6 +90,7 @@ const SMART_MONEY_FLOWS = [
 
 let assets = [...ASSETS];
 let LIVE_SENTIMENT = { bullish: 50, bearish: 50, score: 50 };
+let LIVE_FNG = { value: 72, label: 'Greed' };
 
 // Chart Instances
 let mainMarketChart;
@@ -272,7 +274,7 @@ async function syncLiveApis() {
   if(statusEl) statusEl.textContent = "Syncing Live APIs...";
   
   try {
-    const [marketData, sentiment, whales, defiData, newsData, techSignals, narrativesData, chartPrices] = await Promise.all([
+    const [marketData, sentiment, whales, defiData, newsData, techSignals, narrativesData, chartPrices, fngData] = await Promise.all([
       fetchMarketData(),
       fetchSentiment(),
       fetchWhaleActivity(),
@@ -280,7 +282,8 @@ async function syncLiveApis() {
       fetchNews(),
       fetchTechnicalSignals(),
       fetchNarratives(),
-      fetchChartData('BTC')
+      fetchChartData('BTC'),
+      fetchFearAndGreed()
     ]);
 
     // Update Narratives if real data fetched
@@ -399,6 +402,11 @@ async function syncLiveApis() {
         socialChart.update('none');
       }
       renderSentimentPage();
+    }
+
+    if (fngData) {
+      LIVE_FNG = fngData;
+      renderSentimentPage(); // refresh meter
     }
 
     if (marketData && marketData.length > 0) {
@@ -879,7 +887,23 @@ function renderSentimentPage() {
     <div class="sentiment-stat-row"><span class="sentiment-stat-label">Bearish Keyword Density</span><span class="sentiment-stat-val text-red">${LIVE_SENTIMENT.bearish} Mentions</span></div>
     <div class="sentiment-stat-row"><span class="sentiment-stat-label">Network Sentiment Score</span><span class="sentiment-stat-val ${LIVE_SENTIMENT.score > 50 ? 'text-green' : 'text-red'}">${LIVE_SENTIMENT.score}/100</span></div>
   `;
+
+  // Update Meter UI (on Dashboard)
+  const fngVal = document.getElementById('dash-greed-value');
+  if (fngVal) {
+     fngVal.textContent = LIVE_FNG.value;
+     const statusEl = document.querySelector('.meter-status');
+     if (statusEl) {
+        statusEl.textContent = LIVE_FNG.label;
+        statusEl.className = `meter-status ${LIVE_FNG.value > 50 ? 'text-green' : (LIVE_FNG.value < 40 ? 'text-red' : 'text-warning')}`;
+     }
+     const barEl = document.querySelector('.meter-bar');
+     if (barEl) {
+        barEl.style.width = `${LIVE_FNG.value}%`;
+     }
+  }
 }
+
 
 function renderTechnicalPage() {
   document.getElementById('technical-table-body').innerHTML = SIGNALS.map(s => `
