@@ -88,6 +88,7 @@ const SMART_MONEY_FLOWS = [
 ];
 
 let assets = [...ASSETS];
+let LIVE_SENTIMENT = { bullish: 50, bearish: 50, score: 50 };
 
 // Chart Instances
 let mainMarketChart;
@@ -384,6 +385,19 @@ async function syncLiveApis() {
         SIGNALS[0].signal = `RSI ${techSignals.rsi.toFixed(1)}`;
       }
       renderTechnicalPage();
+    }
+
+    // Update Live Sentiment and Social Chart
+    if (sentiment) {
+      LIVE_SENTIMENT = sentiment;
+      if (socialChart) {
+        // Shift social chart data and add the new score as the latest data point
+        const dataArr = socialChart.data.datasets[0].data;
+        dataArr.shift();
+        dataArr.push(sentiment.score);
+        socialChart.update('none');
+      }
+      renderSentimentPage();
     }
 
     if (marketData && marketData.length > 0) {
@@ -845,9 +859,9 @@ function renderSentimentPage() {
   `;
 
   document.getElementById('dash-sentiment-stats').innerHTML = `
-    <div class="sentiment-stat-row"><span class="sentiment-stat-label">Social Volume</span><span class="sentiment-stat-val text-green">+24.6%</span></div>
-    <div class="sentiment-stat-row"><span class="sentiment-stat-label">Engagement Spike</span><span class="sentiment-stat-val text-green">+18.3%</span></div>
-    <div class="sentiment-stat-row"><span class="sentiment-stat-label">Bearish Sentiment</span><span class="sentiment-stat-val text-red">-5.2%</span></div>
+    <div class="sentiment-stat-row"><span class="sentiment-stat-label">Bullish Keyword Density</span><span class="sentiment-stat-val text-green">${LIVE_SENTIMENT.bullish} Mentions</span></div>
+    <div class="sentiment-stat-row"><span class="sentiment-stat-label">Bearish Keyword Density</span><span class="sentiment-stat-val text-red">${LIVE_SENTIMENT.bearish} Mentions</span></div>
+    <div class="sentiment-stat-row"><span class="sentiment-stat-label">Network Sentiment Score</span><span class="sentiment-stat-val ${LIVE_SENTIMENT.score > 50 ? 'text-green' : 'text-red'}">${LIVE_SENTIMENT.score}/100</span></div>
   `;
 }
 
