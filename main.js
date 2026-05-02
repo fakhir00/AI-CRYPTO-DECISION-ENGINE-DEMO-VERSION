@@ -189,8 +189,8 @@ function initApp() {
   // Sync live APIs on load (will overwrite cache with fresh data)
   syncLiveApis();
   
-  // Real live data polling (every 60 seconds to respect CoinGecko limits)
-  setInterval(syncLiveApis, 60000);
+  // Real-time market data polling (every 20 seconds for high-precision accuracy)
+  setInterval(syncLiveApis, 20000);
   
   // UI Visual Heartbeat (flashes text)
   setInterval(simulateMarketTick, 3000);
