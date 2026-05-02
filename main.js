@@ -1385,8 +1385,8 @@ function setupAiResearchChat() {
     history.scrollTop = history.scrollHeight;
 
     // Fetch from AI with full platform context
-    const assetCtx = assets.map(a => `${a.symbol}: Price $${a.price}, Trend: ${a.bias}, AI Score: ${a.score}, Conf: ${a.confidence}%`).join(' | ');
-    const dualRes = await fetchDualAI(val, `Live Market Context: ${assetCtx}`);
+    const assetCtx = assets.map(a => `${a.symbol}: $${a.price} (${a.change >= 0 ? '+' : ''}${a.change.toFixed(2)}%)`).join(' | ');
+    const dualRes = await fetchDualAI(val, `LATEST LIVE DATA: ${assetCtx}`);
 
     history.removeChild(loadingMsg);
 
