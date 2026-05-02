@@ -259,9 +259,19 @@ export async function fetchTechnicalSignals(symbols = ['BTC', 'ETH', 'SOL', 'INJ
         const ema9 = computeEMA(closes, 9);
         const ema21 = computeEMA(closes, 21);
         
-        // ATR proxy: average of (high - low) over last 14 candles
-        const atrSlice = highs.slice(-14).map((h, i) => h - lows.slice(-14)[i]);
-        const atr = atrSlice.reduce((s, v) => s + v, 0) / atrSlice.length;
+        // Mathematically correct ATR: True Range = max(H-L, abs(H-PrevC), abs(L-PrevC))
+        let trSum = 0;
+        const period = 14;
+        const startIdx = Math.max(1, closes.length - period); // ensure we have a previous close
+        let actualPeriod = 0;
+        for (let i = startIdx; i < closes.length; i++) {
+          const hl = highs[i] - lows[i];
+          const hpc = Math.abs(highs[i] - closes[i - 1]);
+          const lpc = Math.abs(lows[i] - closes[i - 1]);
+          trSum += Math.max(hl, hpc, lpc);
+          actualPeriod++;
+        }
+        const atr = actualPeriod > 0 ? trSum / actualPeriod : 0;
         
         emaData[sym] = { ema9, ema21, atr, lastClose: closes[closes.length - 1] };
       }

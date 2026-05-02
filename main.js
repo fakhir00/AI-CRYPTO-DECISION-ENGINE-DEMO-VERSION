@@ -19,76 +19,17 @@ const NAV_ITEMS = [
   { id: 'settings', label: 'Settings & Subscription', icon: 'settings' }
 ];
 
-// --- Mock Data ---
-const ASSETS = [
-  { symbol: 'BTC', name: 'Bitcoin', price: 64230.50, change: 2.4, score: 78, bias: 'bullish', confidence: 85, vol: '24.5B' },
-  { symbol: 'ETH', name: 'Ethereum', price: 3450.20, change: 1.2, score: 65, bias: 'neutral', confidence: 72, vol: '12.1B' },
-  { symbol: 'SOL', name: 'Solana', price: 164.32, change: 5.62, score: 89, bias: 'bullish', confidence: 91, vol: '3.2B' },
-  { symbol: 'LINK', name: 'Chainlink', price: 18.54, change: 3.21, score: 85, bias: 'bullish', confidence: 88, vol: '850M' },
-  { symbol: 'ARB', name: 'Arbitrum', price: 1.25, change: 7.15, score: 82, bias: 'bullish', confidence: 85, vol: '420M' },
-  { symbol: 'INJ', name: 'Injective', price: 27.50, change: 4.20, score: 78, bias: 'bullish', confidence: 80, vol: '310M' },
-  { symbol: 'RNDR', name: 'Render', price: 7.31, change: 8.25, score: 75, bias: 'bullish', confidence: 75, vol: '280M' },
-  { symbol: 'OP', name: 'Optimism', price: 2.55, change: -1.40, score: 74, bias: 'neutral', confidence: 70, vol: '190M' },
-  { symbol: 'SUI', name: 'Sui', price: 1.68, change: 6.15, score: 71, bias: 'bullish', confidence: 68, vol: '450M' },
-  { symbol: 'TIA', name: 'Celestia', price: 6.71, change: 5.71, score: 72, bias: 'bullish', confidence: 65, vol: '220M' }
-];
+// --- Real Data Stores (Initialized Empty for 100% Accuracy) ---
+const ASSETS = [];
+const WHALE_ACTIONS = [];
+const ALPHA_SIGNALS = [];
+const NEWS = [];
+const SIGNALS = [];
+const DEFI_POOLS = [];
+const NARRATIVES = [];
+const SMART_MONEY_FLOWS = []; // To be replaced with real data or removed
 
-const WHALE_ACTIONS = [
-  { time: "2m ago", text: "$4.2M transferred to", type: "buy", amount: "SOL", exchange: "Binance" },
-  { time: "5m ago", text: "Smart money accumulation detected on", type: "buy", amount: "LINK", exchange: "DEX" },
-  { time: "12m ago", text: "$12.5M withdrawn from exchange", type: "buy", amount: "BTC", exchange: "Coinbase" },
-  { time: "18m ago", text: "Institutional sized deposit made for", type: "sell", amount: "ETH", exchange: "Kraken" },
-  { time: "24m ago", text: "$1.5M swapped to stablecoins from", type: "sell", amount: "ARB", exchange: "Uniswap" },
-  { time: "31m ago", text: "Heavy accumulation spotted on", type: "buy", amount: "INJ", exchange: "Binance" }
-];
-
-const ALPHA_SIGNALS = [
-  { time: "Just now", text: "Top trader 'Sisyphus' increased ETH exposure by 15%", impact: "high" },
-  { time: "10m ago", text: "AI narrative gaining massive traction across institutional desks", impact: "high" },
-  { time: "35m ago", text: "Smart money accumulating heavily in mid-cap DeFi", impact: "medium" },
-  { time: "1h ago", text: "Unusual options activity: 10k SOL calls bought for EOM", impact: "high" }
-];
-
-const NEWS = [
-  { time: "1h ago", title: "BlackRock files for new crypto ETF in Delaware", asset: "BTC", impact: "High" },
-  { time: "2h ago", title: "SEC delays decision on Ethereum ETF options", asset: "ETH", impact: "Medium" },
-  { time: "4h ago", title: "Arbitrum DAO approves $215M treasury allocation", asset: "ARB", impact: "High" },
-  { time: "5h ago", title: "700M SUI tokens unlocked, causing minor sell pressure", asset: "SUI", impact: "Medium" },
-  { time: "8h ago", title: "Circle launches native USDC on Solana mainnet", asset: "SOL", impact: "High" }
-];
-
-const SIGNALS = [
-  { coin: 'SOL', signal: 'Breakout Above Resistance', tf: '4H', strength: 'Strong', conf: '89%' },
-  { coin: 'LINK', signal: 'Bullish EMA Cross', tf: '1D', strength: 'Strong', conf: '82%' },
-  { coin: 'INJ', signal: 'RSI Reversal', tf: '4H', strength: 'Medium', conf: '75%' },
-  { coin: 'OP', signal: 'Support Flipped', tf: '1H', strength: 'Strong', conf: '80%' },
-  { coin: 'SUI', signal: 'Volume Breakout', tf: '1D', strength: 'Strong', conf: '83%' },
-  { coin: 'TIA', signal: 'MACD Bullish Cross', tf: '1D', strength: 'Medium', conf: '72%' }
-];
-
-const DEFI_POOLS = [
-  { protocol: 'Aave', asset: 'USDC', type: 'Lending', apy: '8.62%', tvl: '$1.2B', risk: 'Low' },
-  { protocol: 'Pendle', asset: 'eETH', type: 'Yield', apy: '21.34%', tvl: '$1.34B', risk: 'Medium' },
-  { protocol: 'Hyperliquid', asset: 'HLP', type: 'LP Farming', apy: '17.85%', tvl: '$58.2M', risk: 'Medium' },
-  { protocol: 'Beefy', asset: 'BNB-USDT', type: 'Vault', apy: '13.27%', tvl: '$223M', risk: 'Low' },
-  { protocol: 'Olympus', asset: 'OHM', type: 'Staking', apy: '19.45%', tvl: '$48.7M', risk: 'Medium' }
-];
-
-const NARRATIVES = [
-  { name: 'AI / Artificial Intelligence', change: '+22.7%', val: '82' },
-  { name: 'Real World Assets (RWA)', change: '+18.1%', val: '78' },
-  { name: 'DePIN', change: '+15.2%', val: '74' },
-  { name: 'Layer 2 Scaling', change: '-12.8%', val: '71' }
-];
-
-const SMART_MONEY_FLOWS = [
-  { amount: '$12.5M', asset: 'SOL', type: 'inflow', wallet: 'Multicoin Cap', time: '12m ago', tag: 'accumulation' },
-  { amount: '$4.2M', asset: 'LINK', type: 'inflow', wallet: 'Smart Money #42', time: '24m ago', tag: 'accumulation' },
-  { amount: '$8.9M', asset: 'ETH', type: 'outflow', wallet: 'Whale #092', time: '42m ago', tag: 'distribution' },
-  { amount: '$2.1M', asset: 'RNDR', type: 'inflow', wallet: 'Fresh Wallet', time: '1h ago', tag: 'accumulation' }
-];
-
-let assets = [...ASSETS];
+let assets = [];
 let LIVE_SENTIMENT = { bullish: 50, bearish: 50, score: 50 };
 let LIVE_FNG = { value: 72, label: 'Greed' };
 let LIVE_CATALYSTS = [
@@ -467,8 +408,14 @@ async function syncLiveApis() {
             }
           }
           
-          // 3. Volume confirmation
-          if (vol > 500000000) confluence += 1; // >$500M daily volume
+          // 3. Volume confirmation (Relative Vol > 8% of Mcap)
+          const coinData = marketData ? marketData.find(c => c.symbol.toUpperCase() === sym) : null;
+          if (coinData && coinData.market_cap > 0) {
+            const volRatio = coinData.total_volume / coinData.market_cap;
+            if (volRatio > 0.08) confluence += 1;
+          } else if (vol > 500000000) {
+            confluence += 1; // Fallback
+          }
           
           // 4. Range position (near high = bullish, near low = bearish)
           const range = high - low;
@@ -538,7 +485,10 @@ async function syncLiveApis() {
          const hasWhale = whales.some(w => w.token === symbol || w.amount === symbol); 
          const techScore = coin.price_change_percentage_24h > 0 ? 1 : 0.5;
          const newsScore = sentiment.score > 50 ? 1 : 0.5;
-         const volScore = coin.total_volume > 100000000 ? 1 : 0.5;
+         
+         // Fix: Relative Volume Score
+         const volRatio = coin.market_cap > 0 ? (coin.total_volume / coin.market_cap) : 0;
+         const volScore = volRatio > 0.08 ? 1 : 0.5;
          
          // EMA confluence score (0 to 1)
          let emaConfluence = 0;
@@ -728,15 +678,22 @@ function renderDashboard() {
   ]);
 
   // Whale Mini
-  document.getElementById('dash-whale-list').innerHTML = WHALE_ACTIONS.slice(0,4).map(action => `
-    <div class="feed-item whale-${action.type}">
-      <div class="feed-header">
-        <span class="feed-time">${action.time}</span>
-        <span class="feed-tag">${action.exchange}</span>
-      </div>
-      <div class="feed-content">${action.text} <strong>${action.amount}</strong></div>
-    </div>
-  `).join('');
+  const dashWhale = document.getElementById('dash-whale-list');
+  if (dashWhale) {
+    if (WHALE_ACTIONS.length === 0) {
+      dashWhale.innerHTML = `<div style="padding:1rem;color:var(--text-muted);font-size:0.85rem;text-align:center;">Syncing on-chain activity...</div>`;
+    } else {
+      dashWhale.innerHTML = WHALE_ACTIONS.slice(0,4).map(action => `
+        <div class="feed-item whale-${action.type}">
+          <div class="feed-header">
+            <span class="feed-time">${action.time}</span>
+            <span class="feed-tag">${action.exchange}</span>
+          </div>
+          <div class="feed-content">${action.text} <strong>${action.amount}</strong></div>
+        </div>
+      `).join('');
+    }
+  }
 
   renderSmartMoneyFlow();
   renderNarrativeMomentum();
@@ -744,17 +701,21 @@ function renderDashboard() {
   // Alpha Mini
   const dashAlpha = document.getElementById('dash-alpha-list');
   if (dashAlpha) {
-    dashAlpha.innerHTML = ALPHA_SIGNALS.slice(0,3).map(action => `
-      <div class="feed-item news-impact">
-        <div class="feed-header">
-          <span class="feed-time">${action.time}</span>
-          <span class="feed-tag" style="background: rgba(108, 92, 231, 0.2); color: var(--primary);">ALPHA</span>
+    dashAlpha.innerHTML = '';
+    
+    if (ALPHA_SIGNALS.length > 0) {
+      dashAlpha.innerHTML += ALPHA_SIGNALS.slice(0,3).map(action => `
+        <div class="feed-item news-impact">
+          <div class="feed-header">
+            <span class="feed-time">${action.time}</span>
+            <span class="feed-tag" style="background: rgba(108, 92, 231, 0.2); color: var(--primary);">ALPHA</span>
+          </div>
+          <div class="feed-content">
+            ${action.text}
+          </div>
         </div>
-        <div class="feed-content">
-          ${action.text}
-        </div>
-      </div>
-    `).join('');
+      `).join('');
+    }
     
     // Add derivatives intelligence to Alpha feed
     if (LIVE_FUNDING.length > 0) {
@@ -811,6 +772,10 @@ function renderDashboard() {
 function renderSmartMoneyFlow() {
   const container = document.getElementById('smart-money-list');
   if (!container) return;
+  if (SMART_MONEY_FLOWS.length === 0) {
+    container.innerHTML = `<div style="padding:1rem;color:var(--text-muted);font-size:0.85rem;text-align:center;">Scanning for institutional wallet activity...</div>`;
+    return;
+  }
   container.innerHTML = SMART_MONEY_FLOWS.map(flow => `
     <div class="flow-card">
       <div class="flow-icon ${flow.type}">
@@ -831,6 +796,10 @@ function renderSmartMoneyFlow() {
 function renderNarrativeMomentum() {
   const container = document.getElementById('narrative-momentum-list');
   if (!container) return;
+  if (NARRATIVES.length === 0) {
+    container.innerHTML = `<div style="padding:1rem;color:var(--text-muted);font-size:0.85rem;text-align:center;">Syncing sector momentum from CoinGecko...</div>`;
+    return;
+  }
   container.innerHTML = NARRATIVES.map((n, i) => `
     <div class="narrative-card">
       <div class="narrative-left">
@@ -1706,7 +1675,14 @@ function generateSignalForAsset(asset) {
   const rrRatio = riskPerUnit > 0 ? (rewardT2 / riskPerUnit).toFixed(1) : '2.0';
 
   const exchanges = ['Binance', 'Bybit', 'OKX'];
-  const leverage = isBull ? '5x-10x Cross' : '3x Isolated';
+  
+  // Dynamic Leverage (Inverse Volatility Logic)
+  let levNum;
+  if (atrPct > 0.05) levNum = '2x-3x';        // >5% ATR: high risk, low leverage
+  else if (atrPct > 0.03) levNum = '3x-5x';   // 3-5% ATR: moderate risk
+  else levNum = '5x-10x';                     // <3% ATR: lower risk, higher leverage allowed
+  
+  const leverage = `${levNum} ${isBull ? 'Cross' : 'Isolated'}`;
   
   const type = score > 85 ? 'SWING' : (score > 70 ? 'INTRADAY' : 'SCALP');
   
@@ -1729,11 +1705,20 @@ function renderProSignals() {
     return;
   }
 
-  grid.innerHTML = top.map(asset => {
+  grid.innerHTML = top.map((asset, index) => {
     const sig = generateSignalForAsset(asset);
     const dirIcon = sig.isBull ? '📈' : '📉';
     const dirLabel = sig.isBull ? 'LONG' : 'SHORT';
     const dirClass = sig.isBull ? 'text-green' : 'text-red';
+    
+    // SaaS Freemium Logic: Lock signals after the 2nd one
+    const isLocked = index >= 2;
+    const lockedOverlay = isLocked ? `
+      <div style="position:absolute;top:0;left:0;width:100%;height:100%;display:flex;align-items:center;justify-content:center;z-index:10;background:rgba(10,12,16,0.65);border-radius:8px;">
+        <span style="background:var(--primary);color:#fff;padding:0.5rem 1.2rem;border-radius:6px;font-size:0.85rem;font-weight:bold;cursor:pointer;box-shadow:0 4px 15px rgba(108,92,231,0.4);">🔒 UPGRADE TO PRO TO UNLOCK</span>
+      </div>
+    ` : '';
+    const blurStyle = isLocked ? 'filter: blur(6px); pointer-events: none; user-select: none; opacity: 0.5;' : '';
 
     return `
       <div class="signal-card" id="signal-${asset.symbol}">
@@ -1769,43 +1754,49 @@ function renderProSignals() {
         <!-- Divider -->
         <div class="signal-divider"></div>
 
-        <!-- Entry Zone -->
-        <div class="signal-row">
-          <span class="signal-label">Entry Zone</span>
-          <span class="signal-value signal-mono">
-            ${formatPrice(sig.entry1)} – ${formatPrice(sig.entry2)} – ${formatPrice(sig.entry3)}
-          </span>
-        </div>
+        <!-- Premium Locked Container -->
+        <div style="position:relative;margin-top:1rem;">
+          ${lockedOverlay}
+          <div style="${blurStyle}">
+            <!-- Entry Zone -->
+            <div class="signal-row">
+              <span class="signal-label">Entry Zone</span>
+              <span class="signal-value signal-mono">
+                ${formatPrice(sig.entry1)} – ${formatPrice(sig.entry2)} – ${formatPrice(sig.entry3)}
+              </span>
+            </div>
 
-        <!-- Targets -->
-        <div class="signal-targets">
-          <div class="signal-target-row">
-            <span class="target-num">🎯 Target 1</span>
-            <span class="signal-mono text-green">${formatPrice(sig.t1)}</span>
-            <span class="target-pct text-green">+${(((sig.t1 - asset.price) / asset.price) * 100).toFixed(2)}%</span>
-          </div>
-          <div class="signal-target-row">
-            <span class="target-num">🎯 Target 2</span>
-            <span class="signal-mono text-green">${formatPrice(sig.t2)}</span>
-            <span class="target-pct text-green">+${(((sig.t2 - asset.price) / asset.price) * 100).toFixed(2)}%</span>
-          </div>
-          <div class="signal-target-row">
-            <span class="target-num">🎯 Target 3</span>
-            <span class="signal-mono text-green">${formatPrice(sig.t3)}</span>
-            <span class="target-pct text-green">+${(((sig.t3 - asset.price) / asset.price) * 100).toFixed(2)}%</span>
-          </div>
-          <div class="signal-target-row">
-            <span class="target-num">🎯 Target 4</span>
-            <span class="signal-mono text-green">${formatPrice(sig.t4)}</span>
-            <span class="target-pct text-green">+${(((sig.t4 - asset.price) / asset.price) * 100).toFixed(2)}%</span>
-          </div>
-        </div>
+            <!-- Targets -->
+            <div class="signal-targets">
+              <div class="signal-target-row">
+                <span class="target-num">🎯 Target 1</span>
+                <span class="signal-mono text-green">${formatPrice(sig.t1)}</span>
+                <span class="target-pct text-green">+${(((sig.t1 - asset.price) / asset.price) * 100).toFixed(2)}%</span>
+              </div>
+              <div class="signal-target-row">
+                <span class="target-num">🎯 Target 2</span>
+                <span class="signal-mono text-green">${formatPrice(sig.t2)}</span>
+                <span class="target-pct text-green">+${(((sig.t2 - asset.price) / asset.price) * 100).toFixed(2)}%</span>
+              </div>
+              <div class="signal-target-row">
+                <span class="target-num">🎯 Target 3</span>
+                <span class="signal-mono text-green">${formatPrice(sig.t3)}</span>
+                <span class="target-pct text-green">+${(((sig.t3 - asset.price) / asset.price) * 100).toFixed(2)}%</span>
+              </div>
+              <div class="signal-target-row">
+                <span class="target-num">🎯 Target 4</span>
+                <span class="signal-mono text-green">${formatPrice(sig.t4)}</span>
+                <span class="target-pct text-green">+${(((sig.t4 - asset.price) / asset.price) * 100).toFixed(2)}%</span>
+              </div>
+            </div>
 
-        <!-- Stop Loss -->
-        <div class="signal-row signal-sl-row">
-          <span class="signal-label">🛑 Stop Loss</span>
-          <span class="signal-mono text-red">${formatPrice(sig.sl)}</span>
-          <span class="target-pct text-red">${(((sig.sl - asset.price) / asset.price) * 100).toFixed(2)}%</span>
+            <!-- Stop Loss -->
+            <div class="signal-row signal-sl-row">
+              <span class="signal-label">🛑 Stop Loss</span>
+              <span class="signal-mono text-red">${formatPrice(sig.sl)}</span>
+              <span class="target-pct text-red">${(((sig.sl - asset.price) / asset.price) * 100).toFixed(2)}%</span>
+            </div>
+          </div>
         </div>
 
         <!-- Footer -->
