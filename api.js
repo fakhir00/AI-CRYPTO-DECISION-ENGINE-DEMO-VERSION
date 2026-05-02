@@ -173,28 +173,40 @@ export function calculateAlphaScore(whaleActive, sentimentScore, techScore, news
 // Converts raw markdown from AI responses into styled HTML
 function renderMarkdown(md) {
   if (!md) return '';
-  let html = md
-    // Code blocks (```lang ... ```)
-    .replace(/```(\w*)\n([\s\S]*?)```/g, '<pre style="background:rgba(0,0,0,0.4);padding:1rem;border-radius:8px;overflow-x:auto;border:1px solid rgba(255,255,255,0.08);margin:0.75rem 0;font-size:0.82rem;"><code>$2</code></pre>')
+  
+  // First protect code blocks
+  let blocks = [];
+  let html = md.replace(/```(\w*)\n([\s\S]*?)```/g, (match, lang, code) => {
+    blocks.push(`<pre style="background:rgba(0,0,0,0.4);padding:1rem;border-radius:8px;overflow-x:auto;border:1px solid rgba(255,255,255,0.08);margin:0.75rem 0;font-size:0.82rem;"><code>${code}</code></pre>`);
+    return `__BLOCK_${blocks.length - 1}__`;
+  });
+
+  html = html
+    // Headers
+    .replace(/^###\s+(.+)$/gm, '<div style="font-size:0.95rem;font-weight:800;color:#fff;margin:1rem 0 0.5rem;border-bottom:1px solid rgba(255,255,255,0.08);padding-bottom:0.4rem;">$1</div>')
+    .replace(/^##\s+(.+)$/gm, '<div style="font-size:1.05rem;font-weight:800;color:#fff;margin:1.25rem 0 0.5rem;border-bottom:1px solid rgba(255,255,255,0.08);padding-bottom:0.4rem;">$1</div>')
+    .replace(/^#\s+(.+)$/gm, '<div style="font-size:1.15rem;font-weight:900;color:#fff;margin:1.25rem 0 0.5rem;">$1</div>')
+    // Unordered lists (asterisks, dashes, bullets)
+    .replace(/^\s*[-•*]\s+(.+)$/gm, '<div style="padding-left:0.5rem;margin:0.4rem 0;display:flex;gap:0.5rem;"><span style="color:var(--primary);flex-shrink:0;">▸</span><span>$1</span></div>')
+    // Numbered lists
+    .replace(/^\s*\d+\.\s+(.+)$/gm, '<div style="padding-left:0.5rem;margin:0.4rem 0;display:flex;gap:0.5rem;"><span style="color:var(--primary);flex-shrink:0;">▸</span><span>$1</span></div>')
+    // Bold
+    .replace(/\*\*(.*?)\*\*/g, '<strong style="color:#fff;">$1</strong>')
+    // Italic
+    .replace(/\b_(.*?)_\b/g, '<em>$1</em>') // use word boundaries for italic to avoid breaking urls
     // Inline code
     .replace(/`([^`]+)`/g, '<code style="background:rgba(139,120,255,0.15);padding:0.15rem 0.4rem;border-radius:4px;font-size:0.85em;color:var(--primary);">$1</code>')
-    // Bold
-    .replace(/\*\*(.+?)\*\*/g, '<strong style="color:#fff;">$1</strong>')
-    // Italic
-    .replace(/\*(.+?)\*/g, '<em>$1</em>')
-    // Headers
-    .replace(/^### (.+)$/gm, '<div style="font-size:0.95rem;font-weight:800;color:#fff;margin:1rem 0 0.5rem;border-bottom:1px solid rgba(255,255,255,0.08);padding-bottom:0.4rem;">$1</div>')
-    .replace(/^## (.+)$/gm, '<div style="font-size:1.05rem;font-weight:800;color:#fff;margin:1.25rem 0 0.5rem;border-bottom:1px solid rgba(255,255,255,0.08);padding-bottom:0.4rem;">$1</div>')
-    .replace(/^# (.+)$/gm, '<div style="font-size:1.15rem;font-weight:900;color:#fff;margin:1.25rem 0 0.5rem;">$1</div>')
-    // Unordered lists
-    .replace(/^[-•] (.+)$/gm, '<div style="padding-left:1rem;margin:0.3rem 0;display:flex;gap:0.5rem;"><span style="color:var(--primary);flex-shrink:0;">▸</span><span>$1</span></div>')
-    // Numbered lists
-    .replace(/^\d+\.\s(.+)$/gm, '<div style="padding-left:1rem;margin:0.3rem 0;">$1</div>')
     // Horizontal rules
     .replace(/^---$/gm, '<hr style="border:none;border-top:1px solid rgba(255,255,255,0.08);margin:1rem 0;"/>')
     // Line breaks
     .replace(/\n\n/g, '<div style="margin-bottom:0.75rem;"></div>')
     .replace(/\n/g, '<br/>');
+
+  // Restore code blocks
+  blocks.forEach((block, i) => {
+    html = html.replace(`__BLOCK_${i}__`, block);
+  });
+
   return html;
 }
 
