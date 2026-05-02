@@ -661,7 +661,7 @@ function renderDashboard() {
       </div>
       <div class="asset-price">$${formatPrice(asset.price)}</div>
       <div class="asset-change ${asset.change >= 0 ? 'text-green' : 'text-red'}">${asset.change > 0 ? '+' : ''}${asset.change.toFixed(2)}%</div>
-      <div class="bias-badge bias-${asset.bias}">${asset.bias}</div>
+      <div class="bias-badge bias-${asset.bias}">${asset.bias === 'bullish' ? 'LONG' : (asset.bias === 'bearish' ? 'SHORT' : 'WAIT')}</div>
     </div>
   `).join('');
 
@@ -877,7 +877,7 @@ function renderOpportunitiesPage() {
           </div>
         </div>
       </td>
-      <td><span class="bias-badge bias-${asset.bias}">${asset.bias}</span></td>
+      <td><span class="bias-badge bias-${asset.bias}">${asset.bias === 'bullish' ? '🟢 LONG' : (asset.bias === 'bearish' ? '🔴 SHORT' : '⚪ WAIT')}</span></td>
       <td><span class="text-muted">${asset.confidence}%</span></td>
       <td><button class="action-btn">Analyze</button></td>
     </tr>
@@ -1847,6 +1847,7 @@ function renderBtTradeLog() {
         <td class="text-muted" style="font-family:var(--font-mono);font-size:0.8rem;">${timeStr}</td>
         <td><strong>${trade.coin}</strong> <span class="text-muted" style="font-size:0.8rem">${trade.name}</span></td>
         <td><span class="badge bg-primary">${cfg.emoji} ${cfg.label}</span></td>
+        <td><span class="bias-badge bias-${trade.isBull ? 'bullish' : 'bearish'}">${trade.isBull ? 'LONG' : 'SHORT'}</span></td>
         <td style="font-family:var(--font-mono)">$${trade.allocated.toFixed(2)}</td>
         <td style="font-family:var(--font-mono)">$${formatPrice(trade.entryPrice)}</td>
         <td style="font-family:var(--font-mono)" class="${pnlClass}">$${formatPrice(trade.currentPrice)}</td>
