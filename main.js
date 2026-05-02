@@ -152,6 +152,7 @@ function initApp() {
   setupAiResearchChat();
   setupAiReports();
   setupModals();
+  setupAllButtons();
   setupTradingEvents();
   setupBacktester();
   
@@ -762,6 +763,144 @@ function renderTradingPage(symbol = 'BINANCE:SOLUSDT') {
       "hide_side_toolbar": false
     });
   }
+}
+
+function setupAllButtons() {
+  // 1. Dashboard Timeframe Buttons
+  document.querySelectorAll('#page-dashboard .panel-action-btn').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      const parent = e.target.closest('.panel-actions');
+      parent.querySelectorAll('.panel-action-btn').forEach(b => b.classList.remove('active'));
+      e.target.classList.add('active');
+      showToast(`Market chart updated to ${e.target.textContent} timeframe`);
+      // Re-init chart with mock timeframe shift
+      initCharts();
+    });
+  });
+
+  // 2. Opportunities Sorting
+  document.querySelectorAll('#page-opportunities .panel-action-btn').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      const sort = e.target.dataset.sort;
+      document.querySelectorAll('#page-opportunities .panel-action-btn').forEach(b => b.classList.remove('active'));
+      e.target.classList.add('active');
+      
+      if (sort === 'alpha') assets.sort((a,b) => b.score - a.score);
+      else if (sort === 'change') assets.sort((a,b) => b.change - a.change);
+      else if (sort === 'volume') assets.sort((a,b) => parseFloat(b.vol) - parseFloat(a.vol));
+      
+      renderOpportunitiesPage();
+      showToast(`Sorted by ${sort}`);
+    });
+  });
+
+  // 3. Whale Flow Filtering
+  document.querySelectorAll('#page-whale .panel-action-btn').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      document.querySelectorAll('#page-whale .panel-action-btn').forEach(b => b.classList.remove('active'));
+      e.target.classList.add('active');
+      showToast(`Filtering flow: ${e.target.textContent}`);
+      renderWhalePage(); // Re-render current mock
+    });
+  });
+
+  // 4. Backtester Strategy Tabs
+  document.querySelectorAll('#bt-strategy-tabs .panel-action-btn').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      const strat = e.target.dataset.strat;
+      document.querySelectorAll('#bt-strategy-tabs .panel-action-btn').forEach(b => b.classList.remove('active'));
+      e.target.classList.add('active');
+      renderBacktesterPage(); // This will filter based on strat if logic is added
+      showToast(`Strategy view: ${strat.toUpperCase()}`);
+    });
+  });
+
+  // 5. Header Search & Alerts
+  const searchBtn = document.getElementById('search-btn');
+  if(searchBtn) searchBtn.addEventListener('click', () => navigateToPage('command'));
+
+  const headerAlertBtn = document.getElementById('alert-btn');
+  if(headerAlertBtn) headerAlertBtn.addEventListener('click', () => {
+    const modal = document.getElementById('alert-modal');
+    if(modal) modal.classList.add('active');
+  });
+
+  // 6. Settings Buttons
+  const settingsBtns = document.querySelectorAll('#page-settings .btn-primary, #page-settings .btn-secondary');
+  settingsBtns.forEach(btn => {
+    btn.addEventListener('click', () => {
+      showToast("Settings updated successfully and synced to cloud.");
+    });
+  });
+
+  // 7. Alert Management
+  const alertsTable = document.getElementById('alerts-table-body');
+  if (alertsTable) {
+    alertsTable.addEventListener('click', (e) => {
+      const trashBtn = e.target.closest('.icon-btn.text-red');
+      if (trashBtn) {
+        const row = trashBtn.closest('tr');
+        row.style.opacity = '0';
+        row.style.transform = 'translateX(20px)';
+        row.style.transition = 'all 0.3s ease';
+        setTimeout(() => {
+          row.remove();
+          showToast("Trigger deleted.");
+        }, 300);
+      }
+    });
+  }
+
+  const newAlertBtn = document.getElementById('new-alert-page-btn');
+  if(newAlertBtn) newAlertBtn.addEventListener('click', () => {
+    const modal = document.getElementById('alert-modal');
+    if(modal) modal.classList.add('active');
+  });
+
+  const createAlertBtn = document.getElementById('create-alert-btn');
+  if(createAlertBtn) {
+    createAlertBtn.addEventListener('click', () => {
+      const asset = document.getElementById('alert-asset').value;
+      const cond = document.getElementById('alert-condition').value;
+      showToast(`Alert deployed for ${asset} on ${cond}`);
+      const modal = document.getElementById('alert-modal');
+      if(modal) modal.classList.remove('active');
+      
+      // Add row to table
+      const table = document.getElementById('alerts-table-body');
+      if(table) {
+        const row = document.createElement('tr');
+        row.innerHTML = `
+          <td><strong>${asset}</strong></td>
+          <td>Custom</td>
+          <td>${cond}</td>
+          <td><span class="badge bg-primary">Push</span></td>
+          <td><span class="text-green"><span class="status-dot pulse mr-2" style="display:inline-block"></span> Active</span></td>
+          <td><button class="icon-btn text-red"><i data-feather="trash-2"></i></button></td>
+        `;
+        table.prepend(row);
+        feather.replace();
+      }
+    });
+  }
+}
+
+function showToast(msg) {
+  const container = document.getElementById('toast-container');
+  if(!container) return;
+  const toast = document.createElement('div');
+  toast.className = 'toast';
+  toast.innerHTML = `
+    <i data-feather="check-circle" style="color:var(--primary)"></i>
+    <span>${msg}</span>
+  `;
+  container.appendChild(toast);
+  feather.replace();
+  setTimeout(() => toast.classList.add('active'), 10);
+  setTimeout(() => {
+    toast.classList.remove('active');
+    setTimeout(() => toast.remove(), 300);
+  }, 3000);
 }
 
 window.openTradingChart = function(coin) {

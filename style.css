@@ -1061,3 +1061,23 @@ body {
     font-size: 3rem;
   }
 }
+
+/* --- Toasts --- */
+.toast-container { position: fixed; bottom: 2rem; right: 2rem; z-index: 9999; display: flex; flex-direction: column; gap: 0.75rem; pointer-events: none; }
+.toast { 
+  background: rgba(13, 17, 23, 0.95); 
+  border: 1px solid rgba(139, 120, 255, 0.3); 
+  padding: 1rem 1.5rem; 
+  border-radius: 12px; 
+  display: flex; 
+  align-items: center; 
+  gap: 0.75rem; 
+  box-shadow: 0 10px 30px rgba(0,0,0,0.5); 
+  transform: translateX(120%); 
+  transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1); 
+  color: #fff;
+  font-weight: 500;
+  pointer-events: auto;
+}
+.toast.active { transform: translateX(0); }
+.toast i { width: 18px; height: 18px; }
