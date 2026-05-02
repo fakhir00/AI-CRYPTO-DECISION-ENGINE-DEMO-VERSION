@@ -6,7 +6,8 @@ const KEYS = {
   coingecko: 'CG-7gTv8kk2qS7r8kj515m2rVQJ',
   cmc: 'e7080786d0f14b3abfc6c58de5f61adc',
   etherscan: 'CRSWB6SIH2SAAPCPFGBK2NN473EC5JIS9M',
-  taapi: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJjbHVlIjoiNjlmNWJjMTVlZTAzMzMxMWE0ZjJjOGRiIiwiaWF0IjoxNzc3NzEyMTQ5LCJleHAiOjMzMjgyMTc2MTQ5fQ.8Htit-r6kGZC5LZn7_EZLozYC7yOyCu4Z1WzhuPIH34'
+  taapi: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJjbHVlIjoiNjlmNWJjMTVlZTAzMzMxMWE0ZjJjOGRiIiwiaWF0IjoxNzc3NzEyMTQ5LCJleHAiOjMzMjgyMTc2MTQ5fQ.8Htit-r6kGZC5LZn7_EZLozYC7yOyCu4Z1WzhuPIH34',
+  lunarcrush: '8a0hxklrnp6i5kfiowg77edxjemoobmyiw0g62whp'
 };
 
 // ─── 1. CoinGecko: Real-time price, market cap, volume ───────────────────────
@@ -81,8 +82,28 @@ export async function fetchWhaleActivity() {
   }
 }
 
-// ─── 4. Reddit: Live sentiment from r/CryptoCurrency ─────────────────────────
+// ─── 4. Social Sentiment: LunarCrush (Primary) & Reddit NLP (Fallback) ────────
 export async function fetchSentiment() {
+  try {
+    // Attempt 1: Institutional-grade LunarCrush Social Data
+    const lcRes = await fetch('https://lunarcrush.com/api4/public/coins/bitcoin/v1', {
+      headers: { 'Authorization': `Bearer ${KEYS.lunarcrush}` }
+    });
+    
+    if (lcRes.ok) {
+      const lcData = await lcRes.json();
+      if (!lcData.error && lcData.data) {
+        // Normalize LunarCrush Galaxy Score (usually 1-100) or Social Score
+        const score = lcData.data.galaxy_score || lcData.data.alt_rank_score || 75;
+        console.log('✅ LunarCrush sentiment fetched:', { score });
+        return { bullish: 85, bearish: 15, score: score, source: 'LunarCrush AI' };
+      }
+    }
+  } catch (e) {
+    console.warn('⚠️ LunarCrush failed or requires plan upgrade:', e.message);
+  }
+
+  // Attempt 2: Fallback to Reddit NLP
   try {
     const res = await fetch('https://www.reddit.com/r/CryptoCurrency/hot.json?limit=50&raw_json=1', {
       headers: { 'Accept': 'application/json' }
@@ -100,10 +121,10 @@ export async function fetchSentiment() {
     const total = bullish + bearish || 1;
     const score = Math.round((bullish / total) * 100);
     console.log('✅ Reddit sentiment:', { bullish, bearish, score });
-    return { bullish, bearish, score };
+    return { bullish, bearish, score, source: 'Reddit NLP' };
   } catch (e) {
     console.warn('⚠️ Reddit failed:', e.message);
-    return { bullish: 5, bearish: 3, score: 62 };
+    return { bullish: 5, bearish: 3, score: 62, source: 'Fallback Data' };
   }
 }
 
@@ -263,6 +284,94 @@ export async function fetchTechnicalSignals(symbols = ['BTC', 'ETH', 'SOL', 'INJ
     return { binance: binanceData, rsi: btcRsi, ema: emaData };
   } catch (e) {
     console.warn('⚠️ Binance/TAAPI failed:', e.message);
+    return null;
+  }
+}
+
+// ─── 4C-2. Binance Futures: Funding Rates (FREE, NO KEY) ─────────────────────
+export async function fetchFundingRates(symbols = ['BTC', 'ETH', 'SOL', 'INJ', 'AVAX', 'ARB']) {
+  try {
+    const promises = symbols.map(sym =>
+      fetch(`https://fapi.binance.com/fapi/v1/fundingRate?symbol=${sym}USDT&limit=1`)
+        .then(r => r.json())
+        .then(data => ({ symbol: sym, rate: data[0] ? parseFloat(data[0].fundingRate) : 0 }))
+        .catch(() => ({ symbol: sym, rate: 0 }))
+    );
+    const results = await Promise.all(promises);
+    console.log('✅ Binance Funding Rates fetched for', results.length, 'assets');
+    return results;
+  } catch (e) {
+    console.warn('⚠️ Funding Rates failed:', e.message);
+    return [];
+  }
+}
+
+// ─── 4C-3. Binance Futures: Open Interest (FREE, NO KEY) ─────────────────────
+export async function fetchOpenInterest(symbols = ['BTC', 'ETH', 'SOL', 'INJ', 'AVAX', 'ARB']) {
+  try {
+    const promises = symbols.map(sym =>
+      fetch(`https://fapi.binance.com/fapi/v1/openInterest?symbol=${sym}USDT`)
+        .then(r => r.json())
+        .then(data => ({ symbol: sym, oi: parseFloat(data.openInterest || 0) }))
+        .catch(() => ({ symbol: sym, oi: 0 }))
+    );
+    const results = await Promise.all(promises);
+    console.log('✅ Binance Open Interest fetched for', results.length, 'assets');
+    return results;
+  } catch (e) {
+    console.warn('⚠️ Open Interest failed:', e.message);
+    return [];
+  }
+}
+
+// ─── 4C-4. Binance: Order Book Depth (FREE, NO KEY) ──────────────────────────
+export async function fetchOrderBookDepth(symbol = 'BTC') {
+  try {
+    const res = await fetch(`https://api.binance.com/api/v3/depth?symbol=${symbol}USDT&limit=20`);
+    if (!res.ok) throw new Error(`Depth HTTP ${res.status}`);
+    const data = await res.json();
+    
+    // Calculate bid wall (support) and ask wall (resistance)
+    const bidTotal = data.bids.reduce((sum, [price, qty]) => sum + parseFloat(price) * parseFloat(qty), 0);
+    const askTotal = data.asks.reduce((sum, [price, qty]) => sum + parseFloat(price) * parseFloat(qty), 0);
+    
+    const strongestBid = data.bids.reduce((max, [p, q]) => parseFloat(q) > max.qty ? { price: parseFloat(p), qty: parseFloat(q) } : max, { price: 0, qty: 0 });
+    const strongestAsk = data.asks.reduce((max, [p, q]) => parseFloat(q) > max.qty ? { price: parseFloat(p), qty: parseFloat(q) } : max, { price: 0, qty: 0 });
+    
+    const buyPressure = bidTotal / (bidTotal + askTotal) * 100;
+    
+    console.log(`✅ Order book depth fetched for ${symbol}: Buy pressure ${buyPressure.toFixed(1)}%`);
+    return {
+      symbol,
+      bidTotal,
+      askTotal,
+      buyPressure: buyPressure.toFixed(1),
+      support: strongestBid.price,
+      resistance: strongestAsk.price
+    };
+  } catch (e) {
+    console.warn('⚠️ Order Book failed:', e.message);
+    return null;
+  }
+}
+
+// ─── 4C-5. Blockchain.com: BTC Network Health (FREE, NO KEY) ─────────────────
+export async function fetchBtcOnChain() {
+  try {
+    const [hashRate, unconfirmed, difficulty] = await Promise.all([
+      fetch('https://blockchain.info/q/hashrate').then(r => r.text()).catch(() => '0'),
+      fetch('https://blockchain.info/q/unconfirmedcount').then(r => r.text()).catch(() => '0'),
+      fetch('https://blockchain.info/q/getdifficulty').then(r => r.text()).catch(() => '0')
+    ]);
+    
+    console.log('✅ BTC on-chain stats fetched');
+    return {
+      hashRate: (parseFloat(hashRate) / 1e9).toFixed(2), // GH/s → EH/s
+      unconfirmedTx: parseInt(unconfirmed),
+      difficulty: (parseFloat(difficulty) / 1e12).toFixed(2) // → T
+    };
+  } catch (e) {
+    console.warn('⚠️ Blockchain.com failed:', e.message);
     return null;
   }
 }

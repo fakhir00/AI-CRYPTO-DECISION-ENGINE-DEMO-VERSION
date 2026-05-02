@@ -1,5 +1,5 @@
 import './style.css';
-import { fetchMarketData, fetchGlobalMarketData, fetchWhaleActivity, fetchSentiment, fetchFearAndGreed, fetchAIAnalysis, fetchHermesAnalysis, fetchDualAI, calculateAlphaScore, fetchDefiPools, fetchNews, fetchTechnicalSignals, fetchNarratives, fetchChartData } from './api.js';
+import { fetchMarketData, fetchGlobalMarketData, fetchWhaleActivity, fetchSentiment, fetchFearAndGreed, fetchAIAnalysis, fetchHermesAnalysis, fetchDualAI, calculateAlphaScore, fetchDefiPools, fetchNews, fetchTechnicalSignals, fetchNarratives, fetchChartData, fetchFundingRates, fetchOpenInterest, fetchOrderBookDepth, fetchBtcOnChain } from './api.js';
 
 
 // --- Navigation & Setup ---
@@ -96,6 +96,10 @@ let LIVE_CATALYSTS = [
   { date: "May 23", title: "SEC Decision on ETH Spot ETF", type: "primary" },
   { date: "May 25", title: "Nvidia Earnings (AI Narrative Catalyst)", type: "info" }
 ];
+let LIVE_FUNDING = [];   // Binance funding rates
+let LIVE_OI = [];        // Binance open interest
+let LIVE_DEPTH = null;   // BTC order book depth
+let LIVE_BTC_CHAIN = null; // BTC on-chain health
 
 // Chart Instances
 let mainMarketChart;
@@ -307,7 +311,7 @@ async function syncLiveApis() {
   if(statusEl) statusEl.textContent = "Syncing Live APIs...";
   
   try {
-    const [marketData, sentiment, whales, defiData, newsData, techSignals, narrativesData, chartPrices, fngData] = await Promise.all([
+    const [marketData, sentiment, whales, defiData, newsData, techSignals, narrativesData, chartPrices, fngData, fundingData, oiData, depthData, btcChainData] = await Promise.all([
       fetchMarketData(),
       fetchSentiment(),
       fetchWhaleActivity(),
@@ -316,8 +320,21 @@ async function syncLiveApis() {
       fetchTechnicalSignals(),
       fetchNarratives(),
       fetchChartData('BTC'),
-      fetchFearAndGreed()
+      fetchFearAndGreed(),
+      fetchFundingRates(),
+      fetchOpenInterest(),
+      fetchOrderBookDepth('BTC'),
+      fetchBtcOnChain()
     ]);
+
+    // Store derivatives data globally
+    if (fundingData && fundingData.length > 0) LIVE_FUNDING = fundingData;
+    if (oiData && oiData.length > 0) LIVE_OI = oiData;
+    if (depthData) LIVE_DEPTH = depthData;
+    if (btcChainData) LIVE_BTC_CHAIN = btcChainData;
+    window._liveFundingData = LIVE_FUNDING;
+    window._liveOiData = LIVE_OI;
+    window._liveDepthData = LIVE_DEPTH;
 
     // Update Narratives if real data fetched
     if (narrativesData && narrativesData.length > 0) {
@@ -462,6 +479,19 @@ async function syncLiveApis() {
               confluence += 1;
             } else if (posInRange < 0.15 && change < 0) {
               if (pattern === 'Neutral / Range') pattern = 'Double Bottom Test';
+              confluence += 1;
+            }
+          }
+          
+          // 5. Funding Rate analysis (contrarian signal)
+          const fundingInfo = LIVE_FUNDING.find(f => f.symbol === sym);
+          if (fundingInfo) {
+            const rate = fundingInfo.rate;
+            if (rate > 0.001) { // Overleveraged longs → bearish warning
+              if (pattern === 'Neutral / Range') pattern = 'Funding Overheated (Longs)';
+              confluence += 1;
+            } else if (rate < -0.001) { // Overleveraged shorts → bullish warning
+              if (pattern === 'Neutral / Range') pattern = 'Funding Negative (Shorts Squeezable)';
               confluence += 1;
             }
           }
@@ -662,7 +692,7 @@ function renderDashboard() {
         <i data-feather="activity" class="card-icon ${sentClass}"></i>
       </div>
       <div class="card-value ${sentClass}">${sentLabel}</div>
-      <div class="card-change text-muted">Reddit NLP: ${LIVE_SENTIMENT.score}/100</div>
+      <div class="card-change text-muted">${LIVE_SENTIMENT.source || 'Reddit NLP'}: ${LIVE_SENTIMENT.score}/100</div>
     </div>
   `;
   if (typeof feather !== 'undefined') feather.replace();
@@ -725,6 +755,56 @@ function renderDashboard() {
         </div>
       </div>
     `).join('');
+    
+    // Add derivatives intelligence to Alpha feed
+    if (LIVE_FUNDING.length > 0) {
+      const extremeFunding = LIVE_FUNDING.filter(f => Math.abs(f.rate) > 0.0005);
+      extremeFunding.forEach(f => {
+        const direction = f.rate > 0 ? 'Longs Overleveraged' : 'Shorts Squeezable';
+        const impact = Math.abs(f.rate) > 0.001 ? 'high' : 'medium';
+        dashAlpha.innerHTML += `
+          <div class="feed-item news-impact">
+            <div class="feed-header">
+              <span class="feed-time">Live Derivatives</span>
+              <span class="feed-tag" style="background: rgba(255,183,77,0.2); color: var(--warning);">FUNDING</span>
+            </div>
+            <div class="feed-content">
+              <strong>${f.symbol}</strong> funding rate: ${(f.rate * 100).toFixed(4)}% — ${direction}
+            </div>
+          </div>
+        `;
+      });
+    }
+    
+    // Add BTC on-chain health
+    if (LIVE_BTC_CHAIN) {
+      dashAlpha.innerHTML += `
+        <div class="feed-item news-impact">
+          <div class="feed-header">
+            <span class="feed-time">On-Chain</span>
+            <span class="feed-tag" style="background: rgba(0,230,118,0.2); color: var(--green);">BTC HEALTH</span>
+          </div>
+          <div class="feed-content">
+            Hash Rate: <strong>${LIVE_BTC_CHAIN.hashRate} EH/s</strong> | Mempool: <strong>${LIVE_BTC_CHAIN.unconfirmedTx.toLocaleString()}</strong> unconfirmed txs
+          </div>
+        </div>
+      `;
+    }
+    
+    // Add Order Book depth
+    if (LIVE_DEPTH) {
+      dashAlpha.innerHTML += `
+        <div class="feed-item news-impact">
+          <div class="feed-header">
+            <span class="feed-time">Order Book</span>
+            <span class="feed-tag" style="background: rgba(108,92,231,0.2); color: var(--primary);">BTC DEPTH</span>
+          </div>
+          <div class="feed-content">
+            Buy Pressure: <strong class="${parseFloat(LIVE_DEPTH.buyPressure) > 50 ? 'text-green' : 'text-red'}">${LIVE_DEPTH.buyPressure}%</strong> | Support Wall: <strong>$${formatPrice(LIVE_DEPTH.support)}</strong> | Resistance: <strong>$${formatPrice(LIVE_DEPTH.resistance)}</strong>
+          </div>
+        </div>
+      `;
+    }
   }
 }
 
