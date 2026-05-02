@@ -286,6 +286,7 @@ async function syncLiveApis() {
         val: Math.min(100, Math.max(10, c.change * 5))
       }));
       renderNarrativeMomentum();
+      renderSentimentPage(); // Update the dedicated sentiment page
     }
 
     // Update Whale & Smart Money Flows
@@ -318,6 +319,7 @@ async function syncLiveApis() {
         }
       });
       renderSmartMoneyFlow();
+      renderWhalePage(); // Update the dedicated whale page
       
       ALPHA_SIGNALS.push({ time: "Live Alert", text: "Heavy on-chain stablecoin rotation detected across smart money addresses.", impact: "high" });
       ALPHA_SIGNALS.push({ time: "Live Alert", text: `Top whale executed a massive ${whales[0].token || 'USDC'} transaction worth $${whales[0].value.toFixed(1)}M.`, impact: "high" });
