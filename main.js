@@ -569,44 +569,49 @@ async function syncLiveApis() {
       renderSentimentPage(); // refresh meter
     }
 
-    if (marketData && marketData.length > 0) {
+    // ═══ SINGLE SOURCE OF TRUTH ═══
+    // Fetch pre-computed, server-cached market data from /api/market
+    // This endpoint returns identical data to every device worldwide.
+    let serverAssets = null;
+    try {
+      const serverRes = await fetch('/api/market');
+      if (serverRes.ok) {
+        const serverData = await serverRes.json();
+        if (serverData.data && serverData.data.length > 0) {
+          serverAssets = serverData.data;
+          console.log(`✅ Server market data loaded (source: ${serverData.source}, age: ${serverData.age}s)`);
+        }
+      }
+    } catch(e) {
+      console.warn('⚠️ Server /api/market unavailable, falling back to client-side:', e.message);
+    }
+
+    if (serverAssets) {
+      // Use server-computed assets directly (guaranteed cross-device consistency)
+      assets = serverAssets;
+    } else if (marketData && marketData.length > 0) {
+      // Fallback: compute client-side (only if server endpoint is down)
       assets = marketData.map(coin => {
          const symbol = coin.symbol.toUpperCase();
-         
-         // ═══ DETERMINISTIC ALPHA SCORE ═══
-         // Uses ONLY CoinGecko data so every device produces identical rankings.
-         // Volatile APIs (whales, sentiment, EMA) feed their own UI pages but do NOT affect this score.
-         
          const change24h = coin.price_change_percentage_24h || 0;
          const volRatio = coin.market_cap > 0 ? (coin.total_volume / coin.market_cap) : 0;
          const mcapRank = coin.market_cap_rank || 50;
-         
-         // Component 1: Momentum (0-35 pts) — strong positive change = high score
          const momentumRaw = Math.min(35, Math.max(0, 17.5 + (change24h * 2.5)));
-         
-         // Component 2: Volume Conviction (0-25 pts) — high vol/mcap ratio = institutional interest
          const volConviction = Math.min(25, volRatio * 250);
-         
-         // Component 3: Market Cap Tier (0-20 pts) — top-ranked coins get higher base score
          const mcapTier = Math.min(20, Math.max(5, 20 - (mcapRank * 0.3)));
-         
-         // Component 4: Price Stability (0-20 pts) — moderate moves score higher than extremes
          const absChange = Math.abs(change24h);
          const stability = absChange < 1 ? 10 : (absChange < 5 ? 18 : (absChange < 10 ? 15 : 8));
-         
          const alpha = Math.round(Math.min(100, Math.max(0, momentumRaw + volConviction + mcapTier + stability)));
          
          return {
-           symbol: symbol,
-           name: coin.name,
-           price: coin.current_price,
-           change: change24h,
-           score: alpha,
-           bias: alpha > 75 ? 'bullish' : (alpha < 50 ? 'bearish' : 'neutral'),
-           confidence: Math.min(99, alpha),
-           vol: '$' + (coin.total_volume / 1e9).toFixed(1) + 'B'
+           symbol, name: coin.name, price: coin.current_price, change: change24h,
+           score: alpha, bias: alpha > 75 ? 'bullish' : (alpha < 50 ? 'bearish' : 'neutral'),
+           confidence: Math.min(99, alpha), vol: '$' + (coin.total_volume / 1e9).toFixed(1) + 'B'
          };
       });
+    }
+
+    if (assets.length > 0) {
       
       renderDashboard();
       renderOpportunitiesPage();
