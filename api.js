@@ -208,7 +208,7 @@ export async function fetchNews() {
 }
 
 // ─── 4C. Binance & TAAPI: Technical Signals ──────────────────────────────────
-export async function fetchTechnicalSignals(symbols = ['BTC', 'ETH', 'SOL']) {
+export async function fetchTechnicalSignals(symbols = ['BTC', 'ETH', 'SOL', 'INJ', 'AVAX', 'ARB', 'ONDO']) {
   try {
     // 1. Fetch 24h ticker data from Binance for volume/price action
     const binancePromises = symbols.map(sym => 

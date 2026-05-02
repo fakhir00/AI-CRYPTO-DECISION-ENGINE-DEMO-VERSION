@@ -570,46 +570,53 @@ function updateTime() {
 // --- Page Renders ---
 
 function renderDashboard() {
-  // Top Summaries
+  // Compute live summary values from assets
+  const topAsset = [...assets].sort((a, b) => (b.score - a.score) || a.symbol.localeCompare(b.symbol))[0];
+  const totalVol = assets.reduce((sum, a) => sum + parseFloat(a.vol.replace('$','').replace('B','')) , 0);
+  const avgChange = assets.length ? (assets.reduce((s, a) => s + a.change, 0) / assets.length) : 0;
+  const sentLabel = LIVE_SENTIMENT.score > 60 ? 'Bullish' : (LIVE_SENTIMENT.score < 40 ? 'Bearish' : 'Neutral');
+  const sentClass = LIVE_SENTIMENT.score > 60 ? 'text-green' : (LIVE_SENTIMENT.score < 40 ? 'text-red' : 'text-warning');
+
   document.getElementById('dashboard-summary').innerHTML = `
     <div class="summary-card">
       <div class="card-header">
-        <span class="card-title">Total Market Cap</span>
+        <span class="card-title">Total 24H Volume</span>
         <i data-feather="bar-chart-2" class="card-icon text-primary"></i>
       </div>
-      <div class="card-value">$2.87T</div>
-      <div class="card-change text-green">▲ 2.33%</div>
+      <div class="card-value">$${totalVol.toFixed(1)}B</div>
+      <div class="card-change ${avgChange >= 0 ? 'text-green' : 'text-red'}">${avgChange >= 0 ? '▲' : '▼'} ${Math.abs(avgChange).toFixed(2)}% avg</div>
     </div>
     <div class="summary-card">
       <div class="card-header">
-        <span class="card-title">BTC Dominance</span>
+        <span class="card-title">Fear & Greed</span>
         <i data-feather="pie-chart" class="card-icon text-warning"></i>
       </div>
-      <div class="card-value">54.2%</div>
-      <div class="card-change text-muted">- 0.1%</div>
+      <div class="card-value">${LIVE_FNG.value}</div>
+      <div class="card-change ${LIVE_FNG.value > 50 ? 'text-green' : 'text-red'}">${LIVE_FNG.label}</div>
     </div>
     <div class="summary-card">
       <div class="card-header">
         <span class="card-title">Alpha Target</span>
         <i data-feather="target" class="card-icon text-primary"></i>
       </div>
-      <div class="card-value text-primary">SOL</div>
-      <div class="card-change">Score: 89 • High Conviction</div>
+      <div class="card-value text-primary">${topAsset ? topAsset.symbol : '—'}</div>
+      <div class="card-change">Score: ${topAsset ? topAsset.score : '—'} • ${topAsset && topAsset.score > 75 ? 'High Conviction' : 'Moderate'}</div>
     </div>
     <div class="summary-card">
       <div class="card-header">
         <span class="card-title">Macro Sentiment</span>
-        <i data-feather="activity" class="card-icon text-green"></i>
+        <i data-feather="activity" class="card-icon ${sentClass}"></i>
       </div>
-      <div class="card-value text-green">Bullish</div>
-      <div class="card-change text-muted">Upward Trend Detected</div>
+      <div class="card-value ${sentClass}">${sentLabel}</div>
+      <div class="card-change text-muted">Reddit NLP: ${LIVE_SENTIMENT.score}/100</div>
     </div>
   `;
   if (typeof feather !== 'undefined') feather.replace();
 
-  // Dash Opportunities Mini
+  // Dash Opportunities Mini — deterministic sort
   const dashOpps = document.getElementById('dash-opportunities-list');
-  dashOpps.innerHTML = assets.slice(0, 5).map(asset => `
+  const sortedForDash = [...assets].sort((a, b) => (b.score - a.score) || a.symbol.localeCompare(b.symbol));
+  dashOpps.innerHTML = sortedForDash.slice(0, 5).map(asset => `
     <div class="asset-row">
       <div class="asset-info">
         <div class="asset-icon">${asset.symbol[0]}</div>
@@ -624,13 +631,16 @@ function renderDashboard() {
     </div>
   `).join('');
 
-  // AI Mini with typing effect
+  // AI Mini with typing effect — uses live top asset
   const aiContent = document.getElementById('dash-ai-research-content');
   aiContent.innerHTML = '';
+  const topSym = topAsset ? topAsset.symbol : 'BTC';
+  const topName = topAsset ? topAsset.name : 'Bitcoin';
+  const topBias = topAsset ? topAsset.bias : 'neutral';
   typeWriterEffect(aiContent, [
-     "> Executive Summary: SOL",
-     "> SOL shows strong bullish momentum backed by whale accumulation, positive sentiment and a technical breakout.",
-     "> Thesis: SOL has broken above key resistance with increasing volume. On-chain data shows accumulation by smart money wallets and positive narrative across Solana ecosystem..."
+     `> Executive Summary: ${topSym}`,
+     `> ${topName} shows ${topBias} momentum. Alpha Score: ${topAsset ? topAsset.score : '—'}/100. 24H Change: ${topAsset ? topAsset.change.toFixed(2) : 0}%.`,
+     `> Thesis: ${topName} is the highest-conviction play based on our multi-factor scoring engine. On-chain and sentiment data align with ${topBias} positioning.`
   ]);
 
   // Whale Mini
@@ -1002,18 +1012,24 @@ function setupTradingEvents() {
 }
 
 function renderWhalePage() {
+  const buys = WHALE_ACTIONS.filter(w => w.type === 'buy').length;
+  const sells = WHALE_ACTIONS.filter(w => w.type === 'sell').length;
+  const trend = buys >= sells ? 'Accumulation' : 'Distribution';
+  const trendClass = buys >= sells ? 'text-green' : 'text-red';
+  const peakTx = WHALE_ACTIONS.length > 0 ? WHALE_ACTIONS[0].amount : '—';
+
   document.getElementById('whale-summary').innerHTML = `
     <div class="summary-card">
-      <div class="card-header"><span class="card-title">24h Net Flow</span></div>
-      <div class="card-value text-green">+$452.8M</div>
+      <div class="card-header"><span class="card-title">Tracked Whale Txs</span></div>
+      <div class="card-value text-primary">${WHALE_ACTIONS.length}</div>
     </div>
     <div class="summary-card">
       <div class="card-header"><span class="card-title">Dominant Trend</span></div>
-      <div class="card-value text-primary">Accumulation</div>
+      <div class="card-value ${trendClass}">${trend}</div>
     </div>
     <div class="summary-card">
-      <div class="card-header"><span class="card-title">Peak Transaction</span></div>
-      <div class="card-value">12k ETH</div>
+      <div class="card-header"><span class="card-title">Top Asset</span></div>
+      <div class="card-value">${peakTx}</div>
     </div>
   `;
 
