@@ -1721,8 +1721,8 @@ function renderProSignals() {
     const dirLabel = sig.isBull ? 'LONG' : 'SHORT';
     const dirClass = sig.isBull ? 'text-green' : 'text-red';
     
-    // SaaS Freemium Logic: Lock signals after the 2nd one
-    const isLocked = index >= 2;
+    // SaaS Freemium Logic: Lock signals after the 2nd one (Unlocked per user request)
+    const isLocked = false;
     const lockedOverlay = isLocked ? `
       <div style="position:absolute;top:0;left:0;width:100%;height:100%;display:flex;align-items:center;justify-content:center;z-index:10;background:rgba(10,12,16,0.65);border-radius:8px;">
         <span style="background:var(--primary);color:#fff;padding:0.5rem 1.2rem;border-radius:6px;font-size:0.85rem;font-weight:bold;cursor:pointer;box-shadow:0 4px 15px rgba(108,92,231,0.4);">🔒 UPGRADE TO PRO TO UNLOCK</span>
