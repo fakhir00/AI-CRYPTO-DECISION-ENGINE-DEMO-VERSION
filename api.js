@@ -255,18 +255,17 @@ export async function fetchNarratives() {
 }
 
 // ─── 4E. Binance Klines: Real Chart Data ─────────────────────────────────────
-export async function fetchChartData(symbol = 'BTC') {
+export async function fetchChartData(symbol = 'BTC', interval = '1h', limit = 48) {
   try {
-    // Fetch 1h candles, last 50 hours
-    const res = await fetch(`https://api.binance.com/api/v3/klines?symbol=${symbol}USDT&interval=1h&limit=50`);
+    const res = await fetch(`https://api.binance.com/api/v3/klines?symbol=${symbol.replace('USDT','') }USDT&interval=${interval}&limit=${limit}`);
     if (!res.ok) throw new Error(`Binance Klines HTTP ${res.status}`);
     const data = await res.json();
-    // Binance returns an array of arrays. Index 4 is the closing price.
+    // Binance returns [OpenTime, Open, High, Low, Close, Volume, ...]
     const closePrices = data.map(candle => parseFloat(candle[4]));
-    console.log(`✅ Chart data fetched for ${symbol}`);
+    console.log(`✅ ${interval} Chart data fetched for ${symbol}`);
     return closePrices;
   } catch (e) {
-    console.warn('⚠️ Chart data fetch failed:', e.message);
+    console.warn(`⚠️ Chart data fetch failed for ${symbol}:`, e.message);
     return null;
   }
 }

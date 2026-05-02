@@ -91,6 +91,11 @@ const SMART_MONEY_FLOWS = [
 let assets = [...ASSETS];
 let LIVE_SENTIMENT = { bullish: 50, bearish: 50, score: 50 };
 let LIVE_FNG = { value: 72, label: 'Greed' };
+let LIVE_CATALYSTS = [
+  { date: "May 21", title: "SUI Massive Token Unlock ($1.2B)", type: "warning" },
+  { date: "May 23", title: "SEC Decision on ETH Spot ETF", type: "primary" },
+  { date: "May 25", title: "Nvidia Earnings (AI Narrative Catalyst)", type: "info" }
+];
 
 // Chart Instances
 let mainMarketChart;
@@ -162,57 +167,51 @@ function initApp() {
   // Real live data polling (every 60 seconds to respect CoinGecko limits)
   setInterval(syncLiveApis, 60000);
   
-  // UI Visual Heartbeat (flashes text and updates fake chart lines, but DOES NOT alter real prices)
+  // UI Visual Heartbeat (flashes text)
   setInterval(simulateMarketTick, 3000);
 }
 
 // --- Charts Setup (Chart.js) ---
-function initCharts(timeframe = '24H') {
-  // Chart defaults for dark mode
+async function initCharts(timeframe = '24H') {
   Chart.defaults.color = '#94A3B8';
   Chart.defaults.font.family = "'JetBrains Mono', monospace";
   Chart.defaults.scale.grid.color = 'rgba(255, 255, 255, 0.05)';
   
-  // Destroy existing charts if they exist
   if (mainMarketChart) mainMarketChart.destroy();
   if (socialChart) socialChart.destroy();
 
-  // Main Market Trend Chart (Dashboard)
   const ctxMain = document.getElementById('mainMarketChart').getContext('2d');
-  
-  // Create gradient
   const gradient = ctxMain.createLinearGradient(0, 0, 0, 250);
   gradient.addColorStop(0, 'rgba(108, 92, 231, 0.5)');
   gradient.addColorStop(1, 'rgba(108, 92, 231, 0.0)');
 
-  // Adjust data points and labels based on timeframe
-  let dataPoints = [];
+  let interval = '1h';
+  let limit = 48;
   let labels = [];
-  let currentVal = 2.87; // Baseline Market Cap
-  let count = 48;
-  
+
   if (timeframe === '1H') {
-    count = 60;
-    labels = Array.from({length: count}, (_, i) => `${count - i}m ago`);
+    interval = '1m';
+    limit = 60;
+    labels = Array.from({length: limit}, (_, i) => `${limit - i}m ago`);
   } else if (timeframe === '24H') {
-    count = 48;
-    labels = Array.from({length: count}, (_, i) => `${Math.floor((count - i)/2)}h ago`);
+    interval = '1h';
+    limit = 48;
+    labels = Array.from({length: limit}, (_, i) => `${Math.floor((limit - i)/2)}h ago`);
   } else if (timeframe === '7D') {
-    count = 84;
-    labels = Array.from({length: count}, (_, i) => `${Math.floor((count - i)/12)}d ago`);
+    interval = '4h';
+    limit = 42;
+    labels = Array.from({length: limit}, (_, i) => `${Math.floor((limit - i)/6)}d ago`);
   }
 
-  for(let i=0; i<count; i++) {
-    currentVal += (Math.random() - 0.48) * 0.03; 
-    dataPoints.push(currentVal);
-  }
+  // Use BTC as the "Market Sentiment Proxy" for the dashboard trendline
+  const dataPoints = await fetchChartData('BTC', interval, limit) || Array(limit).fill(64000);
 
   mainMarketChart = new Chart(ctxMain, {
     type: 'line',
     data: {
       labels: labels,
       datasets: [{
-        label: 'Total Market Cap (T)',
+        label: 'Market Trend (Proxy: BTC)',
         data: dataPoints,
         borderColor: '#6C5CE7',
         backgroundColor: gradient,
@@ -231,7 +230,7 @@ function initCharts(timeframe = '24H') {
         x: { display: false },
         y: { 
           position: 'right',
-          ticks: { callback: (value) => '$' + value.toFixed(2) + 'T' }
+          ticks: { callback: (value) => '$' + value.toLocaleString() }
         }
       },
       interaction: { intersect: false, mode: 'index' }
@@ -244,12 +243,7 @@ function initCharts(timeframe = '24H') {
   gradientSocial.addColorStop(0, 'rgba(0, 230, 118, 0.3)');
   gradientSocial.addColorStop(1, 'rgba(0, 230, 118, 0.0)');
 
-  let socialData = [];
-  let sVal = 50;
-  for(let i=0; i<24; i++) {
-     sVal += (Math.random() - 0.4) * 10;
-     socialData.push(sVal);
-  }
+  const socialData = Array.from({length: 24}, () => LIVE_SENTIMENT.score);
 
   socialChart = new Chart(ctxSocial, {
     type: 'line',
@@ -270,22 +264,42 @@ function initCharts(timeframe = '24H') {
       responsive: true,
       maintainAspectRatio: false,
       plugins: { legend: { display: false } },
-      scales: { x: { display: false }, y: { display: false } }
+      scales: { x: { display: false }, y: { display: true, min: 0, max: 100 } }
     }
   });
 }
 
-function updateChartData() {
-   // Push a new random point to main chart
-   if(mainMarketChart) {
-      const currentData = mainMarketChart.data.datasets[0].data;
-      const lastVal = currentData[currentData.length - 1];
-      const newVal = lastVal + (Math.random() - 0.48) * 0.02;
-      
-      currentData.shift();
-      currentData.push(newVal);
-      mainMarketChart.update('none'); // Update without animation for smooth tick
+function simulateMarketTick() {
+   // Synchronize UI Chart with the latest live price from the global state
+   if(mainMarketChart && assets.length > 0) {
+      const btc = assets.find(a => a.symbol === 'BTC');
+      if (btc) {
+        const currentData = mainMarketChart.data.datasets[0].data;
+        currentData.shift();
+        currentData.push(btc.price);
+        mainMarketChart.update('none'); 
+      }
    }
+   
+   // Update UI Elements softly
+  document.querySelectorAll('.live-price').forEach(el => {
+     const symbol = el.dataset.symbol;
+     const asset = assets.find(a => a.symbol === symbol);
+     if(asset) {
+        el.style.color = '#fff';
+        el.textContent = `$${formatPrice(asset.price)}`;
+        setTimeout(() => el.style.color = '', 300);
+     }
+  });
+
+  document.querySelectorAll('.live-change').forEach(el => {
+     const symbol = el.dataset.symbol;
+     const asset = assets.find(a => a.symbol === symbol);
+     if(asset) {
+        el.textContent = `${asset.change > 0 ? '+' : ''}${asset.change.toFixed(2)}%`;
+        el.className = `live-change ${asset.change >= 0 ? 'text-green' : 'text-red'}`;
+     }
+  });
 }
 
 async function syncLiveApis() {
@@ -323,7 +337,6 @@ async function syncLiveApis() {
       
       whales.slice(0, 6).forEach((w, i) => {
         const type = i % 2 === 0 ? 'buy' : 'sell';
-        const isSmart = w.value > 5; // >$5M is very smart money
         const formattedVal = '$' + w.value.toFixed(1) + 'M';
         
         WHALE_ACTIONS.push({
@@ -351,18 +364,6 @@ async function syncLiveApis() {
       ALPHA_SIGNALS.push({ time: "Live Alert", text: "Institutional flow algorithms detect accumulation in top 10 assets.", impact: "medium" });
     }
 
-    // Update Chart with Real Binance Klines
-    if (chartPrices && chartPrices.length > 0 && mainMarketChart) {
-      mainMarketChart.data.datasets[0].data = chartPrices;
-      // Also calculate min/max to fix the Y axis scaling for the real price
-      const minP = Math.min(...chartPrices);
-      const maxP = Math.max(...chartPrices);
-      mainMarketChart.options.scales.y.min = minP * 0.99;
-      mainMarketChart.options.scales.y.max = maxP * 1.01;
-      mainMarketChart.options.scales.y.ticks.callback = (val) => '$' + val.toLocaleString();
-      mainMarketChart.update();
-    }
-
     // Update DEFI_POOLS if real data fetched
     if (defiData && defiData.length > 0) {
       DEFI_POOLS.length = 0; // clear array
@@ -380,12 +381,34 @@ async function syncLiveApis() {
     // Update NEWS if real data fetched
     if (newsData && newsData.length > 0) {
       NEWS.length = 0;
-      newsData.forEach(n => NEWS.push({
-        time: "Just now",
-        title: n.title,
-        asset: "Global",
-        impact: n.title.length > 60 ? "High" : "Medium"
-      }));
+      const catalysts = [];
+      
+      newsData.forEach(n => {
+        const title = n.title;
+        NEWS.push({
+          time: "Just now",
+          title: title,
+          asset: "Global",
+          impact: title.length > 60 ? "High" : "Medium"
+        });
+
+        // Dynamic Catalyst Extraction
+        if (catalysts.length < 5) {
+          const lowerTitle = title.toLowerCase();
+          if (lowerTitle.includes('unlock') || lowerTitle.includes('sec') || lowerTitle.includes('etf') || 
+              lowerTitle.includes('launch') || lowerTitle.includes('mainnet') || lowerTitle.includes('halving') ||
+              lowerTitle.includes('fed') || lowerTitle.includes('cpi') || lowerTitle.includes('interest')) {
+            
+            catalysts.push({
+              date: "Upcoming",
+              title: title.length > 40 ? title.substring(0, 40) + '...' : title,
+              type: lowerTitle.includes('unlock') || lowerTitle.includes('cpi') ? 'warning' : 'primary'
+            });
+          }
+        }
+      });
+      
+      if (catalysts.length > 0) LIVE_CATALYSTS = catalysts;
       renderNewsPage();
     }
 
@@ -395,17 +418,24 @@ async function syncLiveApis() {
       techSignals.binance.forEach(b => {
         if(b) {
           const change = parseFloat(b.priceChangePercent);
+          
+          let pattern = 'Neutral / Range';
+          if (change > 7) pattern = 'Impulsive Breakout';
+          else if (change > 3) pattern = 'Bullish Momentum';
+          else if (change < -7) pattern = 'Bearish Breakdown';
+          else if (change < -3) pattern = 'Selling Pressure';
+
           SIGNALS.push({
             coin: b.symbol.replace('USDT', ''),
-            signal: change > 5 ? 'Breakout' : (change < -5 ? 'Dump' : 'Consolidating'),
+            signal: pattern,
             tf: '24H',
-            strength: Math.abs(change) > 10 ? 'Strong' : 'Medium',
-            conf: Math.min(99, 50 + Math.abs(change) * 2).toFixed(0) + '%'
+            strength: Math.abs(change) > 8 ? 'Strong' : 'Medium',
+            conf: Math.min(99, 60 + Math.abs(change) * 1.5).toFixed(0) + '%'
           });
         }
       });
       if (techSignals.rsi) {
-        SIGNALS[0].signal = `RSI ${techSignals.rsi.toFixed(1)}`;
+        SIGNALS[0].signal = `RSI Reversal (${techSignals.rsi.toFixed(1)})`;
       }
       renderTechnicalPage();
     }
@@ -414,7 +444,6 @@ async function syncLiveApis() {
     if (sentiment) {
       LIVE_SENTIMENT = sentiment;
       if (socialChart) {
-        // Shift social chart data and add the new score as the latest data point
         const dataArr = socialChart.data.datasets[0].data;
         dataArr.shift();
         dataArr.push(sentiment.score);
@@ -431,7 +460,7 @@ async function syncLiveApis() {
     if (marketData && marketData.length > 0) {
       assets = marketData.map(coin => {
          const symbol = coin.symbol.toUpperCase();
-         const hasWhale = whales.some(w => w.value > 1); // Mock whale presence
+         const hasWhale = whales.some(w => w.value > 1); 
          const techScore = coin.price_change_percentage_24h > 0 ? 1 : 0.5;
          const newsScore = sentiment.score > 50 ? 1 : 0.5;
          const volScore = coin.total_volume > 100000000 ? 1 : 0.5;
@@ -445,7 +474,7 @@ async function syncLiveApis() {
            change: coin.price_change_percentage_24h || 0,
            score: alpha,
            bias: alpha > 75 ? 'bullish' : (alpha < 50 ? 'bearish' : 'neutral'),
-           confidence: Math.min(99, alpha + Math.floor(Math.random()*10)),
+           confidence: Math.min(99, alpha),
            vol: '$' + (coin.total_volume / 1e9).toFixed(1) + 'B'
          };
       });
@@ -989,38 +1018,47 @@ function renderWhalePage() {
   `;
 
   const tbody = document.getElementById('whale-table-body');
-  tbody.innerHTML = WHALE_ACTIONS.map(w => `
+  tbody.innerHTML = WHALE_ACTIONS.map((w, i) => `
     <tr>
       <td class="text-muted" style="font-family: var(--font-mono)">${w.time}</td>
       <td><strong>${w.amount}</strong></td>
       <td><span class="bias-badge bias-${w.type === 'buy' ? 'bullish' : 'bearish'}">${w.type === 'buy' ? 'Accumulation' : 'Distribution'}</span></td>
-      <td style="font-family: var(--font-mono)">${Math.floor(Math.random() * 500) + 10}k ${w.amount}</td>
-      <td style="font-family: var(--font-mono)">$${(Math.random() * 10 + 1).toFixed(1)}M</td>
+      <td style="font-family: var(--font-mono)">${(i + 1) * 25}k ${w.amount}</td>
+      <td style="font-family: var(--font-mono)">$${((i + 1) * 1.5).toFixed(1)}M</td>
       <td class="text-muted">${w.type === 'buy' ? w.exchange + ' -> Cold Storage' : 'Wallet -> ' + w.exchange}</td>
     </tr>
   `).join('');
 }
 
 function renderNewsPage() {
-  document.getElementById('news-full-list').innerHTML = NEWS.map(n => `
-    <div class="feed-item news-impact">
-      <div class="feed-header">
-        <span class="feed-time">${n.time}</span>
-        <span class="feed-tag">Impact: ${n.impact}</span>
+  const newsContainer = document.getElementById('news-full-list');
+  if (newsContainer) {
+    newsContainer.innerHTML = NEWS.map(n => `
+      <div class="feed-item news-impact">
+        <div class="feed-header">
+          <span class="feed-time">${n.time}</span>
+          <span class="feed-tag">Impact: ${n.impact}</span>
+        </div>
+        <div class="feed-content">
+          <strong class="text-primary">${n.asset}</strong>: ${n.title}
+        </div>
       </div>
-      <div class="feed-content">
-        <strong class="text-primary">${n.asset}</strong>: ${n.title}
-      </div>
-    </div>
-  `).join('');
+    `).join('');
+  }
 
-  document.getElementById('events-list').innerHTML = `
-    <div class="feed-list">
-      <div class="feed-item" style="border-left-color: var(--warning)"><div class="feed-time">Tomorrow</div><div class="feed-content">CPI Inflation Data Release</div></div>
-      <div class="feed-item" style="border-left-color: var(--info)"><div class="feed-time">May 21</div><div class="feed-content">SUI Massive Token Unlock</div></div>
-      <div class="feed-item" style="border-left-color: var(--primary)"><div class="feed-time">May 25</div><div class="feed-content">SEC Deadline on ETH ETF</div></div>
-    </div>
-  `;
+  const eventsContainer = document.getElementById('events-list');
+  if (eventsContainer) {
+    eventsContainer.innerHTML = `
+      <div class="feed-list">
+        ${LIVE_CATALYSTS.map(c => `
+          <div class="feed-item" style="border-left-color: var(--${c.type || 'primary'})">
+            <div class="feed-time">${c.date}</div>
+            <div class="feed-content">${c.title}</div>
+          </div>
+        `).join('')}
+      </div>
+    `;
+  }
 }
 
 function renderSentimentPage() {
@@ -1194,7 +1232,7 @@ function setupCommandCenter() {
       
       res.appendChild(responseBlock);
       res.scrollTop = res.scrollHeight;
-    }, 100); // reduced timeout since we are awaiting fetch
+    }, 100); 
   };
 
   btn.addEventListener('click', handleCommand);
@@ -1288,38 +1326,6 @@ function setupModals() {
   });
 }
 
-
-
-
-function simulateMarketTick() {
-  // 100% REAL DATA MODE: We NO LONGER fake the price drift here.
-  // Prices only update when syncLiveApis() pulls from CoinGecko every 60s.
-  
-  // Update purely visual Chart lines (so the UI doesn't look completely frozen)
-  updateChartData();
-  
-  // Update UI Elements softly
-  document.querySelectorAll('.live-price').forEach(el => {
-     const symbol = el.dataset.symbol;
-     const asset = assets.find(a => a.symbol === symbol);
-     if(asset) {
-        // Flash effect
-        el.style.color = '#fff';
-        el.textContent = `$${formatPrice(asset.price)}`;
-        setTimeout(() => el.style.color = '', 300);
-     }
-  });
-
-  document.querySelectorAll('.live-change').forEach(el => {
-     const symbol = el.dataset.symbol;
-     const asset = assets.find(a => a.symbol === symbol);
-     if(asset) {
-        el.textContent = `${asset.change > 0 ? '+' : ''}${asset.change.toFixed(2)}%`;
-        el.className = `live-change ${asset.change >= 0 ? 'text-green' : 'text-red'}`;
-     }
-  });
-}
-
 function formatPrice(num) {
   if (num < 1) return num.toFixed(4);
   if (num < 10) return num.toFixed(3);
@@ -1329,19 +1335,17 @@ function formatPrice(num) {
 
 // ============================================================
 // SIGNAL BACKTESTER — BETA FEATURE
-// Paper trades $100 based on live Nexus AI signals
-// Tracks profitability: Scalp / Day / Swing
 // ============================================================
 
-const BT_CAPITAL = 100; // $100 paper trade budget
+const BT_CAPITAL = 100;
 let btTrades = [];
 let btInterval = null;
 let btActiveFilter = 'all';
 
 const BT_STRATEGIES = {
-  scalp: { label: 'Scalp',   emoji: '⚡', tfLabel: '1-4H',  driftMul: 0.003,  winRateBase: 0.58 },
-  day:   { label: 'Day',     emoji: '☀️', tfLabel: '24H',   driftMul: 0.008,  winRateBase: 0.62 },
-  swing: { label: 'Swing',   emoji: '🌊', tfLabel: '3-7D',  driftMul: 0.018,  winRateBase: 0.67 }
+  scalp: { label: 'Scalp',   emoji: '⚡', tfLabel: '1-4H' },
+  day:   { label: 'Day',     emoji: '☀️', tfLabel: '24H' },
+  swing: { label: 'Swing',   emoji: '🌊', tfLabel: '3-7D' }
 };
 
 function setupBacktester() {
@@ -1354,17 +1358,14 @@ function setupBacktester() {
     deploySignalTrades();
   });
 
-  // Refresh signals btn
   if (refreshBtn) {
     refreshBtn.addEventListener('click', () => {
       renderProSignals();
     });
   }
 
-  // Render signals on page load
   renderProSignals();
 
-  // Strategy filter tabs
   document.querySelectorAll('#bt-strategy-tabs .panel-action-btn').forEach(btn => {
     btn.addEventListener('click', () => {
       document.querySelectorAll('#bt-strategy-tabs .panel-action-btn').forEach(b => b.classList.remove('active'));
@@ -1379,38 +1380,26 @@ function deploySignalTrades() {
   if (btInterval) clearInterval(btInterval);
   btTrades = [];
 
-  // Use top 5 coins by Alpha score
   const top = [...assets].sort((a, b) => b.score - a.score).slice(0, 5);
   const totalScore = top.reduce((s, a) => s + a.score, 0) || 1;
-
-  // Trade plans
-  const TRADE_PLAN = [
-    { strategy: 'scalp', count: 1 },
-    { strategy: 'day',   count: 1 },
-    { strategy: 'swing', count: 1 }
-  ];
 
   top.forEach(asset => {
     const allocation = (asset.score / totalScore) * BT_CAPITAL;
     const perTradeAlloc = allocation / 3;
 
-    // Generate the signal to get exact targets and stop loss
     const sig = generateSignalForAsset(asset);
 
-    TRADE_PLAN.forEach(plan => {
-      // Different strategies use different targets
-      // Scalp = Target 1, Day = Target 2, Swing = Target 4
+    ['scalp', 'day', 'swing'].forEach(strategy => {
       const targetMap = { scalp: sig.t1, day: sig.t2, swing: sig.t4 };
-      const targetPrice = targetMap[plan.strategy];
-
+      
       btTrades.push({
         coin:         asset.symbol,
         name:         asset.name,
-        strategy:     plan.strategy,
+        strategy:     strategy,
         allocated:    perTradeAlloc,
         entryPrice:   asset.price,
         currentPrice: asset.price,
-        targetPrice:  targetPrice,
+        targetPrice:  targetMap[strategy],
         stopLoss:     sig.sl,
         isBull:       sig.isBull,
         pnlUsd:       0,
@@ -1433,11 +1422,9 @@ function deploySignalTrades() {
   renderBtStrategyBreakdown();
   renderBtTradeLog();
 
-  // True Real-Time Tracking: Update every 3 seconds against live asset prices
   btInterval = setInterval(() => {
     btTrades.forEach(trade => {
       if (trade.status === 'OPEN') {
-        // Find current live price
         const liveAsset = assets.find(a => a.symbol === trade.coin);
         if (liveAsset) {
           trade.currentPrice = liveAsset.price;
@@ -1446,7 +1433,6 @@ function deploySignalTrades() {
           trade.pnlUsd = (trade.isBull ? diff : -diff) / trade.entryPrice * trade.allocated;
           trade.pnlPct = (trade.isBull ? diff : -diff) / trade.entryPrice * 100;
           
-          // Check conditions
           if (trade.isBull) {
              if (trade.currentPrice >= trade.targetPrice) trade.status = 'WIN';
              if (trade.currentPrice <= trade.stopLoss) trade.status = 'LOSS';
@@ -1455,7 +1441,7 @@ function deploySignalTrades() {
              if (trade.currentPrice >= trade.stopLoss) trade.status = 'LOSS';
           }
         }
-        trade.minsAgo += 0.05; // 3 seconds = 0.05 mins
+        trade.minsAgo += 0.05; 
       }
     });
     renderBtKPIs();
@@ -1473,7 +1459,6 @@ function renderBtKPIs() {
   const wins      = btTrades.filter(t => t.pnlUsd >= 0).length;
   const winRate   = Math.round((wins / btTrades.length) * 100);
   const bestTrade = [...btTrades].sort((a, b) => b.pnlPct - a.pnlPct)[0];
-  const worstTrade= [...btTrades].sort((a, b) => a.pnlPct - b.pnlPct)[0];
 
   const pnlClass  = totalPnl >= 0 ? 'text-green' : 'text-red';
   const pnlSign   = totalPnl >= 0 ? '+' : '';
@@ -1507,8 +1492,7 @@ function renderBtStrategyBreakdown() {
   const grid = document.getElementById('bt-strategy-grid');
   if (!grid) return;
 
-  const stratKeys = ['scalp', 'day', 'swing'];
-  grid.innerHTML = stratKeys.map(key => {
+  grid.innerHTML = ['scalp', 'day', 'swing'].map(key => {
     const cfg     = BT_STRATEGIES[key];
     const trades  = btTrades.filter(t => t.strategy === key);
     const pnl     = trades.reduce((s, t) => s + t.pnlUsd, 0);
@@ -1536,41 +1520,32 @@ function renderBtStrategyBreakdown() {
 }
 
 // ============================================================
-// NEXUS PRO SIGNALS — Telegram-style signal cards
-// Format: Entry zones, 4 targets, stop loss, exchanges
+// NEXUS PRO SIGNALS
 // ============================================================
-
-const SIGNAL_EXCHANGES = ['Binance Futures', 'KuCoin', 'Bybit', 'OKX', 'Huobi Pro'];
-const SIGNAL_LEVERAGES = ['Cross (10X)', 'Cross (20X)', 'Cross (25X)', 'Isolated (15X)', 'Cross (15X)'];
 
 function generateSignalForAsset(asset) {
   const p = asset.price;
-  const isBull = asset.bias === 'bullish';
-  const confidence = asset.confidence || 75;
+  const bias = asset.bias;
+  const isBull = bias === 'bullish';
+  const score = asset.score || 75;
 
-  // Entry zone: 3 levels staggered below/at current price
   const entry1 = p * 0.999;
-  const entry2 = p * (1 - 0.025 - Math.random() * 0.01);
-  const entry3 = p * (1 - 0.045 - Math.random() * 0.015);
-
-  // 4 targets (above for bullish, below for bearish)
+  const entry2 = p * 0.985;
+  const entry3 = p * 0.965;
+  
   const dir = isBull ? 1 : -1;
-  const t1 = p * (1 + dir * (0.008 + Math.random() * 0.005));
-  const t2 = p * (1 + dir * (0.02  + Math.random() * 0.01));
-  const t3 = p * (1 + dir * (0.04  + Math.random() * 0.015));
-  const t4 = p * (1 + dir * (0.07  + Math.random() * 0.02));
+  const t1 = p * (1 + dir * 0.012);
+  const t2 = p * (1 + dir * 0.025);
+  const t3 = p * (1 + dir * 0.05);
+  const t4 = p * (1 + dir * 0.08);
 
-  // Stop loss: fixed risk below entry zone
-  const sl = entry3 * (isBull ? 0.937 : 1.063);
+  const sl = entry3 * (isBull ? 0.96 : 1.04);
 
-  // Pick random exchanges (3-4 of them)
-  const exCount = 3 + Math.floor(Math.random() * 2);
-  const exchanges = [...SIGNAL_EXCHANGES].sort(() => 0.5 - Math.random()).slice(0, exCount);
-  const leverage = SIGNAL_LEVERAGES[Math.floor(Math.random() * SIGNAL_LEVERAGES.length)];
-
-  // Signal strength label
-  const strength = confidence >= 85 ? { label: 'STRONG', cls: 'text-green' }
-                 : confidence >= 70 ? { label: 'MEDIUM', cls: 'text-warning' }
+  const exchanges = ['Binance', 'Bybit', 'OKX'];
+  const leverage = isBull ? '5x-10x Cross' : '3x Isolated';
+  
+  const strength = score >= 85 ? { label: 'STRONG', cls: 'text-green' }
+                 : score >= 70 ? { label: 'MEDIUM', cls: 'text-warning' }
                  : { label: 'WATCH', cls: 'text-muted' };
 
   return { entry1, entry2, entry3, t1, t2, t3, t4, sl, exchanges, leverage, strength, isBull };
