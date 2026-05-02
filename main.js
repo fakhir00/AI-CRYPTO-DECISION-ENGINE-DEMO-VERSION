@@ -460,7 +460,7 @@ async function syncLiveApis() {
     if (marketData && marketData.length > 0) {
       assets = marketData.map(coin => {
          const symbol = coin.symbol.toUpperCase();
-         const hasWhale = whales.some(w => w.value > 1); 
+         const hasWhale = whales.some(w => w.token === symbol || w.amount === symbol); 
          const techScore = coin.price_change_percentage_24h > 0 ? 1 : 0.5;
          const newsScore = sentiment.score > 50 ? 1 : 0.5;
          const volScore = coin.total_volume > 100000000 ? 1 : 0.5;
@@ -748,7 +748,7 @@ function typeWriterEffect(element, lines, speed = 20) {
 
 function renderOpportunitiesPage() {
   const tbody = document.getElementById('opportunities-table-body');
-  const sorted = [...assets].sort((a,b) => b.score - a.score);
+  const sorted = [...assets].sort((a,b) => (b.score - a.score) || a.symbol.localeCompare(b.symbol));
   
   tbody.innerHTML = sorted.map((asset, i) => `
     <tr>
@@ -837,7 +837,7 @@ function setupAllButtons() {
       document.querySelectorAll('#page-opportunities .panel-action-btn').forEach(b => b.classList.remove('active'));
       e.target.classList.add('active');
       
-      if (sort === 'alpha') assets.sort((a,b) => b.score - a.score);
+      if (sort === 'alpha') assets.sort((a,b) => (b.score - a.score) || a.symbol.localeCompare(b.symbol));
       else if (sort === 'change') assets.sort((a,b) => b.change - a.change);
       else if (sort === 'volume') assets.sort((a,b) => parseFloat(b.vol) - parseFloat(a.vol));
       
@@ -1557,8 +1557,8 @@ function renderProSignals() {
   const grid = document.getElementById('pro-signals-grid');
   if (!grid) return;
 
-  // Use top 5 assets by alpha score
-  const top = [...assets].sort((a, b) => b.score - a.score).slice(0, 5);
+  // Use top 5 assets by alpha score with a deterministic tie-breaker
+  const top = [...assets].sort((a, b) => (b.score - a.score) || a.symbol.localeCompare(b.symbol)).slice(0, 5);
 
   if (!top.length) {
     grid.innerHTML = `<div style="text-align:center;color:var(--text-muted);padding:3rem;">No assets loaded yet. Live data syncs on startup.</div>`;
