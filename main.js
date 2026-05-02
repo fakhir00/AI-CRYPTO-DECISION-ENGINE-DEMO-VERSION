@@ -1,5 +1,5 @@
 import './style.css';
-import { fetchMarketData, fetchGlobalMarketData, fetchWhaleActivity, fetchSentiment, fetchFearAndGreed, fetchAIAnalysis, fetchHermesAnalysis, fetchDualAI, calculateAlphaScore, fetchDefiPools, fetchNews, fetchTechnicalSignals, fetchNarratives, fetchChartData, fetchFundingRates, fetchOpenInterest, fetchOrderBookDepth, fetchBtcOnChain } from './api.js';
+import { fetchMarketData, fetchGlobalMarketData, fetchWhaleActivity, fetchSentiment, fetchFearAndGreed, fetchAIAnalysis, fetchHermesAnalysis, fetchDualAI, calculateAlphaScore, fetchDefiPools, fetchNews, fetchTechnicalSignals, fetchTrendingNarratives, fetchChartData, fetchFundingRates, fetchOpenInterest, fetchOrderBookDepth, fetchBtcOnChain } from './api.js';
 
 
 // --- Navigation & Setup ---
@@ -259,7 +259,7 @@ async function syncLiveApis() {
       fetchDefiPools(),
       fetchNews(),
       fetchTechnicalSignals(),
-      fetchNarratives(),
+      fetchTrendingNarratives(),
       fetchChartData('BTC'),
       fetchFearAndGreed(),
       fetchFundingRates(),
@@ -278,13 +278,14 @@ async function syncLiveApis() {
     window._liveDepthData = LIVE_DEPTH;
 
     // Update Narratives if real data fetched
-    if (narrativesData && narrativesData.length > 0) {
+    if (narrativesData && narrativesData.narratives) {
       NARRATIVES.length = 0;
-      narrativesData.slice(0, 4).forEach(c => NARRATIVES.push({
+      narrativesData.narratives.slice(0, 6).forEach(c => NARRATIVES.push({
         name: c.name,
-        change: (c.volume_24h_change_24h || 0) > 0 ? '+' + (c.volume_24h_change_24h || 0).toFixed(1) + '%' : (c.volume_24h_change_24h || 0).toFixed(1) + '%',
-        val: Math.min(100, 50 + (c.volume_24h_change_24h || 0)).toFixed(0)
+        change: c.change > 0 ? '+' + c.change.toFixed(1) + '%' : c.change.toFixed(1) + '%',
+        val: Math.min(100, Math.max(10, c.change * 5))
       }));
+      renderNarrativeMomentum();
     }
 
     // Update Whale & Smart Money Flows
@@ -305,7 +306,7 @@ async function syncLiveApis() {
           exchange: "DEX/CEX"
         });
 
-        if (i < 4) {
+        if (i < 5) {
           SMART_MONEY_FLOWS.push({
             amount: formattedVal,
             asset: w.token || "USDC",
@@ -316,6 +317,7 @@ async function syncLiveApis() {
           });
         }
       });
+      renderSmartMoneyFlow();
       
       ALPHA_SIGNALS.push({ time: "Live Alert", text: "Heavy on-chain stablecoin rotation detected across smart money addresses.", impact: "high" });
       ALPHA_SIGNALS.push({ time: "Live Alert", text: `Top whale executed a massive ${whales[0].token || 'USDC'} transaction worth $${whales[0].value.toFixed(1)}M.`, impact: "high" });
