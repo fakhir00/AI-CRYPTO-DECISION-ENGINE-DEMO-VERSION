@@ -791,6 +791,11 @@ function setupAllButtons() {
       const parent = e.target.closest('.panel-actions');
       parent.querySelectorAll('.panel-action-btn').forEach(b => b.classList.remove('active'));
       e.target.classList.add('active');
+      
+      const titleEl = document.getElementById('market-cap-title');
+      if (titleEl) titleEl.innerHTML = `<i data-feather="activity"></i> Total Market Cap Trend (${tf})`;
+      if (typeof feather !== 'undefined') feather.replace();
+      
       showToast(`Market chart updated to ${tf} timeframe`);
       initCharts(tf);
     });
