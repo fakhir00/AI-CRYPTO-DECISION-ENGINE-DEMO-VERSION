@@ -799,12 +799,7 @@ function setupAiReports() {
 }
 
 function setupTradingEvents() {
-  const tvSelect = document.getElementById('tv-pair-select');
-  if(tvSelect) {
-     tvSelect.addEventListener('change', (e) => {
-        renderTradingPage(e.target.value);
-     });
-  }
+  // Dropdown removed from UI
 }
 
 function renderWhalePage() {
@@ -1007,7 +1002,6 @@ function setupCommandCenter() {
             <div style="background: rgba(255,255,255,0.05); padding: 1rem; border-radius: 4px; font-family: var(--font-mono);">
               > Type <span class="text-primary">"Give me entry for ${bestAlt.symbol}"</span> for precise trading targets.
             </div>
-
          `;
       }
       }
