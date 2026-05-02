@@ -1190,23 +1190,23 @@ function setupCommandCenter() {
       }
 
       if (targetAsset && isTradeRequest) {
-          const entryPrice = targetAsset.price;
-          const tp1 = entryPrice * 1.05;
-          const tp2 = entryPrice * 1.12;
-          const sl = entryPrice * 0.96;
+          const sig = generateSignalForAsset(targetAsset);
+          const dirText = sig.isBull ? "LONG" : "SHORT";
           
           responseBlock.innerHTML = `
             <div class="text-primary mb-2" style="margin-bottom: 1rem; font-weight: 700;">Quant Trade Setup: ${targetAsset.symbol}/USDT</div>
             <div style="margin-bottom: 1.5rem; color: #a9b1d6; line-height: 1.6;">
-               Based on our predictive models, <strong style="color: #fff">${targetAsset.name}</strong> exhibits a high Alpha Score of <strong class="text-green">${targetAsset.score}/100</strong>. Institutional flow is highly bullish. Here is the calculated algorithmic trade plan:
+               Direction: <strong class="${sig.isBull ? 'text-green' : 'text-red'}">${dirText}</strong> | Type: <strong style="color: #fff">${sig.type}</strong>
+               <br>
+               Based on our predictive models, <strong style="color: #fff">${targetAsset.name}</strong> exhibits a high Alpha Score of <strong class="text-green">${targetAsset.score}/100</strong>. Here is the calculated algorithmic trade plan:
             </div>
             <div style="background: rgba(0,230,118,0.1); border-left: 3px solid var(--green); padding: 1rem; margin-bottom: 1rem; border-radius: 4px;">
-               <div style="margin-bottom: 0.5rem;"><strong class="text-green" style="display:inline-block; width: 130px;">ENTRY ZONE:</strong> <span style="font-family: var(--font-mono); font-weight: 600;">$${formatPrice(entryPrice * 0.99)} - $${formatPrice(entryPrice * 1.01)}</span></div>
-               <div style="margin-bottom: 0.5rem;"><strong class="text-primary" style="display:inline-block; width: 130px;">TAKE PROFIT 1:</strong> <span style="font-family: var(--font-mono)">$${formatPrice(tp1)}</span> (+5.0%)</div>
-               <div style="margin-bottom: 0.5rem;"><strong class="text-primary" style="display:inline-block; width: 130px;">TAKE PROFIT 2:</strong> <span style="font-family: var(--font-mono)">$${formatPrice(tp2)}</span> (+12.0%)</div>
-               <div><strong class="text-red" style="display:inline-block; width: 130px;">STOP LOSS:</strong> <span style="font-family: var(--font-mono)">$${formatPrice(sl)}</span> (-4.0%)</div>
+               <div style="margin-bottom: 0.5rem;"><strong class="text-green" style="display:inline-block; width: 130px;">ENTRY ZONE:</strong> <span style="font-family: var(--font-mono); font-weight: 600;">$${formatPrice(sig.entry1)} - $${formatPrice(sig.entry2)}</span></div>
+               <div style="margin-bottom: 0.5rem;"><strong class="text-primary" style="display:inline-block; width: 130px;">TAKE PROFIT 1:</strong> <span style="font-family: var(--font-mono)">$${formatPrice(sig.t1)}</span></div>
+               <div style="margin-bottom: 0.5rem;"><strong class="text-primary" style="display:inline-block; width: 130px;">TAKE PROFIT 2:</strong> <span style="font-family: var(--font-mono)">$${formatPrice(sig.t2)}</span></div>
+               <div><strong class="text-red" style="display:inline-block; width: 130px;">STOP LOSS:</strong> <span style="font-family: var(--font-mono)">$${formatPrice(sig.sl)}</span></div>
             </div>
-            <div><span class="text-muted">Model Confidence:</span> <span class="text-green" style="font-weight: 700;">${targetAsset.confidence}%</span> &nbsp;|&nbsp; <span class="text-muted">Time Horizon:</span> <span style="color: #fff">1D-3D Swing</span></div>
+            <div><span class="text-muted">Model Confidence:</span> <span class="text-green" style="font-weight: 700;">${targetAsset.confidence}%</span> &nbsp;|&nbsp; <span class="text-muted">Strategy:</span> <span style="color: #fff">${sig.type}</span></div>
           `;
       } else if (targetAsset) {
          responseBlock.innerHTML = `
@@ -1544,11 +1544,13 @@ function generateSignalForAsset(asset) {
   const exchanges = ['Binance', 'Bybit', 'OKX'];
   const leverage = isBull ? '5x-10x Cross' : '3x Isolated';
   
+  const type = score > 85 ? 'SWING' : (score > 70 ? 'INTRADAY' : 'SCALP');
+  
   const strength = score >= 85 ? { label: 'STRONG', cls: 'text-green' }
                  : score >= 70 ? { label: 'MEDIUM', cls: 'text-warning' }
                  : { label: 'WATCH', cls: 'text-muted' };
 
-  return { entry1, entry2, entry3, t1, t2, t3, t4, sl, exchanges, leverage, strength, isBull };
+  return { entry1, entry2, entry3, t1, t2, t3, t4, sl, exchanges, leverage, strength, isBull, type };
 }
 
 function renderProSignals() {
@@ -1577,6 +1579,7 @@ function renderProSignals() {
             <span class="signal-envelope">📪</span>
             <span class="signal-symbol">#${asset.symbol}/USDT</span>
             <span class="signal-dir-badge ${sig.isBull ? 'sig-long' : 'sig-short'}">${dirIcon} ${dirLabel}</span>
+            <span class="badge bg-primary ml-2" style="font-size: 0.65rem; border: 1px solid rgba(255,255,255,0.1)">${sig.type}</span>
           </div>
           <div class="signal-strength ${sig.strength.cls}">${sig.strength.label} ●</div>
         </div>
@@ -1591,6 +1594,12 @@ function renderProSignals() {
         <div class="signal-row">
           <span class="signal-label">Leverage</span>
           <span class="signal-value text-warning">${sig.leverage}</span>
+        </div>
+
+        <!-- Trade Type -->
+        <div class="signal-row">
+          <span class="signal-label">Trade Type</span>
+          <span class="signal-value" style="color: var(--primary)">${sig.type}</span>
         </div>
 
         <!-- Divider -->
