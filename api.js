@@ -124,7 +124,7 @@ export async function fetchSentiment() {
     return { bullish, bearish, score, source: 'Reddit NLP' };
   } catch (e) {
     console.warn('⚠️ Reddit failed:', e.message);
-    return { bullish: 5, bearish: 3, score: 62, source: 'Fallback Data' };
+    return { bullish: 5, bearish: 5, score: 50, source: 'Data Unavailable' };
   }
 }
 
