@@ -1265,16 +1265,8 @@ function setupModals() {
   });
 }
 
-function showToast(msg) {
-  const container = document.getElementById('toast-container');
-  const toast = document.createElement('div');
-  toast.className = 'toast';
-  toast.innerHTML = `<i data-feather="check-circle" class="toast-icon"></i><span class="toast-msg">${msg}</span>`;
-  container.appendChild(toast);
-  if (typeof feather !== 'undefined') feather.replace();
-  
-  setTimeout(() => { if(container.contains(toast)) container.removeChild(toast); }, 3000);
-}
+
+
 
 function simulateMarketTick() {
   // 100% REAL DATA MODE: We NO LONGER fake the price drift here.
