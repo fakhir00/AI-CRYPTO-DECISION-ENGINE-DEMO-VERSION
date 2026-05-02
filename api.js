@@ -337,7 +337,7 @@ export async function fetchOpenInterest(symbols = ['BTC', 'ETH', 'SOL', 'INJ', '
 // ─── 4C-4. Binance: Order Book Depth (FREE, NO KEY) ──────────────────────────
 export async function fetchOrderBookDepth(symbol = 'BTC') {
   try {
-    const res = await fetch(`https://api.binance.com/api/v3/depth?symbol=${symbol}USDT&limit=20`);
+    const res = await fetch(`https://api.binance.com/api/v3/depth?symbol=${symbol}USDT&limit=500`);
     if (!res.ok) throw new Error(`Depth HTTP ${res.status}`);
     const data = await res.json();
     
