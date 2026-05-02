@@ -13,7 +13,7 @@ const NAV_ITEMS = [
   { id: 'sentiment', label: 'Sentiment & Narratives', icon: 'smile' },
   { id: 'technical', label: 'Technical Signals', icon: 'activity' },
   { id: 'defi', label: 'DeFi Scanner', icon: 'layers' },
-  { id: 'command', label: 'AI Command Center', icon: 'terminal' },
+
   { id: 'alerts', label: 'Alerts & Notifications', icon: 'bell' },
   { id: 'backtester', label: 'Signal Backtester ⚡', icon: 'zap', beta: true },
   { id: 'settings', label: 'Settings & Subscription', icon: 'settings' }
@@ -98,7 +98,7 @@ function initApp() {
   renderSentimentPage();
   renderTechnicalPage();
   renderDefiPage();
-  setupCommandCenter();
+
   setupAiResearchChat();
   setupAiReports();
   setupModals();
@@ -898,15 +898,7 @@ function renderOpportunitiesPage() {
       const row = e.target.closest('tr');
       const symbol = row.querySelector('.live-price').dataset.symbol;
       
-      navigateToPage('command');
-      
-      const input = document.getElementById('command-input-large');
-      const submitBtn = document.getElementById('command-submit-large');
-      
-      setTimeout(() => {
-        input.value = `Give me a trade setup for ${symbol} with entry and exit targets`;
-        submitBtn.click();
-      }, 300);
+      triggerMcp(`Give me a trade setup for ${symbol} with entry and exit targets`);
     });
   });
 }
@@ -1260,115 +1252,7 @@ function renderDefiPage() {
   `).join('');
 }
 
-function setupCommandCenter() {
-  const input = document.getElementById('command-input-large');
-  const btn = document.getElementById('command-submit-large');
-  const res = document.getElementById('command-response-large');
 
-  const handleCommand = () => {
-    const val = input.value.trim();
-    if(!val) return;
-    
-    // Create query block
-    const queryBlock = document.createElement('div');
-    queryBlock.className = 'cmd-res-block';
-    queryBlock.style.marginTop = '2rem';
-    queryBlock.innerHTML = `<span class="command-prompt">root@nexus:~#</span> <span style="color:#fff">${val}</span>`;
-    res.appendChild(queryBlock);
-    
-    // Create loading block
-    const loadingBlock = document.createElement('div');
-    loadingBlock.className = 'cmd-res-block text-muted';
-    loadingBlock.innerHTML = `> Engaging Dual AI Engine (Hermes + GPT)... <span class="ai-cursor"></span>`;
-    res.appendChild(loadingBlock);
-    
-    input.value = '';
-    res.scrollTop = res.scrollHeight;
-
-    setTimeout(async () => {
-      // Fire Dual AI: Hermes (prediction) + OpenAI (analysis) in parallel
-      const assetContext = assets.slice(0,3).map(a => `${a.symbol}:$${a.price}(${a.change>0?'+':''}${a.change.toFixed(1)}%)`).join(', ');
-      const dualRes = await fetchDualAI(val, `Live market data — ${assetContext}`);
-      
-      res.removeChild(loadingBlock);
-      
-      const responseBlock = document.createElement('div');
-      responseBlock.className = 'cmd-res-block';
-      responseBlock.style.border = '1px solid var(--border-color)';
-      responseBlock.style.background = 'rgba(0,0,0,0.3)';
-      responseBlock.style.padding = '1.5rem';
-      responseBlock.style.borderRadius = '8px';
-      responseBlock.style.marginTop = '1rem';
-      
-      if (dualRes) {
-         responseBlock.innerHTML = `
-            <div style="font-size:0.7rem;font-weight:800;letter-spacing:0.1em;color:var(--text-muted);margin-bottom:1rem;text-transform:uppercase;">⚡ Dual AI Engine Response</div>
-            ${dualRes}
-         `;
-      } else {
-        // Fallback to local logic
-      
-      // Look for specific coins and intents in query
-      const upperVal = val.toUpperCase();
-      const isTradeRequest = upperVal.includes('BEST') || upperVal.includes('BUY') || upperVal.includes('ENTRY') || upperVal.includes('EXIT') || upperVal.includes('TRADE') || upperVal.includes('SIGNAL') || upperVal.includes('SETUP');
-      let targetAsset = assets.find(a => upperVal.includes(a.symbol));
-      
-      // If asking for "best coin" and no coin was named, pick the highest alpha
-      if (!targetAsset && isTradeRequest) {
-         targetAsset = [...assets].sort((a,b) => b.score - a.score)[0];
-      }
-
-      if (targetAsset && isTradeRequest) {
-          const sig = generateSignalForAsset(targetAsset);
-          const dirText = sig.isBull ? "LONG" : "SHORT";
-          
-          responseBlock.innerHTML = `
-            <div class="text-primary mb-2" style="margin-bottom: 1rem; font-weight: 700;">Quant Trade Setup: ${targetAsset.symbol}/USDT</div>
-            <div style="margin-bottom: 1.5rem; color: #a9b1d6; line-height: 1.6;">
-               Direction: <strong class="${sig.isBull ? 'text-green' : 'text-red'}">${dirText}</strong> | Type: <strong style="color: #fff">${sig.type}</strong>
-               <br>
-               Based on our predictive models, <strong style="color: #fff">${targetAsset.name}</strong> exhibits a high Alpha Score of <strong class="text-green">${targetAsset.score}/100</strong>. Here is the calculated algorithmic trade plan:
-            </div>
-            <div style="background: rgba(0,230,118,0.1); border-left: 3px solid var(--green); padding: 1rem; margin-bottom: 1rem; border-radius: 4px;">
-               <div style="margin-bottom: 0.5rem;"><strong class="text-green" style="display:inline-block; width: 130px;">ENTRY ZONE:</strong> <span style="font-family: var(--font-mono); font-weight: 600;">$${formatPrice(sig.entry1)} - $${formatPrice(sig.entry2)}</span></div>
-               <div style="margin-bottom: 0.5rem;"><strong class="text-primary" style="display:inline-block; width: 130px;">TAKE PROFIT 1:</strong> <span style="font-family: var(--font-mono)">$${formatPrice(sig.t1)}</span></div>
-               <div style="margin-bottom: 0.5rem;"><strong class="text-primary" style="display:inline-block; width: 130px;">TAKE PROFIT 2:</strong> <span style="font-family: var(--font-mono)">$${formatPrice(sig.t2)}</span></div>
-               <div><strong class="text-red" style="display:inline-block; width: 130px;">STOP LOSS:</strong> <span style="font-family: var(--font-mono)">$${formatPrice(sig.sl)}</span></div>
-            </div>
-            <div><span class="text-muted">Model Confidence:</span> <span class="text-green" style="font-weight: 700;">${targetAsset.confidence}%</span> &nbsp;|&nbsp; <span class="text-muted">Strategy:</span> <span style="color: #fff">${sig.type}</span></div>
-          `;
-      } else if (targetAsset) {
-         responseBlock.innerHTML = `
-            <div class="text-primary mb-2" style="margin-bottom: 1rem; font-weight: 700;">Deep Analysis: ${targetAsset.name} (${targetAsset.symbol})</div>
-            <div style="margin-bottom: 0.5rem;"><span class="text-muted" style="display:inline-block; width: 140px;">Current Price:</span> <span style="font-family: var(--font-mono)">$${formatPrice(targetAsset.price)}</span></div>
-            <div style="margin-bottom: 0.5rem;"><span class="text-muted" style="display:inline-block; width: 140px;">Alpha Score:</span> <span class="text-green">${targetAsset.score}/100</span> (Confidence: ${targetAsset.confidence}%)</div>
-            <div style="margin-bottom: 1rem;"><span class="text-muted" style="display:inline-block; width: 140px;">Directional Bias:</span> <span class="bias-badge bias-${targetAsset.bias}">${targetAsset.bias.toUpperCase()}</span></div>
-            <p style="line-height: 1.6; color: #a9b1d6;">Our models detect massive on-chain accumulation for ${targetAsset.symbol}. Support has been flipped to resistance on the 4H chart, aligning with a positive sentiment divergence.</p>
-         `;
-      } else {
-         const bestAlt = [...assets].sort((a,b) => b.score - a.score)[0];
-         responseBlock.innerHTML = `
-            <div class="text-primary mb-2" style="margin-bottom: 1rem; font-weight: 700;">Market Synthesis Complete</div>
-            <div style="margin-bottom: 1rem; color: #a9b1d6; line-height: 1.6;">
-              Based on live algorithmic scans across all supported networks, the current best opportunity is <strong class="text-green">${bestAlt.symbol}</strong> with an Alpha Score of ${bestAlt.score}/100.
-            </div>
-            <div style="background: rgba(255,255,255,0.05); padding: 1rem; border-radius: 4px; font-family: var(--font-mono);">
-              > Type <span class="text-primary">"Give me entry for ${bestAlt.symbol}"</span> for precise trading targets.
-            </div>
-         `;
-      }
-      }
-      
-      res.appendChild(responseBlock);
-      res.scrollTop = res.scrollHeight;
-    }, 100); 
-  };
-
-  btn.addEventListener('click', handleCommand);
-  input.addEventListener('keypress', (e) => {
-    if(e.key === 'Enter') handleCommand();
-  });
-}
 
 function setupAiResearchChat() {
   const input = document.getElementById('ai-chat-input');
