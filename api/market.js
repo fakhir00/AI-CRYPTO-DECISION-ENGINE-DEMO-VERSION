@@ -49,13 +49,29 @@ export default async function handler(req, res) {
       + `?vs_currency=usd&ids=${COINS.join(',')}`
       + `&x_cg_demo_api_key=${COINGECKO_KEY}&sparkline=false`;
 
-    const response = await fetch(url, { cache: 'no-store' });
-    if (!response.ok) throw new Error(`CoinGecko HTTP ${response.status}`);
-    const coins = await response.json();
+    const [cgRes, binanceRes] = await Promise.all([
+      fetch(url, { cache: 'no-store' }),
+      fetch('https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT')
+    ]);
+
+    if (!cgRes.ok) throw new Error(`CoinGecko HTTP ${cgRes.status}`);
+    const coins = await cgRes.json();
+    
+    let binanceBtcPrice = null;
+    if (binanceRes.ok) {
+      const bData = await binanceRes.json();
+      binanceBtcPrice = parseFloat(bData.price);
+    }
 
     // Compute scores server-side (deterministic, same for every client)
     const assets = coins.map(coin => {
       const symbol = coin.symbol.toUpperCase();
+      let price = coin.current_price;
+
+      // Overwrite BTC with real-time Binance price for absolute accuracy
+      if (symbol === 'BTC' && binanceBtcPrice) {
+        price = binanceBtcPrice;
+      }
       const alpha = computeAlphaScore(coin);
       const change = coin.price_change_percentage_24h || 0;
       
