@@ -5,7 +5,7 @@ import { fetchMarketData, fetchGlobalMarketData, fetchWhaleActivity, fetchSentim
 const NAV_ITEMS = [
   { id: 'dashboard', label: 'Dashboard Overview', icon: 'grid' },
   { id: 'opportunities', label: 'Top Opportunities', icon: 'trending-up' },
-  { id: 'trading', label: 'Advanced Pro Terminal', icon: 'monitor' },
+  { id: 'trading', label: 'Nexus Trading View', icon: 'monitor' },
   { id: 'ai-research', label: 'AI Research Analyst', icon: 'cpu' },
   { id: 'whale', label: 'Whale & Smart Money', icon: 'anchor' },
   { id: 'news', label: 'News & Catalysts', icon: 'globe' },
@@ -148,6 +148,7 @@ function initApp() {
   renderDefiPage();
   setupCommandCenter();
   setupAiResearchChat();
+  setupAiReports();
   setupModals();
   setupTradingEvents();
   setupBacktester();
@@ -757,7 +758,7 @@ function renderTradingPage(symbol = 'BINANCE:SOLUSDT') {
 
 window.openTradingChart = function(coin) {
   // 1. Switch UI to trading page
-  switchPage('nav-trading', 'page-trading');
+  navigateToPage('trading');
   
   // 2. Format symbol
   const symbol = `BINANCE:${coin}USDT`;
@@ -775,6 +776,26 @@ window.openTradingChart = function(coin) {
   
   // 4. Render the chart
   renderTradingPage(symbol);
+}
+
+function setupAiReports() {
+  const reportCards = document.querySelectorAll('#ai-report-list .report-card');
+  reportCards.forEach(card => {
+    card.addEventListener('click', () => {
+      const title = card.querySelector('h4').textContent;
+      const input = document.getElementById('ai-chat-input');
+      const submitBtn = document.getElementById('ai-chat-submit');
+      
+      if (input && submitBtn) {
+        input.value = `Generate a comprehensive Deep Dive Intelligence Report on: ${title}. Include on-chain data, social narrative maps, and potential trade impact.`;
+        submitBtn.click();
+        
+        // Scroll to chat
+        const chatBody = document.querySelector('.chat-body');
+        if (chatBody) chatBody.scrollTop = 0;
+      }
+    });
+  });
 }
 
 function setupTradingEvents() {
@@ -986,6 +1007,7 @@ function setupCommandCenter() {
             <div style="background: rgba(255,255,255,0.05); padding: 1rem; border-radius: 4px; font-family: var(--font-mono);">
               > Type <span class="text-primary">"Give me entry for ${bestAlt.symbol}"</span> for precise trading targets.
             </div>
+
          `;
       }
       }
