@@ -107,23 +107,38 @@ export async function fetchSentiment() {
   }
 }
 
-// ─── 4A. Alternative.me: Real Fear & Greed Index ─────────────────────────────
+// ─── 4A. CoinMarketCap: Official Fear & Greed Index ──────────────────────────
 export async function fetchFearAndGreed() {
   try {
-    const res = await fetch('https://api.alternative.me/fng/');
-    if (!res.ok) throw new Error(`F&G HTTP ${res.status}`);
+    const res = await fetch('/api/cmc/v3/fear-and-greed/latest', {
+      headers: {
+        'X-CMC_PRO_API_KEY': KEYS.cmc,
+        'Accept': 'application/json'
+      }
+    });
+    if (!res.ok) throw new Error(`CMC F&G HTTP ${res.status}`);
     const data = await res.json();
-    if (data.data && data.data[0]) {
-      console.log('✅ Fear & Greed Index fetched:', data.data[0].value);
+    if (data.data && data.data.value !== undefined) {
+      console.log('✅ CMC Fear & Greed Index fetched:', data.data.value);
       return {
-        value: parseInt(data.data[0].value),
-        label: data.data[0].value_classification
+        value: parseInt(data.data.value),
+        label: data.data.value_classification
       };
     }
     return { value: 50, label: 'Neutral' };
   } catch (e) {
-    console.warn('⚠️ Fear & Greed failed:', e.message);
-    return { value: 50, label: 'Neutral' };
+    console.warn('⚠️ CMC Fear & Greed failed, falling back to alternative.me:', e.message);
+    // Fallback to alternative.me if CMC key doesn't have access or fails
+    try {
+      const fallback = await fetch('https://api.alternative.me/fng/');
+      const fData = await fallback.json();
+      return {
+        value: parseInt(fData.data[0].value),
+        label: fData.data[0].value_classification
+      };
+    } catch(err) {
+      return { value: 50, label: 'Neutral' };
+    }
   }
 }
 export async function fetchDefiPools() {
