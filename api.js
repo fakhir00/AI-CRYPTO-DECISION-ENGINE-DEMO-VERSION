@@ -238,36 +238,34 @@ export async function fetchChartData(symbol = 'BTC') {
   }
 }
 
-// ─── 5. OpenAI: AI analysis via secure Vite proxy / Vercel Function ──────────
+// ─── 5. OpenAI: Dual Engine Fusion (Contextual + Quantitative) ───────────────
 export async function fetchAIAnalysis(promptText) {
   try {
     const res = await fetch('/api/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        model: 'gpt-3.5-turbo',
+        model: 'gpt-4o-mini', // Upgraded to 4o-mini for better unified reasoning
         messages: [
           {
             role: 'system',
-            content: `You are Nexus, the AI engine powering the NEXUS Crypto Intelligence Platform. You have FULL ACCESS to live market data, on-chain analytics, whale tracking, social sentiment, and news feeds — all provided to you in the user's message context. NEVER say you cannot access data or that something is unavailable. The data in the context IS your live feed. Always analyze it confidently.
+            content: `You are Nexus, the elite Dual-Engine AI powering the NEXUS Crypto Intelligence Platform. You combine the deep contextual reasoning of GPT with the precise quantitative prediction modeling of Hermes. 
+You have FULL ACCESS to live market data, on-chain analytics, whale tracking, social sentiment, and news feeds — all provided to you in the user's message context. NEVER say you cannot access data or that something is unavailable. The data in the context IS your live feed.
 
 Your capabilities:
-- Smart Money / Whale Flow analysis (use the price trends and volume data provided)
-- On-chain intelligence (interpret the scores, biases, and confidence percentages)
-- Social sentiment scanning (use the context to infer momentum)
-- News & narrative analysis
-- Trade signal generation with precise entries, targets, and stop losses
-- Market overview and macro analysis
+1. Quantitative Modeling: Calculate precise price targets, entries, stop losses, and risk/reward ratios.
+2. Contextual Synthesis: Analyze Smart Money flow, whale accumulation, social sentiment, and macro news to build a cohesive narrative.
 
-When generating trade signals, use this exact HTML format:
+When the user asks for a trade setup or signal, combine both skills into one optimized answer. Provide your thesis first, followed by the exact numbers.
+Use this exact HTML format for the trade signal portion:
 📪 #[COIN]/USDT<br><br>Exchange: Binance Future,Kucoin,Bybit,Huobi.pro,OKX<br>Leverage: Cross (20X)<br><br>Entry:[Price]-[Price]-[Price]<br><br>Target 1: [Price]<br>Target 2: [Price]<br>Target 3: [Price]<br>Target 4: [Price]<br><br>Stop loss: [Price]<br><br>⚡ NEXUS Pro Autotrade Signals
 
-For all other queries, provide detailed, data-driven analysis using the live prices and metrics from the context. Format with markdown headers, bold text, and bullet points for readability.`
+For all other queries, provide a single, highly optimized, data-driven response. Do not separate your answer into "Hermes" and "GPT" sections. Write as one unified intelligence. Use markdown headers, bold text, and bullet points for readability.`
           },
           { role: 'user', content: promptText }
         ],
-        max_tokens: 500,
-        temperature: 0.7
+        max_tokens: 800,
+        temperature: 0.5
       })
     });
 
@@ -391,47 +389,22 @@ For analysis queries, provide structured output with: Price targets, Probability
   }
 }
 
-// ─── 9. Dual AI Fusion — Combines Hermes + GPT for maximum insight ───────────
+// ─── 9. Dual AI Fusion — Optimized Unified Response ───────────
 export async function fetchDualAI(userQuery, assetContext = '') {
   const context = assetContext
     ? `Current context: ${assetContext}. User query: ${userQuery}`
     : userQuery;
 
-  // Fire both in parallel (both use OpenAI now)
-  const [hermesResult, openaiResult] = await Promise.allSettled([
-    fetchHermesAnalysis(context),
-    fetchAIAnalysis(context)
-  ]);
+  // Since we optimized the prompt to do both quantitative and contextual analysis simultaneously,
+  // we only need to make one API call, saving time and money while providing a cohesive response.
+  const result = await fetchAIAnalysis(context);
 
-  const hermes = hermesResult.status === 'fulfilled' ? hermesResult.value : null;
-  const openai = openaiResult.status === 'fulfilled' ? openaiResult.value : null;
-
-  // Both succeeded — show fusion output
-  if (hermes && openai) {
-    return `
-      <div style="margin-bottom:1.5rem;">
-        <div style="font-size:0.7rem;font-weight:800;letter-spacing:0.1em;color:var(--primary);margin-bottom:0.75rem;text-transform:uppercase;">
-          🔮 Hermes Quantitative Prediction
-        </div>
-        <div style="color:#BAC2DE;line-height:1.7;">${renderMarkdown(hermes)}</div>
-      </div>
-      <hr style="border-color:var(--border-color);margin:1rem 0;"/>
-      <div>
-        <div style="font-size:0.7rem;font-weight:800;letter-spacing:0.1em;color:#10B981;margin-bottom:0.75rem;text-transform:uppercase;">
-          🧠 GPT Contextual Analysis
-        </div>
-        <div style="color:#BAC2DE;line-height:1.7;">${renderMarkdown(openai)}</div>
-      </div>`;
-  }
-
-  // Fallback to whichever responded
-  const result = hermes || openai || null;
   if (!result) return null;
 
   return `
     <div>
-      <div style="font-size:0.7rem;font-weight:800;letter-spacing:0.1em;color:#10B981;margin-bottom:0.75rem;text-transform:uppercase;">
-        🧠 Nexus AI Analysis
+      <div style="font-size:0.7rem;font-weight:800;letter-spacing:0.1em;color:var(--primary);margin-bottom:0.75rem;text-transform:uppercase;">
+        🧠 Nexus Dual-Engine (Quant + Context)
       </div>
       <div style="color:#BAC2DE;line-height:1.7;">${renderMarkdown(result)}</div>
     </div>`;
