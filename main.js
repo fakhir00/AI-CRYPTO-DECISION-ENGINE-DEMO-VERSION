@@ -407,8 +407,8 @@ async function syncLiveApis() {
       renderSmartMoneyFlow();
       renderWhalePage(); // Update the dedicated whale page
       
-      ALPHA_SIGNALS.push({ time: "Live Alert", text: "Heavy on-chain stablecoin rotation detected across smart money addresses.", impact: "high" });
-      ALPHA_SIGNALS.push({ time: "Live Alert", text: `Top whale executed a massive ${whales[0].token || 'USDC'} transaction worth $${whales[0].value.toFixed(1)}M.`, impact: "high" });
+      ALPHA_SIGNALS.push({ time: "Live Alert", text: "Heavy on-chain crypto asset rotation detected across smart money addresses.", impact: "high" });
+      ALPHA_SIGNALS.push({ time: "Live Alert", text: `Top whale executed a massive ${whales[0].token || 'ETH'} transaction worth $${whales[0].value.toFixed(1)}M.`, impact: "high" });
       ALPHA_SIGNALS.push({ time: "Live Alert", text: "Institutional flow algorithms detect accumulation in top 10 assets.", impact: "medium" });
     }
 
