@@ -346,23 +346,23 @@ function renderMarkdown(md) {
 
   html = html
     // Headers
-    .replace(/^###\s+(.+)$/gm, '<div style="font-size:0.95rem;font-weight:800;color:#fff;margin:1rem 0 0.5rem;border-bottom:1px solid rgba(255,255,255,0.08);padding-bottom:0.4rem;">$1</div>')
-    .replace(/^##\s+(.+)$/gm, '<div style="font-size:1.05rem;font-weight:800;color:#fff;margin:1.25rem 0 0.5rem;border-bottom:1px solid rgba(255,255,255,0.08);padding-bottom:0.4rem;">$1</div>')
-    .replace(/^#\s+(.+)$/gm, '<div style="font-size:1.15rem;font-weight:900;color:#fff;margin:1.25rem 0 0.5rem;">$1</div>')
+    .replace(/^###\s+(.+)$/gm, '<div style="font-size:0.92rem;font-weight:800;color:#fff;margin:0.75rem 0 0.25rem;border-bottom:1px solid rgba(255,255,255,0.08);padding-bottom:0.2rem;">$1</div>')
+    .replace(/^##\s+(.+)$/gm, '<div style="font-size:1rem;font-weight:800;color:#fff;margin:0.75rem 0 0.25rem;border-bottom:1px solid rgba(255,255,255,0.08);padding-bottom:0.2rem;">$1</div>')
+    .replace(/^#\s+(.+)$/gm, '<div style="font-size:1.1rem;font-weight:900;color:#fff;margin:0.75rem 0 0.25rem;">$1</div>')
     // Unordered lists (asterisks, dashes, bullets)
-    .replace(/^\s*[-•*]\s+(.+)$/gm, '<div style="padding-left:0.5rem;margin:0.4rem 0;display:flex;gap:0.5rem;"><span style="color:var(--primary);flex-shrink:0;">▸</span><span>$1</span></div>')
+    .replace(/^\s*[-•*]\s+(.+)$/gm, '<div style="padding-left:0.25rem;margin:0.15rem 0;display:flex;gap:0.4rem;"><span style="color:var(--primary);flex-shrink:0;">▸</span><span>$1</span></div>')
     // Numbered lists
-    .replace(/^\s*\d+\.\s+(.+)$/gm, '<div style="padding-left:0.5rem;margin:0.4rem 0;display:flex;gap:0.5rem;"><span style="color:var(--primary);flex-shrink:0;">▸</span><span>$1</span></div>')
+    .replace(/^\s*\d+\.\s+(.+)$/gm, '<div style="padding-left:0.25rem;margin:0.15rem 0;display:flex;gap:0.4rem;"><span style="color:var(--primary);flex-shrink:0;">▸</span><span>$1</span></div>')
     // Bold
     .replace(/\*\*(.*?)\*\*/g, '<strong style="color:#fff;">$1</strong>')
     // Italic
     .replace(/\b_(.*?)_\b/g, '<em>$1</em>') // use word boundaries for italic to avoid breaking urls
     // Inline code
-    .replace(/`([^`]+)`/g, '<code style="background:rgba(139,120,255,0.15);padding:0.15rem 0.4rem;border-radius:4px;font-size:0.85em;color:var(--primary);">$1</code>')
+    .replace(/`([^`]+)`/g, '<code style="background:rgba(139,120,255,0.15);padding:0.1rem 0.3rem;border-radius:4px;font-size:0.85em;color:var(--primary);">$1</code>')
     // Horizontal rules
-    .replace(/^---$/gm, '<hr style="border:none;border-top:1px solid rgba(255,255,255,0.08);margin:1rem 0;"/>')
+    .replace(/^---$/gm, '<hr style="border:none;border-top:1px solid rgba(255,255,255,0.08);margin:0.75rem 0;"/>')
     // Line breaks
-    .replace(/\n\n/g, '<div style="margin-bottom:0.75rem;"></div>')
+    .replace(/\n\n/g, '<div style="margin-bottom:0.4rem;"></div>')
     .replace(/\n/g, '<br/>');
 
   // Restore code blocks
@@ -435,11 +435,11 @@ export async function fetchDualAI(userQuery, assetContext = '') {
   if (!result) return null;
 
   return `
-    <div>
-      <div style="font-size:0.7rem;font-weight:800;letter-spacing:0.1em;color:var(--primary);margin-bottom:0.75rem;text-transform:uppercase;">
+    <div style="width:100%;">
+      <div style="font-size:0.65rem;font-weight:800;letter-spacing:0.1em;color:var(--primary);margin-bottom:0.4rem;text-transform:uppercase;opacity:0.8;">
         🧠 Nexus Dual-Engine (Quant + Context)
       </div>
-      <div style="color:#BAC2DE;line-height:1.7;">${renderMarkdown(result)}</div>
+      <div style="color:#BAC2DE;line-height:1.6;">${renderMarkdown(result)}</div>
     </div>`;
 }
 
