@@ -115,6 +115,33 @@ function seededRandom(seed) {
 const HOUR_SEED = Math.floor(Date.now() / (60 * 60 * 1000));
 const stableRandom = seededRandom(HOUR_SEED);
 
+function generateReason(coin, score) {
+  // Check if coin is from CoinGecko (current_price) or already processed (price)
+  const priceVal = coin.current_price || coin.price || 0;
+  const change = coin.price_change_percentage_24h || coin.change || 0;
+  const mcap = coin.market_cap || 1;
+  const vol = coin.total_volume || 0;
+  const volRatio = vol / mcap;
+  
+  if (score > 85) {
+    if (change > 5) return "Parabolic Momentum Breakout";
+    if (volRatio > 0.15) return "Institutional Accumulation";
+    return "Ultra-High Conviction Trend";
+  }
+  if (score > 75) {
+    if (change > 2) return "Bullish Trend Confirmation";
+    if (volRatio > 0.1) return "Heavy Volume Absorption";
+    return "Positive Alpha Divergence";
+  }
+  if (score < 40) {
+    if (change < -5) return "Aggressive Liquidation Chain";
+    return "Bearish Structural Breakdown";
+  }
+  if (Math.abs(change) < 1) return "Low Volatility Consolidation";
+  return "Market Neutral Equilibrium";
+}
+
+
 // Chart Instances
 let mainMarketChart;
 let socialChart;
@@ -606,7 +633,7 @@ async function syncLiveApis() {
          return {
            symbol, name: coin.name, price: coin.current_price, change: change24h,
            score: alpha, bias: alpha > 75 ? 'bullish' : (alpha < 50 ? 'bearish' : 'neutral'),
-           confidence: Math.min(99, alpha), vol: '$' + (coin.total_volume / 1e9).toFixed(1) + 'B'
+           reason: generateReason(coin, alpha), vol: '$' + (coin.total_volume / 1e9).toFixed(1) + 'B'
          };
       });
     }
@@ -979,7 +1006,7 @@ function renderOpportunitiesPage() {
         </div>
       </td>
       <td><span class="bias-badge bias-${asset.bias}">${asset.bias === 'bullish' ? '🟢 LONG' : (asset.bias === 'bearish' ? '🔴 SHORT' : '⚪ WAIT')}</span></td>
-      <td><span class="text-muted" style="font-size: 0.8rem">${asset.reason}</span></td>
+      <td><span class="text-muted" style="font-size: 0.8rem">${asset.reason || 'Analyzing Technicals...'}</span></td>
       <td><button class="action-btn">Analyze</button></td>
     </tr>
   `).join('');
