@@ -114,29 +114,27 @@ const HOUR_SEED = Math.floor(Date.now() / (60 * 60 * 1000));
 const stableRandom = seededRandom(HOUR_SEED);
 
 function generateReason(coin, score) {
-  // Check if coin is from CoinGecko (current_price) or already processed (price)
-  const priceVal = coin.current_price || coin.price || 0;
   const change = coin.price_change_percentage_24h || coin.change || 0;
   const mcap = coin.market_cap || 1;
   const vol = coin.total_volume || 0;
   const volRatio = vol / mcap;
   
   if (score > 85) {
-    if (change > 5) return "Parabolic Momentum Breakout";
-    if (volRatio > 0.15) return "Institutional Accumulation";
-    return "Ultra-High Conviction Trend";
+    if (change > 5) return "Bull Flag Breakout";
+    if (volRatio > 0.15) return "SMC Structure Flip";
+    return "Trending Pullback";
   }
   if (score > 75) {
-    if (change > 2) return "Bullish Trend Confirmation";
-    if (volRatio > 0.1) return "Heavy Volume Absorption";
-    return "Positive Alpha Divergence";
+    if (change > 2) return "Cup & Handle Pattern";
+    if (volRatio > 0.1) return "Volatility Squeeze";
+    return "Momentum Reversal";
   }
   if (score < 40) {
-    if (change < -5) return "Aggressive Liquidation Chain";
-    return "Bearish Structural Breakdown";
+    if (change < -5) return "Bear Flag Breakdown";
+    return "Head & Shoulders Top";
   }
-  if (Math.abs(change) < 1) return "Low Volatility Consolidation";
-  return "Market Neutral Equilibrium";
+  if (Math.abs(change) < 1) return "Absorption & Exhaustion";
+  return "Ascending Triangle";
 }
 
 
@@ -434,7 +432,10 @@ async function syncLiveApis() {
 
     if (serverAssets) {
       // Use server-computed assets directly (guaranteed cross-device consistency)
-      assets = serverAssets;
+      assets = serverAssets.map(a => {
+        if (!a.reason) a.reason = generateReason(a, a.score);
+        return a;
+      });
     } else if (marketData && marketData.length > 0) {
       // Fallback: compute client-side (only if server endpoint is down)
       assets = marketData.map(coin => {
