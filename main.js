@@ -979,7 +979,7 @@ function renderOpportunitiesPage() {
         </div>
       </td>
       <td><span class="bias-badge bias-${asset.bias}">${asset.bias === 'bullish' ? '🟢 LONG' : (asset.bias === 'bearish' ? '🔴 SHORT' : '⚪ WAIT')}</span></td>
-      <td><span class="text-muted">${asset.confidence}%</span></td>
+      <td><span class="text-muted" style="font-size: 0.8rem">${asset.reason}</span></td>
       <td><button class="action-btn">Analyze</button></td>
     </tr>
   `).join('');
@@ -1385,7 +1385,7 @@ function setupAiResearchChat() {
     history.scrollTop = history.scrollHeight;
 
     // Fetch from AI with full platform context
-    const assetCtx = assets.map(a => `${a.symbol}: $${a.price} (${a.change >= 0 ? '+' : ''}${a.change.toFixed(2)}%)`).join(' | ');
+    const assetCtx = assets.map(a => `${a.symbol}: $${a.price} (${a.change >= 0 ? '+' : ''}${a.change.toFixed(2)}%) - Rationale: ${a.reason}`).join(' | ');
     const dualRes = await fetchDualAI(val, `LATEST LIVE DATA: ${assetCtx}`);
 
     history.removeChild(loadingMsg);

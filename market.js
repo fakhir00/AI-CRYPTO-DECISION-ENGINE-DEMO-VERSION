@@ -8,7 +8,7 @@
 
 let cachedData = null;
 let cacheTimestamp = 0;
-const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+const CACHE_TTL = 15 * 1000; // 15 seconds (High-Precision Snapshot)
 
 const COINGECKO_KEY = 'CG-7gTv8kk2qS7r8kj515m2rVQJ';
 const COINS = [
@@ -30,6 +30,29 @@ function computeAlphaScore(coin) {
   return Math.round(Math.min(100, Math.max(0, momentumRaw + volConviction + mcapTier + stability)));
 }
 
+function generateReason(coin, score) {
+  const change = coin.price_change_percentage_24h || 0;
+  const volRatio = coin.market_cap > 0 ? (coin.total_volume / coin.market_cap) : 0;
+  
+  if (score > 85) {
+    if (change > 5) return "Parabolic Momentum Breakout";
+    if (volRatio > 0.15) return "Institutional Accumulation";
+    return "Ultra-High Conviction Trend";
+  }
+  if (score > 75) {
+    if (change > 2) return "Bullish Trend Confirmation";
+    if (volRatio > 0.1) return "Heavy Volume Absorption";
+    return "Positive Alpha Divergence";
+  }
+  if (score < 40) {
+    if (change < -5) return "Aggressive Liquidation Chain";
+    return "Bearish Structural Breakdown";
+  }
+  if (Math.abs(change) < 1) return "Low Volatility Consolidation";
+  return "Market Neutral Equilibrium";
+}
+
+
 export default async function handler(req, res) {
   // Set CORS headers
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -49,13 +72,29 @@ export default async function handler(req, res) {
       + `?vs_currency=usd&ids=${COINS.join(',')}`
       + `&x_cg_demo_api_key=${COINGECKO_KEY}&sparkline=false`;
 
-    const response = await fetch(url, { cache: 'no-store' });
-    if (!response.ok) throw new Error(`CoinGecko HTTP ${response.status}`);
-    const coins = await response.json();
+    const [cgRes, binanceRes] = await Promise.all([
+      fetch(url, { cache: 'no-store' }),
+      fetch('https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT')
+    ]);
+
+    if (!cgRes.ok) throw new Error(`CoinGecko HTTP ${cgRes.status}`);
+    const coins = await cgRes.json();
+    
+    let binanceBtcPrice = null;
+    if (binanceRes.ok) {
+      const bData = await binanceRes.json();
+      binanceBtcPrice = parseFloat(bData.price);
+    }
 
     // Compute scores server-side (deterministic, same for every client)
     const assets = coins.map(coin => {
       const symbol = coin.symbol.toUpperCase();
+      let price = coin.current_price;
+
+      // Overwrite BTC with real-time Binance price for absolute accuracy
+      if (symbol === 'BTC' && binanceBtcPrice) {
+        price = binanceBtcPrice;
+      }
       const alpha = computeAlphaScore(coin);
       const change = coin.price_change_percentage_24h || 0;
       
@@ -66,7 +105,7 @@ export default async function handler(req, res) {
         change,
         score: alpha,
         bias: alpha > 75 ? 'bullish' : (alpha < 50 ? 'bearish' : 'neutral'),
-        confidence: Math.min(99, alpha),
+        reason: generateReason(coin, alpha),
         vol: '$' + (coin.total_volume / 1e9).toFixed(1) + 'B',
         market_cap_rank: coin.market_cap_rank,
         market_cap: coin.market_cap,
