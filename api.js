@@ -522,7 +522,7 @@ Your core decision-making is based on the NEXUS High-Probability Framework:
 CRITICAL RISK MANAGEMENT (Backtested to 75.7% accuracy across 20 assets):
 - Stop-Loss is non-negotiable. Use 1.5 ATR for SL placement.
 - Risk per trade must be 1-2% of account size.
-- Set TP at 1.0 ATR for high-probability hit rate.
+- Set Final TP (Target 4) at 4.0 ATR to guarantee a Minimum 2.6:1 Risk/Reward Ratio.
 - Max leverage: 5x. Never exceed 5x. Use inverse volatility to set leverage.
 - Only use Trending Pullback and SMC Structure Flip strategies.
 

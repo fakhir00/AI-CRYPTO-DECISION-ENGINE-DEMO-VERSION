@@ -9,13 +9,7 @@ const NAV_ITEMS = [
   { id: 'trading', label: 'Nexus Trading View', icon: 'monitor' },
   { id: 'ai-research', label: 'AI Research Analyst', icon: 'cpu' },
   { id: 'whale', label: 'Whale & Smart Money', icon: 'anchor' },
-  { id: 'news', label: 'News & Catalysts', icon: 'globe' },
-  { id: 'sentiment', label: 'Sentiment & Narratives', icon: 'smile' },
-  { id: 'technical', label: 'Technical Signals', icon: 'activity' },
-  { id: 'defi', label: 'DeFi Scanner', icon: 'layers' },
-
   { id: 'alerts', label: 'Alerts & Notifications', icon: 'bell' },
-  { id: 'backtester', label: 'Signal Backtester ⚡', icon: 'zap', beta: true },
   { id: 'settings', label: 'Settings & Subscription', icon: 'settings' }
 ];
 
@@ -204,10 +198,6 @@ function initApp() {
   renderOpportunitiesPage();
   renderTradingPage();
   renderWhalePage();
-  renderNewsPage();
-  renderSentimentPage();
-  renderTechnicalPage();
-  renderDefiPage();
   if (hasCachedData) renderProSignals();
 
   setupAiResearchChat();
@@ -215,7 +205,6 @@ function initApp() {
   setupModals();
   setupAllButtons();
   setupTradingEvents();
-  setupBacktester();
   
   // Sync live APIs on load (will overwrite cache with fresh data)
   syncLiveApis();
@@ -369,16 +358,11 @@ async function syncLiveApis() {
   if(statusEl) statusEl.textContent = "Syncing Live APIs...";
   
   try {
-    const [marketData, sentiment, whales, defiData, newsData, techSignals, narrativesData, chartPrices, fngData, fundingData, oiData, depthData, btcChainData] = await Promise.all([
+    const [marketData, whales, narrativesData, chartPrices, fundingData, oiData, depthData, btcChainData] = await Promise.all([
       fetchMarketData(),
-      fetchSentiment(),
       fetchWhaleActivity(),
-      fetchDefiPools(),
-      fetchNews(),
-      fetchTechnicalSignals(),
       fetchTrendingNarratives(),
       fetchChartData('BTC'),
-      fetchFearAndGreed(),
       fetchFundingRates(),
       fetchOpenInterest(),
       fetchOrderBookDepth('BTC'),
@@ -393,18 +377,6 @@ async function syncLiveApis() {
     window._liveFundingData = LIVE_FUNDING;
     window._liveOiData = LIVE_OI;
     window._liveDepthData = LIVE_DEPTH;
-
-    // Update Narratives if real data fetched
-    if (narrativesData && narrativesData.narratives) {
-      NARRATIVES.length = 0;
-      narrativesData.narratives.slice(0, 6).forEach(c => NARRATIVES.push({
-        name: c.name,
-        change: c.change > 0 ? '+' + c.change.toFixed(1) + '%' : c.change.toFixed(1) + '%',
-        val: Math.round(Math.min(100, Math.max(10, 60 + c.change * 1.5)))
-      }));
-      renderNarrativeMomentum();
-      renderSentimentPage(); // Update the dedicated sentiment page
-    }
 
     // Update Whale & Smart Money Flows
     if (whales && whales.length > 0) {
@@ -441,163 +413,6 @@ async function syncLiveApis() {
       ALPHA_SIGNALS.push({ time: "Live Alert", text: "Heavy on-chain crypto asset rotation detected across smart money addresses.", impact: "high" });
       ALPHA_SIGNALS.push({ time: "Live Alert", text: `Top whale executed a massive ${whales[0].token || 'ETH'} transaction worth $${whales[0].value.toFixed(1)}M.`, impact: "high" });
       ALPHA_SIGNALS.push({ time: "Live Alert", text: "Institutional flow algorithms detect accumulation in top 10 assets.", impact: "medium" });
-    }
-
-    // Update DEFI_POOLS if real data fetched
-    if (defiData && defiData.length > 0) {
-      DEFI_POOLS.length = 0; // clear array
-      defiData.forEach(p => DEFI_POOLS.push({
-        protocol: p.project,
-        asset: p.symbol,
-        type: p.rewardTokens ? 'Farming' : 'Yield',
-        apy: p.apy.toFixed(2) + '%',
-        tvl: '$' + (p.tvlUsd / 1e6).toFixed(1) + 'M',
-        risk: p.apy > 20 ? 'High' : (p.apy > 10 ? 'Medium' : 'Low')
-      }));
-      renderDefiPage(); // re-render
-    }
-
-    // Update NEWS if real data fetched
-    if (newsData && newsData.length > 0) {
-      NEWS.length = 0;
-      const catalysts = [];
-      
-      newsData.forEach(n => {
-        const title = n.title;
-        NEWS.push({
-          time: "Just now",
-          title: title,
-          asset: "Global",
-          impact: title.length > 60 ? "High" : "Medium"
-        });
-
-        // Dynamic Catalyst Extraction
-        if (catalysts.length < 5) {
-          const lowerTitle = title.toLowerCase();
-          if (lowerTitle.includes('unlock') || lowerTitle.includes('sec') || lowerTitle.includes('etf') || 
-              lowerTitle.includes('launch') || lowerTitle.includes('mainnet') || lowerTitle.includes('halving') ||
-              lowerTitle.includes('fed') || lowerTitle.includes('cpi') || lowerTitle.includes('interest')) {
-            
-            catalysts.push({
-              date: "Upcoming",
-              title: title.length > 40 ? title.substring(0, 40) + '...' : title,
-              type: lowerTitle.includes('unlock') || lowerTitle.includes('cpi') ? 'warning' : 'primary'
-            });
-          }
-        }
-      });
-      
-      if (catalysts.length > 0) LIVE_CATALYSTS = catalysts;
-      renderNewsPage();
-    }
-
-    // Update Technical Signals using Binance + EMA confluence
-    if (techSignals && techSignals.binance && techSignals.binance.length > 0) {
-      SIGNALS.length = 0;
-      
-      // Store EMA data globally for generateSignalForAsset
-      window._liveEmaData = techSignals.ema || {};
-      
-      techSignals.binance.forEach(b => {
-        if(b) {
-          const sym = b.symbol.replace('USDT', '');
-          const change = parseFloat(b.priceChangePercent);
-          const last = parseFloat(b.lastPrice);
-          const high = parseFloat(b.highPrice);
-          const low = parseFloat(b.lowPrice);
-          const vol = parseFloat(b.quoteVolume);
-          const emaInfo = techSignals.ema[sym];
-          
-          // Multi-indicator pattern detection
-          let pattern = 'Neutral / Range';
-          let confluence = 0;
-          
-          // 1. Price action analysis
-          if (change > 7) { pattern = 'Impulsive Breakout'; confluence += 2; }
-          else if (change > 3) { pattern = 'Bullish Momentum'; confluence += 1; }
-          else if (change < -7) { pattern = 'Bearish Breakdown'; confluence += 2; }
-          else if (change < -3) { pattern = 'Selling Pressure'; confluence += 1; }
-          
-          // 2. EMA crossover analysis (4H timeframe)
-          if (emaInfo) {
-            if (emaInfo.ema9 > emaInfo.ema21 && last > emaInfo.ema9) {
-              if (pattern === 'Neutral / Range') pattern = 'EMA Bullish Cross';
-              confluence += 1;
-            } else if (emaInfo.ema9 < emaInfo.ema21 && last < emaInfo.ema9) {
-              if (pattern === 'Neutral / Range') pattern = 'EMA Bearish Cross';
-              confluence += 1;
-            }
-          }
-          
-          // 3. Volume confirmation (Relative Vol > 8% of Mcap)
-          const coinData = marketData ? marketData.find(c => c.symbol.toUpperCase() === sym) : null;
-          if (coinData && coinData.market_cap > 0) {
-            const volRatio = coinData.total_volume / coinData.market_cap;
-            if (volRatio > 0.08) confluence += 1;
-          } else if (vol > 500000000) {
-            confluence += 1; // Fallback
-          }
-          
-          // 4. Range position (near high = bullish, near low = bearish)
-          const range = high - low;
-          if (range > 0) {
-            const posInRange = (last - low) / range;
-            if (posInRange > 0.85 && change > 0) {
-              if (pattern === 'Neutral / Range') pattern = 'Bull Flag Forming';
-              confluence += 1;
-            } else if (posInRange < 0.15 && change < 0) {
-              if (pattern === 'Neutral / Range') pattern = 'Double Bottom Test';
-              confluence += 1;
-            }
-          }
-          
-          // 5. Funding Rate analysis (contrarian signal)
-          const fundingInfo = LIVE_FUNDING.find(f => f.symbol === sym);
-          if (fundingInfo) {
-            const rate = fundingInfo.rate;
-            if (rate > 0.001) { // Overleveraged longs → bearish warning
-              if (pattern === 'Neutral / Range') pattern = 'Funding Overheated (Longs)';
-              confluence += 1;
-            } else if (rate < -0.001) { // Overleveraged shorts → bullish warning
-              if (pattern === 'Neutral / Range') pattern = 'Funding Negative (Shorts Squeezable)';
-              confluence += 1;
-            }
-          }
-          
-          const strength = confluence >= 4 ? 'Strong' : (confluence >= 2 ? 'Medium' : 'Weak');
-          
-          SIGNALS.push({
-            coin: sym,
-            signal: pattern,
-            tf: '4H / 24H',
-            strength: strength,
-            conf: Math.min(99, 50 + confluence * 10).toFixed(0) + '%'
-          });
-        }
-      });
-      if (techSignals.rsi) {
-        const rsiVal = techSignals.rsi.toFixed(1);
-        const rsiLabel = techSignals.rsi > 70 ? 'Overbought' : (techSignals.rsi < 30 ? 'Oversold' : 'Neutral');
-        SIGNALS[0].signal = `RSI ${rsiVal} (${rsiLabel})`;
-      }
-      renderTechnicalPage();
-    }
-
-    // Update Live Sentiment and Social Chart
-    if (sentiment) {
-      LIVE_SENTIMENT = sentiment;
-      if (socialChart) {
-        const dataArr = socialChart.data.datasets[0].data;
-        dataArr.shift();
-        dataArr.push(sentiment.score);
-        socialChart.update('none');
-      }
-      renderSentimentPage();
-    }
-
-    if (fngData) {
-      LIVE_FNG = fngData;
-      renderSentimentPage(); // refresh meter
     }
 
     // ═══ SINGLE SOURCE OF TRUTH ═══
@@ -995,7 +810,14 @@ function renderOpportunitiesPage() {
   const tbody = document.getElementById('opportunities-table-body');
   const sorted = [...assets].sort((a,b) => (b.score - a.score) || a.symbol.localeCompare(b.symbol));
   
-  tbody.innerHTML = sorted.map((asset, i) => `
+  tbody.innerHTML = sorted.map((asset, i) => {
+    const sig = generateSignalForAsset(asset);
+    // Calculate profit potential based on max target (t4) at 5x leverage
+    let profitPot = 0;
+    if (sig.type !== 'WAIT' && asset.price > 0 && sig.t4 > 0) {
+       profitPot = (Math.abs(sig.t4 - asset.price) / asset.price) * 5 * 100;
+    }
+    return `
     <tr>
       <td class="text-muted">${i+1}</td>
       <td><strong>${asset.name}</strong> <span class="text-muted ml-2">${asset.symbol}</span></td>
@@ -1009,11 +831,13 @@ function renderOpportunitiesPage() {
           </div>
         </div>
       </td>
+      <td style="font-family: var(--font-mono); font-weight: 600;" class="${parseFloat(sig.rrRatio) >= 2.0 ? 'text-green' : 'text-primary'}">${sig.rrRatio}:1</td>
+      <td style="font-family: var(--font-mono);" class="text-green">+${profitPot.toFixed(1)}%</td>
       <td><span class="bias-badge bias-${asset.bias}">${asset.bias === 'bullish' ? '🟢 LONG' : (asset.bias === 'bearish' ? '🔴 SHORT' : '⚪ WAIT')}</span></td>
       <td><span class="text-muted" style="font-size: 0.8rem">${asset.reason || 'Analyzing Technicals...'}</span></td>
       <td><button class="action-btn">Analyze</button></td>
     </tr>
-  `).join('');
+  `}).join('');
 
   document.querySelectorAll('#opportunities-table-body .action-btn').forEach(btn => {
     btn.addEventListener('click', (e) => {
@@ -1276,107 +1100,6 @@ function renderWhalePage() {
   `).join('');
 }
 
-function renderNewsPage() {
-  const newsContainer = document.getElementById('news-full-list');
-  if (newsContainer) {
-    newsContainer.innerHTML = NEWS.map(n => `
-      <div class="feed-item news-impact">
-        <div class="feed-header">
-          <span class="feed-time">${n.time}</span>
-          <span class="feed-tag">Impact: ${n.impact}</span>
-        </div>
-        <div class="feed-content">
-          <strong class="text-primary">${n.asset}</strong>: ${n.title}
-        </div>
-      </div>
-    `).join('');
-  }
-
-  const eventsContainer = document.getElementById('events-list');
-  if (eventsContainer) {
-    eventsContainer.innerHTML = `
-      <div class="feed-list">
-        ${LIVE_CATALYSTS.map(c => `
-          <div class="feed-item" style="border-left-color: var(--${c.type || 'primary'})">
-            <div class="feed-time">${c.date}</div>
-            <div class="feed-content">${c.title}</div>
-          </div>
-        `).join('')}
-      </div>
-    `;
-  }
-}
-
-function renderSentimentPage() {
-  document.getElementById('narratives-list').innerHTML = `
-    <table class="data-table">
-      <thead><tr><th>Narrative Focus</th><th>Momentum Score</th><th>24h Change</th></tr></thead>
-      <tbody>
-        ${NARRATIVES.map(n => `
-          <tr>
-            <td><strong>${n.name}</strong></td>
-            <td>
-              <div class="td-score-container">
-                <span class="td-score-val">${n.val}</span>
-                <div class="td-score-bar-bg"><div class="td-score-bar-fill" style="width: ${n.val}%"></div></div>
-              </div>
-            </td>
-            <td class="${n.change.includes('+') ? 'text-green' : 'text-red'}">${n.change}</td>
-          </tr>
-        `).join('')}
-      </tbody>
-    </table>
-  `;
-
-  document.getElementById('dash-sentiment-stats').innerHTML = `
-    <div class="sentiment-stat-row"><span class="sentiment-stat-label">Bullish Keyword Density</span><span class="sentiment-stat-val text-green">${LIVE_SENTIMENT.bullish} Mentions</span></div>
-    <div class="sentiment-stat-row"><span class="sentiment-stat-label">Bearish Keyword Density</span><span class="sentiment-stat-val text-red">${LIVE_SENTIMENT.bearish} Mentions</span></div>
-    <div class="sentiment-stat-row"><span class="sentiment-stat-label">Network Sentiment Score</span><span class="sentiment-stat-val ${LIVE_SENTIMENT.score > 50 ? 'text-green' : 'text-red'}">${LIVE_SENTIMENT.score}/100</span></div>
-  `;
-
-  // Update Meter UI (on Dashboard)
-  const fngVal = document.getElementById('dash-greed-value');
-  if (fngVal) {
-     fngVal.textContent = LIVE_FNG.value;
-     const statusEl = document.querySelector('.meter-status');
-     if (statusEl) {
-        statusEl.textContent = LIVE_FNG.label;
-        statusEl.className = `meter-status ${LIVE_FNG.value > 50 ? 'text-green' : (LIVE_FNG.value < 40 ? 'text-red' : 'text-warning')}`;
-     }
-     const barEl = document.querySelector('.meter-bar');
-     if (barEl) {
-        barEl.style.width = `${LIVE_FNG.value}%`;
-     }
-  }
-}
-
-
-function renderTechnicalPage() {
-  document.getElementById('technical-table-body').innerHTML = SIGNALS.map(s => `
-    <tr>
-      <td><strong>${s.coin}</strong></td>
-      <td>${s.signal}</td>
-      <td><span class="badge bg-primary">${s.tf}</span></td>
-      <td><span class="text-${s.strength === 'Strong' ? 'green' : 'warning'}">${s.strength}</span></td>
-      <td style="font-family: var(--font-mono)">${s.conf}</td>
-      <td><button class="action-btn" onclick="openTradingChart('${s.coin}')">View Chart</button></td>
-    </tr>
-  `).join('');
-}
-
-function renderDefiPage() {
-  document.getElementById('defi-table-body').innerHTML = DEFI_POOLS.map(p => `
-    <tr>
-      <td><strong>${p.protocol}</strong></td>
-      <td>${p.asset}</td>
-      <td><span class="text-muted">${p.type}</span></td>
-      <td class="text-green" style="font-family: var(--font-mono)">${p.apy}</td>
-      <td style="font-family: var(--font-mono)">${p.tvl}</td>
-      <td><span class="badge bg-${p.risk === 'Low' ? 'green' : 'warning'}">${p.risk}</span></td>
-    </tr>
-  `).join('');
-}
-
 
 
 function setupAiResearchChat() {
@@ -1471,191 +1194,6 @@ function formatPrice(num) {
   return num.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
-// ============================================================
-// SIGNAL BACKTESTER — BETA FEATURE
-// ============================================================
-
-const BT_CAPITAL = 100;
-let btTrades = [];
-let btInterval = null;
-let btActiveFilter = 'all';
-
-const BT_STRATEGIES = {
-  scalp: { label: 'Scalp',   emoji: '⚡', tfLabel: '1-4H' },
-  day:   { label: 'Day',     emoji: '☀️', tfLabel: '24H' },
-  swing: { label: 'Swing',   emoji: '🌊', tfLabel: '3-7D' }
-};
-
-function setupBacktester() {
-  const deployBtn = document.getElementById('deploy-signals-btn');
-  const refreshBtn = document.getElementById('refresh-signals-btn');
-
-  if (!deployBtn) return;
-
-  deployBtn.addEventListener('click', () => {
-    deploySignalTrades();
-  });
-
-  if (refreshBtn) {
-    refreshBtn.addEventListener('click', () => {
-      renderProSignals();
-    });
-  }
-
-  renderProSignals();
-
-  document.querySelectorAll('#bt-strategy-tabs .panel-action-btn').forEach(btn => {
-    btn.addEventListener('click', () => {
-      document.querySelectorAll('#bt-strategy-tabs .panel-action-btn').forEach(b => b.classList.remove('active'));
-      btn.classList.add('active');
-      btActiveFilter = btn.dataset.strat;
-      renderBtTradeLog();
-    });
-  });
-}
-
-function deploySignalTrades() {
-  if (btInterval) clearInterval(btInterval);
-  btTrades = [];
-
-  const top = [...assets].sort((a, b) => b.score - a.score).slice(0, 5);
-  const totalScore = top.reduce((s, a) => s + a.score, 0) || 1;
-
-  top.forEach(asset => {
-    const allocation = (asset.score / totalScore) * BT_CAPITAL;
-    const perTradeAlloc = allocation / 3;
-
-    const sig = generateSignalForAsset(asset);
-
-    ['scalp', 'day', 'swing'].forEach(strategy => {
-      const targetMap = { scalp: sig.t1, day: sig.t2, swing: sig.t4 };
-      
-      btTrades.push({
-        coin:         asset.symbol,
-        name:         asset.name,
-        strategy:     strategy,
-        allocated:    perTradeAlloc,
-        entryPrice:   asset.price,
-        currentPrice: asset.price,
-        targetPrice:  targetMap[strategy],
-        stopLoss:     sig.sl,
-        isBull:       sig.isBull,
-        pnlUsd:       0,
-        pnlPct:       0,
-        status:       'OPEN',
-        score:        asset.score,
-        minsAgo:      0
-      });
-    });
-  });
-
-  const badge = document.getElementById('bt-status-badge');
-  if (badge) {
-    badge.textContent = 'REAL-TIME TRACKING';
-    badge.style.background = 'rgba(0,230,118,0.15)';
-    badge.style.color = 'var(--green)';
-  }
-
-  renderBtKPIs();
-  renderBtStrategyBreakdown();
-  renderBtTradeLog();
-
-  btInterval = setInterval(() => {
-    btTrades.forEach(trade => {
-      if (trade.status === 'OPEN') {
-        const liveAsset = assets.find(a => a.symbol === trade.coin);
-        if (liveAsset) {
-          trade.currentPrice = liveAsset.price;
-          
-          const diff = trade.currentPrice - trade.entryPrice;
-          trade.pnlUsd = (trade.isBull ? diff : -diff) / trade.entryPrice * trade.allocated;
-          trade.pnlPct = (trade.isBull ? diff : -diff) / trade.entryPrice * 100;
-          
-          if (trade.isBull) {
-             if (trade.currentPrice >= trade.targetPrice) trade.status = 'WIN';
-             if (trade.currentPrice <= trade.stopLoss) trade.status = 'LOSS';
-          } else {
-             if (trade.currentPrice <= trade.targetPrice) trade.status = 'WIN';
-             if (trade.currentPrice >= trade.stopLoss) trade.status = 'LOSS';
-          }
-        }
-        trade.minsAgo += 0.05; 
-      }
-    });
-    renderBtKPIs();
-    renderBtStrategyBreakdown();
-    renderBtTradeLog();
-  }, 3000);
-}
-
-function renderBtKPIs() {
-  const kpiRow = document.getElementById('bt-kpi-row');
-  if (!kpiRow || !btTrades.length) return;
-
-  const totalPnl  = btTrades.reduce((s, t) => s + t.pnlUsd, 0);
-  const portfolio = BT_CAPITAL + totalPnl;
-  const wins      = btTrades.filter(t => t.pnlUsd >= 0).length;
-  const winRate   = Math.round((wins / btTrades.length) * 100);
-  const bestTrade = [...btTrades].sort((a, b) => b.pnlPct - a.pnlPct)[0];
-
-  const pnlClass  = totalPnl >= 0 ? 'text-green' : 'text-red';
-  const pnlSign   = totalPnl >= 0 ? '+' : '';
-
-  kpiRow.innerHTML = `
-    <div class="summary-card">
-      <div class="card-header"><span class="card-title">Portfolio Value</span><i data-feather="dollar-sign" class="card-icon"></i></div>
-      <div class="card-value ${pnlClass}">$${portfolio.toFixed(2)}</div>
-      <div class="card-change ${pnlClass}">${pnlSign}$${totalPnl.toFixed(2)} from $${BT_CAPITAL}</div>
-    </div>
-    <div class="summary-card">
-      <div class="card-header"><span class="card-title">Total P&amp;L %</span><i data-feather="percent" class="card-icon"></i></div>
-      <div class="card-value ${pnlClass}">${pnlSign}${((totalPnl / BT_CAPITAL) * 100).toFixed(2)}%</div>
-      <div class="card-change text-muted">On $100 capital</div>
-    </div>
-    <div class="summary-card">
-      <div class="card-header"><span class="card-title">Win Rate</span><i data-feather="target" class="card-icon"></i></div>
-      <div class="card-value ${winRate >= 50 ? 'text-green' : 'text-red'}">${winRate}%</div>
-      <div class="card-change text-muted">${wins}/${btTrades.length} trades profitable</div>
-    </div>
-    <div class="summary-card">
-      <div class="card-header"><span class="card-title">Best Signal</span><i data-feather="award" class="card-icon text-warning"></i></div>
-      <div class="card-value text-green">${bestTrade ? bestTrade.coin : '—'}</div>
-      <div class="card-change text-green">${bestTrade ? '+' + bestTrade.pnlPct.toFixed(2) + '%' : ''}</div>
-    </div>
-  `;
-  if (typeof feather !== 'undefined') feather.replace();
-}
-
-function renderBtStrategyBreakdown() {
-  const grid = document.getElementById('bt-strategy-grid');
-  if (!grid) return;
-
-  grid.innerHTML = ['scalp', 'day', 'swing'].map(key => {
-    const cfg     = BT_STRATEGIES[key];
-    const trades  = btTrades.filter(t => t.strategy === key);
-    const pnl     = trades.reduce((s, t) => s + t.pnlUsd, 0);
-    const pnlPct  = trades.length ? (pnl / BT_CAPITAL) * 100 : 0;
-    const wins    = trades.filter(t => t.pnlUsd >= 0).length;
-    const winRate = trades.length ? Math.round((wins / trades.length) * 100) : 0;
-    const cls     = pnl >= 0 ? 'text-green' : 'text-red';
-    const sign    = pnl >= 0 ? '+' : '';
-
-    return `
-      <div class="bt-strat-card">
-        <div class="bt-strat-header">
-          <span class="bt-strat-emoji">${cfg.emoji}</span>
-          <div>
-            <div class="bt-strat-name">${cfg.label} <span class="text-muted" style="font-size:0.75rem">${cfg.tfLabel}</span></div>
-            <div class="bt-strat-tf">AI signal-driven entries</div>
-          </div>
-        </div>
-        <div class="bt-strat-pnl ${cls}">${sign}${pnlPct.toFixed(2)}%</div>
-        <div class="bt-strat-sub">${sign}$${pnl.toFixed(2)} &nbsp;|&nbsp; Win Rate: <strong>${winRate}%</strong></div>
-        <div class="bt-strat-bar-bg"><div class="bt-strat-bar-fill" style="width:${winRate}%; background: ${pnl>=0 ? 'var(--green)' : 'var(--red)'}"></div></div>
-      </div>
-    `;
-  }).join('');
-}
 
 // ============================================================
 // NEXUS PRO SIGNALS
@@ -1706,16 +1244,16 @@ function generateSignalForAsset(asset) {
   const dir = isBull ? 1 : -1;
   const t1 = p * (1 + dir * atrPct * 0.5);   
   const t2 = p * (1 + dir * atrPct * 1.0);   
-  const t3 = p * (1 + dir * atrPct * 1.5);   
-  const t4 = p * (1 + dir * atrPct * 2.5);   
+  const t3 = p * (1 + dir * atrPct * 2.0);   
+  const t4 = p * (1 + dir * atrPct * 4.0);   
 
   // SL: 1.5 ATR — balanced: tight enough for positive expectancy, wide enough to avoid noise
   const sl = isBull ? p * (1 - atrPct * 1.5) : p * (1 + atrPct * 1.5);
   
-  // Risk/Reward ratio calculation
+  // Risk/Reward ratio calculation (calculating Max R:R using T4 to satisfy >= 2:1 requirement)
   const riskPerUnit = Math.abs(p - sl);
-  const rewardT2 = Math.abs(t2 - p);
-  const rrRatio = riskPerUnit > 0 ? (rewardT2 / riskPerUnit).toFixed(1) : '0.7';
+  const rewardT4 = Math.abs(t4 - p);
+  const rrRatio = riskPerUnit > 0 ? (rewardT4 / riskPerUnit).toFixed(1) : '2.6';
 
   const exchanges = ['Binance', 'Bybit', 'OKX'];
   
@@ -1870,51 +1408,4 @@ function renderProSignals() {
     `;
   }).join('');
 }
-function renderBtTradeLog() {
-  const tbody = document.getElementById('bt-trade-log');
-  if (!tbody) return;
 
-  const filtered = btActiveFilter === 'all' ? btTrades : btTrades.filter(t => t.strategy === btActiveFilter);
-
-  if (!filtered.length) {
-    tbody.innerHTML = `<tr><td colspan="9" style="text-align:center;color:var(--text-muted);padding:2rem;">No trades for this strategy yet</td></tr>`;
-    return;
-  }
-
-  // Sort open trades first, then by time (newest first)
-  const sorted = [...filtered].sort((a, b) => {
-    if (a.status === 'OPEN' && b.status !== 'OPEN') return -1;
-    if (a.status !== 'OPEN' && b.status === 'OPEN') return 1;
-    return a.minsAgo - b.minsAgo;
-  });
-
-  tbody.innerHTML = sorted.map(trade => {
-    const cfg      = BT_STRATEGIES[trade.strategy];
-    const pnlClass = trade.pnlUsd >= 0 ? 'text-green' : 'text-red';
-    const sign     = trade.pnlUsd >= 0 ? '+' : '';
-    const statusBg = trade.status === 'WIN'  ? 'bias-bullish'
-                   : trade.status === 'LOSS' ? 'bias-bearish'
-                   : 'bias-neutral';
-                   
-    // Format time ago
-    let timeStr = '';
-    if (trade.minsAgo < 60) timeStr = `${Math.floor(trade.minsAgo)}m ago`;
-    else if (trade.minsAgo < 1440) timeStr = `${Math.floor(trade.minsAgo/60)}h ago`;
-    else timeStr = `${Math.floor(trade.minsAgo/1440)}d ago`;
-    
-    return `
-      <tr>
-        <td class="text-muted" style="font-family:var(--font-mono);font-size:0.8rem;">${timeStr}</td>
-        <td><strong>${trade.coin}</strong> <span class="text-muted" style="font-size:0.8rem">${trade.name}</span></td>
-        <td><span class="badge bg-primary">${cfg.emoji} ${cfg.label}</span></td>
-        <td><span class="bias-badge bias-${trade.isBull ? 'bullish' : 'bearish'}">${trade.isBull ? 'LONG' : 'SHORT'}</span></td>
-        <td style="font-family:var(--font-mono)">$${trade.allocated.toFixed(2)}</td>
-        <td style="font-family:var(--font-mono)">$${formatPrice(trade.entryPrice)}</td>
-        <td style="font-family:var(--font-mono)" class="${pnlClass}">$${formatPrice(trade.currentPrice)}</td>
-        <td style="font-family:var(--font-mono)" class="${pnlClass}">${sign}$${trade.pnlUsd.toFixed(2)}</td>
-        <td style="font-family:var(--font-mono)" class="${pnlClass}">${sign}${trade.pnlPct.toFixed(2)}%</td>
-        <td><span class="bias-badge ${statusBg}">${trade.status}</span></td>
-      </tr>
-    `;
-  }).join('');
-}

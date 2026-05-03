@@ -224,6 +224,8 @@
                       <th>Price</th>
                       <th>24h %</th>
                       <th>Alpha Score</th>
+                      <th>R:R Ratio</th>
+                      <th>Profit Pot. (5x)</th>
                       <th>Algorithmic Bias</th>
                       <th>Trade Rationale</th>
                       <th>Action</th>
@@ -333,91 +335,13 @@
             </div>
           </div>
 
-          <!-- 5. News & Catalysts -->
-          <div class="page" id="page-news">
-             <div class="news-grid">
-                <div class="panel span-2">
-                  <div class="panel-header">
-                    <h2 class="panel-title"><i data-feather="globe"></i> Live Alpha Feed</h2>
-                  </div>
-                  <div class="panel-body feed-list" id="news-full-list"></div>
-                </div>
-                <div class="panel">
-                  <div class="panel-header">
-                    <h2 class="panel-title"><i data-feather="calendar"></i> Catalyst Calendar</h2>
-                  </div>
-                  <div class="panel-body" id="events-list"></div>
-                </div>
-             </div>
-          </div>
 
-          <!-- 6. Sentiment & Narratives -->
-          <div class="page" id="page-sentiment">
-            <div class="sentiment-grid">
-               <div class="panel">
-                 <div class="panel-header">
-                   <h2 class="panel-title"><i data-feather="bar-chart-2"></i> Emerging Narratives</h2>
-                 </div>
-                 <div class="panel-body" id="narratives-list"></div>
-               </div>
-               <div class="panel">
-                 <div class="panel-header">
-                   <h2 class="panel-title"><i data-feather="twitter"></i> Social Volume Momentum</h2>
-                 </div>
-                 <div class="panel-body center-content chart-wrapper">
-                    <canvas id="socialChart"></canvas>
-                 </div>
-               </div>
-            </div>
-          </div>
 
-          <!-- 7. Technical Signals -->
-          <div class="page" id="page-technical">
-            <div class="panel full-height">
-              <div class="panel-header">
-                <h2 class="panel-title"><i data-feather="activity"></i> Algorithmic Setups</h2>
-              </div>
-              <div class="panel-body table-responsive">
-                <table class="data-table">
-                  <thead>
-                    <tr>
-                      <th>Ticker</th>
-                      <th>Pattern Detected</th>
-                      <th>Timeframe</th>
-                      <th>Signal Strength</th>
-                      <th>Win Rate (Backtested)</th>
-                      <th>Action</th>
-                    </tr>
-                  </thead>
-                  <tbody id="technical-table-body"></tbody>
-                </table>
-              </div>
-            </div>
-          </div>
 
-          <!-- 8. DeFi Scanner -->
-          <div class="page" id="page-defi">
-             <div class="panel full-height">
-              <div class="panel-header">
-                <h2 class="panel-title"><i data-feather="layers"></i> Yield Optimization Engine</h2>
-              </div>
-              <div class="panel-body table-responsive">
-                <table class="data-table">
-                  <thead>
-                    <tr>
-                      <th>Protocol</th>
-                      <th>Strategy</th>
-                      <th>Category</th>
-                      <th>Base APY</th>
-                      <th>Liquidity (TVL)</th>
-                      <th>Smart Contract Risk</th>
-                    </tr>
-                  </thead>
-                  <tbody id="defi-table-body"></tbody>
-                </table>
-              </div>
-            </div>
-          </div>
+
+
+
+
 
           <!-- 10. Alerts -->
           <div class="page" id="page-alerts">
@@ -509,100 +433,7 @@
              </div>
           </div>
 
-          <!-- 12. Beta Signal Backtester -->
-          <div class="page" id="page-backtester">
-            <div class="beta-banner">
-              <div class="beta-banner-inner">
-                <div class="beta-icon-wrap"><i data-feather="zap"></i></div>
-                <div>
-                  <div class="beta-banner-title">🧪 Signal Backtester — Beta Feature</div>
-                  <div class="beta-banner-sub">Paper trades $100 based on live Nexus AI signals. No real money. Tracks profitability across Scalp, Day & Swing strategies.</div>
-                </div>
-                <div style="margin-left: auto; display: flex; gap: 0.75rem;">
-                  <button class="btn-primary" id="deploy-signals-btn">
-                    <i data-feather="play"></i> Deploy $100 Signal Trade
-                  </button>
-                </div>
-              </div>
-            </div>
-            
-            <!-- ⚡ Autonomous Audit Section -->
-            <div class="panel mb-4" id="bt-audit-panel">
-              <div class="panel-header">
-                <h2 class="panel-title"><i data-feather="terminal"></i> NEXUS Autonomous Audit</h2>
-                <button class="btn-primary" id="run-audit-btn"><i data-feather="zap"></i> Run 100-Trade Simulation</button>
-              </div>
-              <div class="panel-body" id="audit-results-container">
-                 <div style="text-align:center;color:var(--text-muted);padding:2rem;">
-                   Ready to audit. This will simulate 100 institutional-grade trades based on current market regimes.
-                 </div>
-              </div>
-            </div>
 
-            <!-- KPI Row -->
-            <div class="summary-row" id="bt-kpi-row"></div>
-
-            <!-- Strategy Tabs -->
-            <div class="panel mb-4">
-              <div class="panel-header">
-                <h2 class="panel-title"><i data-feather="bar-chart-2"></i> Strategy Performance Breakdown</h2>
-                <div class="panel-actions" id="bt-strategy-tabs">
-                  <button class="panel-action-btn active" data-strat="all">All</button>
-                  <button class="panel-action-btn" data-strat="scalp">⚡ Scalp (1-4H)</button>
-                  <button class="panel-action-btn" data-strat="day">☀️ Day (24H)</button>
-                  <button class="panel-action-btn" data-strat="swing">🌊 Swing (3-7D)</button>
-                </div>
-              </div>
-              <div class="panel-body">
-                <div class="bt-strategy-grid" id="bt-strategy-grid"></div>
-              </div>
-            </div>
-
-            <!-- NEXUS Pro Signals Panel -->
-            <div class="panel mb-4">
-              <div class="panel-header">
-                <h2 class="panel-title"><i data-feather="send"></i> NEXUS Pro Signals</h2>
-                <div style="display:flex;gap:0.75rem;align-items:center;">
-                  <span class="panel-badge ai-badge">LIVE SIGNALS</span>
-                  <button class="action-btn" id="refresh-signals-btn"><i data-feather="refresh-cw" style="width:14px;height:14px;"></i> Refresh</button>
-                </div>
-              </div>
-              <div class="panel-body">
-                <div class="signals-grid" id="pro-signals-grid">
-                  <div style="text-align:center;color:var(--text-muted);padding:3rem;">
-                    Generating signals from live Alpha scores...
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <!-- Trade Log -->
-            <div class="panel">
-              <div class="panel-header">
-                <h2 class="panel-title"><i data-feather="list"></i> Live Trade Log</h2>
-                <span class="panel-badge ai-badge" id="bt-status-badge">AWAITING SIGNAL</span>
-              </div>
-              <div class="panel-body table-responsive">
-                <table class="data-table table-hover">
-                  <thead>
-                    <tr>
-                      <th>Time</th>
-                      <th>Coin</th>
-                      <th>Strategy</th>
-                      <th>Direction</th>
-                      <th>Allocated</th>
-                      <th>Entry Price</th>
-                      <th>Current Price</th>
-                      <th>P&amp;L $</th>
-                      <th>P&amp;L %</th>
-                      <th>Status</th>
-                    </tr>
-                  </thead>
-                  <tbody id="bt-trade-log"><tr><td colspan="10" style="text-align:center;color:var(--text-muted);padding:3rem;">Click "Deploy $100 Signal Trade" to start simulation</td></tr></tbody>
-                </table>
-              </div>
-            </div>
-          </div>
 
         </main>
       </div>
