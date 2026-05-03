@@ -82,7 +82,11 @@ function loadDataCache() {
     
     // Hydrate all data stores
     if (cache.assets && cache.assets.length > 0) {
-      assets = cache.assets;
+      assets = cache.assets.map(a => {
+        // Self-heal: If cached asset lacks 'reason', generate it now
+        if (!a.reason) a.reason = generateReason(a, a.score);
+        return a;
+      });
       WHALE_ACTIONS.length = 0; cache.WHALE_ACTIONS?.forEach(w => WHALE_ACTIONS.push(w));
       SMART_MONEY_FLOWS.length = 0; cache.SMART_MONEY_FLOWS?.forEach(s => SMART_MONEY_FLOWS.push(s));
       NARRATIVES.length = 0; cache.NARRATIVES?.forEach(n => NARRATIVES.push(n));
