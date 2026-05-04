@@ -323,10 +323,87 @@
 
 
 
-          <!-- 10. Alerts -->
-          <div class="page" id="page-alerts">
+          <!-- 5. Self-Learning Engine -->
+          <div class="page" id="page-backtest">
             <div class="panel full-height">
               <div class="panel-header">
+                <h2 class="panel-title"><i data-feather="cpu"></i> Autonomous Self-Learning Engine</h2>
+                <div class="panel-actions">
+                  <button class="btn-primary btn-sm" id="start-learning-btn"><i data-feather="play"></i> Initiate Deep Learning</button>
+                </div>
+              </div>
+              <div class="panel-body">
+                <div class="summary-row mb-4">
+                  <div class="summary-card">
+                    <div class="card-header"><span class="card-title">Generations Trained</span></div>
+                    <div class="card-value text-primary" id="bt-generations" style="font-family: var(--font-mono)">0</div>
+                  </div>
+                  <div class="summary-card">
+                    <div class="card-header"><span class="card-title">Trades Simulated</span></div>
+                    <div class="card-value" id="bt-trades" style="font-family: var(--font-mono)">0</div>
+                  </div>
+                  <div class="summary-card">
+                    <div class="card-header"><span class="card-title">Win Rate Accuracy</span></div>
+                    <div class="card-value text-green" id="bt-accuracy" style="font-family: var(--font-mono)">54.2%</div>
+                  </div>
+                  <div class="summary-card">
+                    <div class="card-header"><span class="card-title">Alpha Confidence</span></div>
+                    <div class="card-value text-warning" id="bt-confidence">Sub-Optimal</div>
+                  </div>
+                </div>
+
+                <div class="dashboard-grid mb-4">
+                  <!-- Live Feed of learning -->
+                  <div class="panel">
+                    <div class="panel-header">
+                      <h2 class="panel-title"><i data-feather="activity"></i> Neural Backtest Feed</h2>
+                    </div>
+                    <div class="panel-body feed-list" id="bt-live-feed" style="height: 350px; overflow-y: auto; font-family: var(--font-mono); font-size: 0.85rem; padding-right: 10px;">
+                       <div class="text-muted text-center mt-4">System idling. Ready to ingest historical tick data.</div>
+                    </div>
+                  </div>
+
+                  <!-- Model Weights Adjustment -->
+                  <div class="panel">
+                    <div class="panel-header">
+                      <h2 class="panel-title"><i data-feather="sliders"></i> Dynamic Weight Adjustments</h2>
+                    </div>
+                    <div class="panel-body">
+                      <div class="weight-bar">
+                        <div style="display:flex; justify-content:space-between; margin-bottom: 0.5rem; font-size: 0.85rem; color: var(--text-muted);">
+                           <span>Sentiment Bias</span> <span id="w-sent" style="color:var(--text-color)">20.0%</span>
+                        </div>
+                        <div class="td-score-bar-bg" style="height: 8px; border-radius: 4px; overflow: hidden; background: rgba(255,255,255,0.05);"><div class="td-score-bar-fill" id="w-bar-sent" style="width: 20%; height: 100%; background: var(--primary); transition: width 0.3s ease;"></div></div>
+                      </div>
+                      <div class="weight-bar mt-4">
+                        <div style="display:flex; justify-content:space-between; margin-bottom: 0.5rem; font-size: 0.85rem; color: var(--text-muted);">
+                           <span>Whale Flow Impact</span> <span id="w-whale" style="color:var(--text-color)">35.0%</span>
+                        </div>
+                        <div class="td-score-bar-bg" style="height: 8px; border-radius: 4px; overflow: hidden; background: rgba(255,255,255,0.05);"><div class="td-score-bar-fill" id="w-bar-whale" style="width: 35%; height: 100%; background: var(--green); transition: width 0.3s ease;"></div></div>
+                      </div>
+                      <div class="weight-bar mt-4">
+                        <div style="display:flex; justify-content:space-between; margin-bottom: 0.5rem; font-size: 0.85rem; color: var(--text-muted);">
+                           <span>Technical Volatility</span> <span id="w-tech" style="color:var(--text-color)">25.0%</span>
+                        </div>
+                        <div class="td-score-bar-bg" style="height: 8px; border-radius: 4px; overflow: hidden; background: rgba(255,255,255,0.05);"><div class="td-score-bar-fill" id="w-bar-tech" style="width: 25%; height: 100%; background: var(--warning); transition: width 0.3s ease;"></div></div>
+                      </div>
+                      <div class="weight-bar mt-4">
+                        <div style="display:flex; justify-content:space-between; margin-bottom: 0.5rem; font-size: 0.85rem; color: var(--text-muted);">
+                           <span>Macro News</span> <span id="w-news" style="color:var(--text-color)">20.0%</span>
+                        </div>
+                        <div class="td-score-bar-bg" style="height: 8px; border-radius: 4px; overflow: hidden; background: rgba(255,255,255,0.05);"><div class="td-score-bar-fill" id="w-bar-news" style="width: 20%; height: 100%; background: var(--red); transition: width 0.3s ease;"></div></div>
+                      </div>
+                      
+                      <div class="mt-4" style="padding: 1rem; background: rgba(0,200,83,0.1); border: 1px solid rgba(0,200,83,0.2); border-radius: 8px;">
+                         <div style="display:flex; align-items:center; gap: 0.5rem; color: var(--green); font-weight: bold; margin-bottom: 0.5rem;"><i data-feather="check-circle" width="16"></i> Convergence Status</div>
+                         <p style="font-size: 0.85rem; color: var(--text-muted); margin: 0;" id="bt-status-text">Awaiting backtest initiation. Weights are currently at default baseline.</p>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
                 <h2 class="panel-title"><i data-feather="bell"></i> Active Triggers</h2>
                 <button class="btn-primary btn-sm" id="new-alert-page-btn"><i data-feather="plus"></i> New Trigger</button>
               </div>

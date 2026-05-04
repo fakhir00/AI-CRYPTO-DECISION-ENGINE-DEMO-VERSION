@@ -69,8 +69,29 @@ export async function fetchMarketData() {
     console.log('✅ CoinGecko data fetched:', data.length, 'coins');
     return data;
   } catch (e) {
-    console.warn('⚠️ CoinGecko failed, using mock data:', e.message);
-    return null;
+    console.warn('⚠️ CoinGecko failed, attempting robust fallback to CoinCap.io:', e.message);
+    try {
+      // CoinCap API is 100% free, no auth required, MIT-listed in public-apis
+      const coincapRes = await fetch('https://api.coincap.io/v2/assets?ids=bitcoin,ethereum,solana,injective-protocol,avalanche,arbitrum');
+      if (!coincapRes.ok) throw new Error(`CoinCap HTTP ${coincapRes.status}`);
+      const coincapData = await coincapRes.json();
+      console.log('✅ CoinCap fallback data fetched:', coincapData.data.length, 'coins');
+      
+      // Map CoinCap schema to perfectly match CoinGecko schema for seamless integration
+      return coincapData.data.map(c => ({
+        id: c.id,
+        symbol: c.symbol.toLowerCase(),
+        name: c.name,
+        current_price: parseFloat(c.priceUsd),
+        market_cap: parseFloat(c.marketCapUsd),
+        total_volume: parseFloat(c.volumeUsd24Hr),
+        price_change_percentage_24h: parseFloat(c.changePercent24Hr),
+        market_cap_rank: parseInt(c.rank)
+      }));
+    } catch(err) {
+      console.warn('⚠️ CoinCap fallback also failed:', err.message);
+      return null;
+    }
   }
 }
 
@@ -477,23 +498,45 @@ export async function fetchOrderBookDepth(symbol = 'BTC') {
   }
 }
 
-// ─── 4C-5. Blockchain.com: BTC Network Health (FREE, NO KEY) ─────────────────
+// ─── 4C-5. Mempool.space: BTC Network Health (FREE, NO KEY) ─────────────────
 export async function fetchBtcOnChain() {
   try {
-    const [hashRate, unconfirmed, difficulty] = await Promise.all([
-      fetch('https://blockchain.info/q/hashrate').then(r => r.text()).catch(() => '0'),
-      fetch('https://blockchain.info/q/unconfirmedcount').then(r => r.text()).catch(() => '0'),
-      fetch('https://blockchain.info/q/getdifficulty').then(r => r.text()).catch(() => '0')
+    // Using mempool.space (100% Free, Opensource from public-apis) to replace legacy blockchain.info
+    const [hashrateRes, blocksRes, mempoolRes] = await Promise.all([
+      fetch('https://mempool.space/api/v1/mining/hashrate/3d').catch(() => null),
+      fetch('https://mempool.space/api/v1/blocks').catch(() => null),
+      fetch('https://mempool.space/api/mempool').catch(() => null)
     ]);
     
-    console.log('✅ BTC on-chain stats fetched');
+    let currentHashrate = '0';
+    if (hashrateRes && hashrateRes.ok) {
+        const hrData = await hashrateRes.json();
+        // Get most recent hashrate in EH/s
+        currentHashrate = (hrData.currentHashrate / 1e18).toFixed(2);
+    }
+    
+    let unconfirmed = 0;
+    if (mempoolRes && mempoolRes.ok) {
+        const mData = await mempoolRes.json();
+        unconfirmed = mData.count;
+    }
+    
+    let difficulty = '0';
+    if (blocksRes && blocksRes.ok) {
+        const bData = await blocksRes.json();
+        if (bData.length > 0) {
+           difficulty = (bData[0].difficulty / 1e12).toFixed(2);
+        }
+    }
+    
+    console.log('✅ BTC on-chain stats fetched from Mempool.space');
     return {
-      hashRate: (parseFloat(hashRate) / 1e9).toFixed(2), // GH/s → EH/s
+      hashRate: currentHashrate,
       unconfirmedTx: parseInt(unconfirmed),
-      difficulty: (parseFloat(difficulty) / 1e12).toFixed(2) // → T
+      difficulty: difficulty
     };
   } catch (e) {
-    console.warn('⚠️ Blockchain.com failed:', e.message);
+    console.warn('⚠️ Mempool.space failed:', e.message);
     return null;
   }
 }
