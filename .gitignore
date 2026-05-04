@@ -25,3 +25,11 @@ dist-ssr
 
 # Environment Variables
 .env
+
+# Python / Backend
+backend/venv/
+venv/
+__pycache__/
+*.pyc
+historical_data.csv
+nexus_trading_agent_ppo.zip
