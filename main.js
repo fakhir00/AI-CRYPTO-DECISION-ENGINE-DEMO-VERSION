@@ -9,7 +9,6 @@ const NAV_ITEMS = [
   { id: 'trading', label: 'Nexus Trading View', icon: 'monitor' },
   { id: 'ai-research', label: 'AI Research Analyst', icon: 'cpu' },
   { id: 'whale', label: 'Whale & Smart Money', icon: 'anchor' },
-  { id: 'backtest', label: 'Self-Learning Engine', icon: 'database', beta: true },
   { id: 'alerts', label: 'Alerts & Notifications', icon: 'bell' },
   { id: 'settings', label: 'Settings & Subscription', icon: 'settings' }
 ];
@@ -204,7 +203,6 @@ function initApp() {
   setupModals();
   setupAllButtons();
   setupTradingEvents();
-  setupBacktester();
   
   // Sync live APIs on load (will overwrite cache with fresh data)
   syncLiveApis();
@@ -1426,138 +1424,3 @@ function renderProSignals() {
     `;
   }).join('');
 }
-
-
-// ============================================================
-// SELF-LEARNING BACKTEST ENGINE
-// ============================================================
-
-let btInterval;
-let btRunning = false;
-
-function setupBacktester() {
-  const btn = document.getElementById('start-learning-btn');
-  if(btn) {
-    btn.addEventListener('click', () => {
-      if(btRunning) {
-        btRunning = false;
-        clearInterval(btInterval);
-        btn.innerHTML = `<i data-feather="play"></i> Initiate Deep Learning`;
-        feather.replace();
-        document.getElementById('bt-status-text').textContent = "Learning paused. Weights preserved.";
-      } else {
-        btRunning = true;
-        btn.innerHTML = `<i data-feather="square"></i> Pause Learning`;
-        feather.replace();
-        document.getElementById('bt-status-text').textContent = "Ingesting past 5 years of tick data. Adjusting weights for optimal alpha...";
-        startBacktester();
-      }
-    });
-  }
-}
-
-function startBacktester() {
-  let generations = parseInt(document.getElementById('bt-generations').textContent.replace(/,/g, '')) || 0;
-  let trades = parseInt(document.getElementById('bt-trades').textContent.replace(/,/g, '')) || 0;
-  let accuracy = parseFloat(document.getElementById('bt-accuracy').textContent) || 54.2;
-  
-  let wSent = 20.0, wWhale = 35.0, wTech = 25.0, wNews = 20.0;
-  
-  const feed = document.getElementById('bt-live-feed');
-  feed.innerHTML = ''; // clear initial text
-  
-  btInterval = setInterval(() => {
-    generations += Math.floor(Math.random() * 5) + 1;
-    trades += Math.floor(Math.random() * 150) + 50;
-    
-    // Simulate accuracy improvement logarithmically approaching 82%
-    const targetAcc = 82.5;
-    const diff = targetAcc - accuracy;
-    accuracy += (diff * 0.02) + (Math.random() * 0.4 - 0.2); // Add some noise
-    if(accuracy > 85) accuracy = 85;
-
-    // Simulate weight adjustments based on what "works"
-    // Whale and Tech usually dominate crypto
-    wWhale += (Math.random() * 1.0 - 0.3); // trends upward
-    wTech += (Math.random() * 1.0 - 0.4);  // trends upward
-    wSent -= (Math.random() * 1.0 - 0.2);  // trends downward
-    wNews -= (Math.random() * 1.0 - 0.1);  // trends downward
-    
-    // Normalize weights to 100%
-    const total = wWhale + wTech + wSent + wNews;
-    wWhale = (wWhale/total) * 100;
-    wTech = (wTech/total) * 100;
-    wSent = (wSent/total) * 100;
-    wNews = (wNews/total) * 100;
-
-    // Update UI Stats
-    document.getElementById('bt-generations').textContent = generations.toLocaleString();
-    document.getElementById('bt-trades').textContent = trades.toLocaleString();
-    document.getElementById('bt-accuracy').textContent = accuracy.toFixed(1) + '%';
-    
-    const conf = document.getElementById('bt-confidence');
-    if (accuracy > 75) { conf.textContent = "High Conviction"; conf.className = "card-value text-green"; }
-    else if (accuracy > 65) { conf.textContent = "Optimal"; conf.className = "card-value text-primary"; }
-    else { conf.textContent = "Calibrating"; conf.className = "card-value text-warning"; }
-
-    // Update Bars
-    document.getElementById('w-sent').textContent = wSent.toFixed(1) + '%';
-    document.getElementById('w-bar-sent').style.width = wSent + '%';
-    
-    document.getElementById('w-whale').textContent = wWhale.toFixed(1) + '%';
-    document.getElementById('w-bar-whale').style.width = wWhale + '%';
-    
-    document.getElementById('w-tech').textContent = wTech.toFixed(1) + '%';
-    document.getElementById('w-bar-tech').style.width = wTech + '%';
-    
-    document.getElementById('w-news').textContent = wNews.toFixed(1) + '%';
-    document.getElementById('w-bar-news').style.width = wNews + '%';
-
-    // Add feed item
-    const assetsList = ['BTC', 'ETH', 'SOL', 'INJ', 'AVAX'];
-    const asset = assetsList[Math.floor(Math.random() * assetsList.length)];
-    const isWin = Math.random() < (accuracy / 100);
-    const pnl = isWin ? '+' + (Math.random() * 15 + 2).toFixed(1) + '%' : '-' + (Math.random() * 5 + 1).toFixed(1) + '%';
-    
-    const item = document.createElement('div');
-    item.style.padding = "0.5rem 0";
-    item.style.borderBottom = "1px solid var(--border-color)";
-    item.style.display = "flex";
-    item.style.justifyContent = "space-between";
-    
-    let reasoning = "";
-    if (isWin) {
-      reasoning = `Gen ${generations}: Learned strong correlation between ${asset} Whale Inflow and RSI. Adjusting Tech weight.`;
-      item.innerHTML = `
-        <span><span class="text-primary">[TEST]</span> Short ${asset} / Long ${asset}</span>
-        <span>Result: <strong class="text-green">${pnl}</strong></span>
-      `;
-    } else {
-      reasoning = `Gen ${generations}: False breakout on ${asset}. Model penalized. Reducing Sentiment bias.`;
-      item.innerHTML = `
-        <span><span class="text-warning">[ERR]</span> Failed setup on ${asset}</span>
-        <span>Result: <strong class="text-red">${pnl}</strong></span>
-      `;
-    }
-    
-    // add reasoning underneath
-    const reasonDiv = document.createElement('div');
-    reasonDiv.style.color = "var(--text-muted)";
-    reasonDiv.style.fontSize = "0.75rem";
-    reasonDiv.style.marginTop = "0.25rem";
-    reasonDiv.textContent = reasoning;
-    
-    const wrap = document.createElement('div');
-    wrap.appendChild(item);
-    wrap.appendChild(reasonDiv);
-    
-    feed.prepend(wrap);
-    
-    // keep only last 50
-    if(feed.children.length > 50) {
-      feed.removeChild(feed.lastChild);
-    }
-
-  }, 1200); // run every 1.2s to simulate fast learning
-}
-

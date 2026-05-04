@@ -1,0 +1,6 @@
+ccxt
+pandas
+ta
+gymnasium
+stable-baselines3
+numpy
