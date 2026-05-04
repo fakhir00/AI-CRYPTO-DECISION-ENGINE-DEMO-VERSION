@@ -29,15 +29,14 @@ def main():
     env = DummyVecEnv([lambda: CryptoTradingEnv(features_df)])
     
     # 3. Initialize Model
-    # PPO is robust and standard for RL environments
-    model = PPO("MlpPolicy", env, verbose=1, learning_rate=0.0003, n_steps=2048)
+    # Faster learning rate to jump out of local minima
+    model = PPO("MlpPolicy", env, verbose=1, learning_rate=0.001, n_steps=2048)
     
     # 4. Train Model
     print("Starting 24/7 Training Loop. Press Ctrl+C to stop.")
     try:
-        # Train for a set number of timesteps. In reality, you'd loop this continuously
-        # or train on huge rolling datasets.
-        model.learn(total_timesteps=100_000)
+        # Doubling timesteps to ensure convergence
+        model.learn(total_timesteps=200_000)
         
         # Save the model
         model.save("nexus_trading_agent_ppo")

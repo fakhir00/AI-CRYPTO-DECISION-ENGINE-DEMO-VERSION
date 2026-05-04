@@ -59,11 +59,20 @@ class CryptoTradingEnv(gym.Env):
                 self.crypto_held = 0
                 
         # Calculate new net worth
+        last_net_worth = self.net_worth
         self.net_worth = self.balance + (self.crypto_held * current_price)
         self.max_net_worth = max(self.net_worth, self.max_net_worth)
         
-        # Calculate Reward (Change in net worth)
-        reward = self.net_worth - self.initial_balance
+        # Calculate Reward
+        # Greed Hack: We multiply the net worth change by 1000 to make profit
+        # extremely attractive to the neural network.
+        net_worth_change = (self.net_worth - last_net_worth) / last_net_worth
+        
+        reward = net_worth_change * 1000 
+        
+        # Aggressive Inactivity Penalty: Force the agent to take risks
+        if action == 0 and self.crypto_held == 0:
+            reward -= 0.1 
         
         # Move to next step
         self.current_step += 1
