@@ -537,6 +537,13 @@ function setupSidebar() {
 }
 
 function navigateToPage(pageId) {
+  const targetPage = document.getElementById(`page-${pageId}`);
+  if (!targetPage) {
+    console.warn(`Page not found: ${pageId}`);
+    showToast(`Page "${pageId}" is unavailable.`);
+    return;
+  }
+
   document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
   const activeNav = document.querySelector(`.nav-item[data-page="${pageId}"]`);
   if(activeNav) activeNav.classList.add('active');
@@ -549,7 +556,7 @@ function navigateToPage(pageId) {
   document.querySelectorAll('.page').forEach(page => {
     page.classList.remove('active');
   });
-  document.getElementById(`page-${pageId}`).classList.add('active');
+  targetPage.classList.add('active');
 }
 
 function updateTime() {
@@ -940,7 +947,11 @@ function setupAllButtons() {
 
   // 5. Header Search & Alerts
   const searchBtn = document.getElementById('search-btn');
-  if(searchBtn) searchBtn.addEventListener('click', () => navigateToPage('command'));
+  if(searchBtn) searchBtn.addEventListener('click', () => {
+    navigateToPage('ai-research');
+    const aiInput = document.getElementById('ai-chat-input');
+    if (aiInput) aiInput.focus();
+  });
 
   const headerAlertBtn = document.getElementById('alert-btn');
   if(headerAlertBtn) headerAlertBtn.addEventListener('click', () => {
@@ -1549,5 +1560,4 @@ function startBacktester() {
 
   }, 1200); // run every 1.2s to simulate fast learning
 }
-
 
