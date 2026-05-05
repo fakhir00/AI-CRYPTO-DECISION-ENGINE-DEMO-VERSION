@@ -4,12 +4,22 @@ import pandas as pd
 import numpy as np
 import ccxt
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from stable_baselines3 import PPO
 from data_pipeline import engineer_features, fetch_order_book_obi, fetch_funding_rate, fetch_whale_flow
 from typing import List, Optional
 
 app = FastAPI(title="NEXUS AI Trading Engine API")
+
+# Enable CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # Load model
 MODEL_PATH = "backend/nexus_trading_agent_ppo.zip"
