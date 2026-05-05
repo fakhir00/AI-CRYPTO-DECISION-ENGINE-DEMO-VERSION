@@ -361,6 +361,24 @@ export async function fetchTrendingNarratives() {
   }
 }
 
+// ─── 4B-3. NEXUS PPO Engine: Live AI Predictions ─────────────────────────────
+export async function fetchAIPrediction(symbol = 'BTC/USDT') {
+  try {
+    const res = await fetch('http://localhost:8000/predict', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ symbol, timeframe: '1h' })
+    });
+    if (!res.ok) throw new Error(`AI Engine HTTP ${res.status}`);
+    const data = await res.json();
+    console.log(`✅ AI Prediction fetched for ${symbol}:`, data.action_label);
+    return data;
+  } catch (e) {
+    console.warn(`⚠️ AI Engine prediction failed for ${symbol}:`, e.message);
+    return null;
+  }
+}
+
 // ─── 4C. Binance & TAAPI: Technical Signals ──────────────────────────────────
 export async function fetchTechnicalSignals(symbols = ['BTC', 'ETH', 'SOL', 'INJ', 'AVAX', 'ARB', 'ONDO']) {
   try {

@@ -1,5 +1,5 @@
 import './style.css';
-import { fetchMarketData, fetchBinancePatterns, fetchGlobalMarketData, fetchWhaleActivity, fetchSentiment, fetchFearAndGreed, fetchAIAnalysis, fetchHermesAnalysis, fetchDualAI, calculateAlphaScore, fetchDefiPools, fetchNews, fetchTechnicalSignals, fetchTrendingNarratives, fetchChartData, fetchFundingRates, fetchOpenInterest, fetchOrderBookDepth, fetchBtcOnChain, addToAIMemory, clearAIMemory, getAIMemory } from './api.js';
+import { fetchMarketData, fetchBinancePatterns, fetchGlobalMarketData, fetchWhaleActivity, fetchSentiment, fetchFearAndGreed, fetchAIAnalysis, fetchHermesAnalysis, fetchDualAI, calculateAlphaScore, fetchDefiPools, fetchNews, fetchTechnicalSignals, fetchTrendingNarratives, fetchChartData, fetchFundingRates, fetchOpenInterest, fetchOrderBookDepth, fetchBtcOnChain, addToAIMemory, clearAIMemory, getAIMemory, fetchAIPrediction } from './api.js';
 
 
 // --- Navigation & Setup ---
@@ -465,7 +465,19 @@ async function syncLiveApis() {
     }
 
     if (assets.length > 0) {
-      
+      // ═══ PPO ENGINE INTEGRATION ═══
+      // Fetch actual RL Model predictions for the top 3 assets
+      const top3 = assets.slice(0, 3);
+      await Promise.all(top3.map(async (asset) => {
+        const prediction = await fetchAIPrediction(`${asset.symbol}/USDT`);
+        if (prediction) {
+          asset.ppo_prediction = prediction.action_label;
+          asset.ppo_action = prediction.action;
+          // Override heuristic bias with model prediction
+          asset.bias = prediction.action === 1 ? 'bullish' : (prediction.action === 2 ? 'bearish' : 'neutral');
+        }
+      }));
+
       renderDashboard();
       renderOpportunitiesPage();
       renderProSignals();
@@ -1342,9 +1354,9 @@ function renderProSignals() {
             <span class="signal-envelope">📪</span>
             <span class="signal-symbol">#${asset.symbol}/USDT</span>
             <span class="signal-dir-badge ${sig.isBull ? 'sig-long' : 'sig-short'}">${dirIcon} ${dirLabel}</span>
-            <span class="badge bg-primary ml-2" style="font-size: 0.65rem; border: 1px solid rgba(255,255,255,0.1)">${sig.type}</span>
+            <span class="badge bg-primary ml-2" style="font-size: 0.65rem; border: 1px solid rgba(255,255,255,0.1)">${asset.ppo_prediction ? 'RL-ENGINE' : sig.type}</span>
           </div>
-          <div class="signal-strength ${sig.strength.cls}">${sig.strength.label} ●</div>
+          <div class="signal-strength ${sig.strength.cls}">${asset.ppo_prediction ? 'AI OPTIMIZED' : sig.strength.label} ●</div>
         </div>
 
         <!-- Exchanges -->
