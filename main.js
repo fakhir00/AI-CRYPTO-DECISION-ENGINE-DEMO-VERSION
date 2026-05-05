@@ -481,6 +481,7 @@ async function syncLiveApis() {
       renderDashboard();
       renderOpportunitiesPage();
       renderProSignals();
+      renderAiReports(); // Update Deep Dive Reports with live data
       saveDataCache(); // Persist to localStorage for cross-device consistency
       if(statusEl) statusEl.textContent = "Live Feed Synced";
     }
@@ -1070,23 +1071,51 @@ window.openTradingChart = function(coin) {
 }
 
 function setupAiReports() {
-  const reportCards = document.querySelectorAll('#ai-report-list .report-card');
-  reportCards.forEach(card => {
-    card.addEventListener('click', () => {
-      const title = card.querySelector('h4').textContent;
-      const input = document.getElementById('ai-chat-input');
-      const submitBtn = document.getElementById('ai-chat-submit');
-      
-      if (input && submitBtn) {
-        input.value = `Generate a comprehensive Deep Dive Intelligence Report on: ${title}. Include on-chain data, social narrative maps, and potential trade impact.`;
-        submitBtn.click();
-        
-        // Scroll to chat
-        const chatBody = document.querySelector('.chat-body');
-        if (chatBody) chatBody.scrollTop = 0;
-      }
-    });
-  });
+  // Now handled by renderAiReports dynamically
+}
+
+async function renderAiReports() {
+  const reportList = document.getElementById('ai-report-list');
+  if (!reportList) return;
+
+  const { narratives } = await fetchTrendingNarratives();
+  const news = await fetchNews();
+
+  // Combine top 2 narratives and top 1 news item into reports
+  const reports = [
+    ...narratives.slice(0, 2).map(n => ({
+      title: `${n.name} Intelligence`,
+      desc: `Deep dive into the ${n.name} sector. Market Cap: ${n.marketCap} | 24h Trend: ${n.change.toFixed(1)}%`,
+      prompt: `Analyze the current state of the ${n.name} narrative. What are the top protocols, on-chain flows, and potential risk factors?`
+    })),
+    ...news.slice(0, 1).map(item => ({
+      title: item.title.length > 30 ? item.title.substring(0, 30) + '...' : item.title,
+      desc: `Analysis of the latest institutional developments in the crypto market.`,
+      prompt: `Deep dive into this news topic: "${item.title}". How does this impact the broader market and specific asset valuations?`
+    }))
+  ];
+
+  reportList.innerHTML = reports.map(r => `
+    <div class="report-card" onclick="triggerDeepDiveReport('${r.title}', '${r.prompt}')">
+       <h4>${r.title}</h4>
+       <p>${r.desc}</p>
+       <button class="btn-sm btn-secondary mt-2">Read Report</button>
+    </div>
+  `).join('');
+}
+
+window.triggerDeepDiveReport = function(title, prompt) {
+  const input = document.getElementById('ai-chat-input');
+  const submitBtn = document.getElementById('ai-chat-submit');
+  
+  if (input && submitBtn) {
+    input.value = prompt;
+    submitBtn.click();
+    
+    // Scroll to chat
+    const chatBody = document.querySelector('.chat-body');
+    if (chatBody) chatBody.scrollTop = 0;
+  }
 }
 
 function setupTradingEvents() {
@@ -1359,11 +1388,6 @@ function renderProSignals() {
           <div class="signal-strength ${sig.strength.cls}">${asset.ppo_prediction ? 'AI OPTIMIZED' : sig.strength.label} ●</div>
         </div>
 
-        <!-- Exchanges -->
-        <div class="signal-row">
-          <span class="signal-label">Exchange</span>
-          <span class="signal-value">${sig.exchanges.join(', ')}</span>
-        </div>
 
         <!-- Leverage -->
         <div class="signal-row">

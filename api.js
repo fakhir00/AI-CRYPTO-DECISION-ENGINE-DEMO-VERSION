@@ -617,7 +617,7 @@ CRITICAL CONSTRAINTS:
 1. STRUCTURE: Your response must be clean, professional, and zero-fluff.
 2. TOP 5 REASONS: Start with "### 📊 Institutional Thesis" and list EXACTLY the top 5 technical/on-chain reasons why this trade was chosen (e.g., OBI imbalance, Whale accumulation, 200EMA confluence, RSI divergence, Liquidation heatmap).
 3. LEVERAGE: Suggest leverage based on asset volatility (ATR). High volatility = 1x-3x. Low volatility = 4x-10x. Max 10x.
-4. SIGNAL FORMAT: Provide a plain-text code block at the end for easy copying.
+4. SIGNAL FORMAT: Provide a plain-text code block at the end for easy copying. DO NOT include any Exchange info.
 
 DATA PRIORITY:
 - Always prioritize numerical data from the LATEST message.
@@ -764,7 +764,7 @@ CRITICAL CONSTRAINTS:
 1. STRUCTURE: Your response must be clean, professional, and zero-fluff.
 2. TOP 5 REASONS: Start with "### 📊 Institutional Thesis" and list EXACTLY the top 5 technical/on-chain reasons why this trade was chosen.
 3. LEVERAGE: Suggest leverage based on asset volatility (ATR). High volatility = 1x-3x. Low volatility = 4x-10x. Max 10x.
-4. SIGNAL FORMAT: Provide a plain-text code block at the end for easy copying.
+4. SIGNAL FORMAT: Provide a plain-text code block at the end for easy copying. DO NOT include any Exchange info.
 
 TRADE SETUP FORMAT (Code Block):
 \x60\x60\x60
