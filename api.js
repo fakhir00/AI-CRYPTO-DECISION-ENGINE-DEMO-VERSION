@@ -624,7 +624,7 @@ DATA PRIORITY:
 - Use conversation memory to track the active coin.
 
 TRADE SETUP FORMAT (Code Block):
-\```
+\`\`\`
 # [COIN]/USDT - [DIRECTION]
 Strategy: [Strategy Name]
 Leverage: [X]x [Cross/Isolated]
@@ -638,7 +638,7 @@ TP 3: [Price]
 TP 4: [Price] (Moonbag)
 
 Stop Loss: [Price]
-\```
+\`\`\`
 
 NO EXTRA FLUFF. Just the 5 reasons and the signal block.`
     };
@@ -767,7 +767,7 @@ CRITICAL CONSTRAINTS:
 4. SIGNAL FORMAT: Provide a plain-text code block at the end for easy copying.
 
 TRADE SETUP FORMAT (Code Block):
-\```
+\`\`\`
 # [COIN]/USDT - [DIRECTION]
 Strategy: [Strategy Name]
 Leverage: [X]x [Cross/Isolated]
@@ -781,7 +781,7 @@ TP 3: [Price]
 TP 4: [Price] (Moonbag)
 
 Stop Loss: [Price]
-\```
+\`\`\`
 
 NO EXTRA FLUFF.`
           },
