@@ -69,29 +69,8 @@ export async function fetchMarketData() {
     console.log('✅ CoinGecko data fetched:', data.length, 'coins');
     return data;
   } catch (e) {
-    console.warn('⚠️ CoinGecko failed, attempting robust fallback to CoinCap.io:', e.message);
-    try {
-      // CoinCap API is 100% free, no auth required, MIT-listed in public-apis
-      const coincapRes = await fetch('https://api.coincap.io/v2/assets?ids=bitcoin,ethereum,solana,injective-protocol,avalanche,arbitrum');
-      if (!coincapRes.ok) throw new Error(`CoinCap HTTP ${coincapRes.status}`);
-      const coincapData = await coincapRes.json();
-      console.log('✅ CoinCap fallback data fetched:', coincapData.data.length, 'coins');
-      
-      // Map CoinCap schema to perfectly match CoinGecko schema for seamless integration
-      return coincapData.data.map(c => ({
-        id: c.id,
-        symbol: c.symbol.toLowerCase(),
-        name: c.name,
-        current_price: parseFloat(c.priceUsd),
-        market_cap: parseFloat(c.marketCapUsd),
-        total_volume: parseFloat(c.volumeUsd24Hr),
-        price_change_percentage_24h: parseFloat(c.changePercent24Hr),
-        market_cap_rank: parseInt(c.rank)
-      }));
-    } catch(err) {
-      console.warn('⚠️ CoinCap fallback also failed:', err.message);
-      return null;
-    }
+    console.warn('⚠️ CoinGecko failed, using mock data:', e.message);
+    return null;
   }
 }
 
@@ -361,24 +340,6 @@ export async function fetchTrendingNarratives() {
   }
 }
 
-// ─── 4B-3. NEXUS PPO Engine: Live AI Predictions ─────────────────────────────
-export async function fetchAIPrediction(symbol = 'BTC/USDT') {
-  try {
-    const res = await fetch('http://localhost:8000/predict', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ symbol, timeframe: '1h' })
-    });
-    if (!res.ok) throw new Error(`AI Engine HTTP ${res.status}`);
-    const data = await res.json();
-    console.log(`✅ AI Prediction fetched for ${symbol}:`, data.action_label);
-    return data;
-  } catch (e) {
-    console.warn(`⚠️ AI Engine prediction failed for ${symbol}:`, e.message);
-    return null;
-  }
-}
-
 // ─── 4C. Binance & TAAPI: Technical Signals ──────────────────────────────────
 export async function fetchTechnicalSignals(symbols = ['BTC', 'ETH', 'SOL', 'INJ', 'AVAX', 'ARB', 'ONDO']) {
   try {
@@ -516,45 +477,23 @@ export async function fetchOrderBookDepth(symbol = 'BTC') {
   }
 }
 
-// ─── 4C-5. Mempool.space: BTC Network Health (FREE, NO KEY) ─────────────────
+// ─── 4C-5. Blockchain.com: BTC Network Health (FREE, NO KEY) ─────────────────
 export async function fetchBtcOnChain() {
   try {
-    // Using mempool.space (100% Free, Opensource from public-apis) to replace legacy blockchain.info
-    const [hashrateRes, blocksRes, mempoolRes] = await Promise.all([
-      fetch('https://mempool.space/api/v1/mining/hashrate/3d').catch(() => null),
-      fetch('https://mempool.space/api/v1/blocks').catch(() => null),
-      fetch('https://mempool.space/api/mempool').catch(() => null)
+    const [hashRate, unconfirmed, difficulty] = await Promise.all([
+      fetch('https://blockchain.info/q/hashrate').then(r => r.text()).catch(() => '0'),
+      fetch('https://blockchain.info/q/unconfirmedcount').then(r => r.text()).catch(() => '0'),
+      fetch('https://blockchain.info/q/getdifficulty').then(r => r.text()).catch(() => '0')
     ]);
     
-    let currentHashrate = '0';
-    if (hashrateRes && hashrateRes.ok) {
-        const hrData = await hashrateRes.json();
-        // Get most recent hashrate in EH/s
-        currentHashrate = (hrData.currentHashrate / 1e18).toFixed(2);
-    }
-    
-    let unconfirmed = 0;
-    if (mempoolRes && mempoolRes.ok) {
-        const mData = await mempoolRes.json();
-        unconfirmed = mData.count;
-    }
-    
-    let difficulty = '0';
-    if (blocksRes && blocksRes.ok) {
-        const bData = await blocksRes.json();
-        if (bData.length > 0) {
-           difficulty = (bData[0].difficulty / 1e12).toFixed(2);
-        }
-    }
-    
-    console.log('✅ BTC on-chain stats fetched from Mempool.space');
+    console.log('✅ BTC on-chain stats fetched');
     return {
-      hashRate: currentHashrate,
+      hashRate: (parseFloat(hashRate) / 1e9).toFixed(2), // GH/s → EH/s
       unconfirmedTx: parseInt(unconfirmed),
-      difficulty: difficulty
+      difficulty: (parseFloat(difficulty) / 1e12).toFixed(2) // → T
     };
   } catch (e) {
-    console.warn('⚠️ Mempool.space failed:', e.message);
+    console.warn('⚠️ Blockchain.com failed:', e.message);
     return null;
   }
 }
@@ -610,37 +549,37 @@ export async function fetchAIAnalysis(promptText) {
   try {
     const systemMessage = {
       role: 'system',
-      content: `You are Nexus, the elite Dual-Engine AI powering the NEXUS Crypto Intelligence Platform.
-Combine deep contextual reasoning (GPT) with precise quantitative prediction (Hermes).
+      content: `You are Nexus, the elite Dual-Engine AI powering the NEXUS Crypto Intelligence Platform. You combine the deep contextual reasoning of GPT with the precise quantitative prediction modeling of Hermes. 
+You have FULL ACCESS to live market data, on-chain analytics, whale tracking, social sentiment, and news feeds — all provided to you in the user's message context. NEVER say you cannot access data or that something is unavailable. The data in the context IS your live feed.
 
-CRITICAL CONSTRAINTS:
-1. STRUCTURE: Your response must be clean, professional, and zero-fluff.
-2. TOP 5 REASONS: Start with "### 📊 Institutional Thesis" and list EXACTLY the top 5 technical/on-chain reasons why this trade was chosen (e.g., OBI imbalance, Whale accumulation, 200EMA confluence, RSI divergence, Liquidation heatmap).
-3. LEVERAGE: Suggest leverage based on asset volatility (ATR). High volatility = 1x-3x. Low volatility = 4x-10x. Max 10x.
-4. SIGNAL FORMAT: Provide a plain-text code block at the end for easy copying. DO NOT include any Exchange info.
+CRITICAL DATA PRIORITY: You must ALWAYS prioritize the numerical data (prices, scores, volumes) provided in the LATEST message. Conversation history is for context only. If the price in the current message differs from a previous message, use the current one. Never hallucinate prices.
 
-DATA PRIORITY:
-- Always prioritize numerical data from the LATEST message.
-- Use conversation memory to track the active coin.
+CRITICAL: You have conversation memory. If the user previously mentioned a coin (e.g. "Analyze BTC") and then asks a follow-up like "What's the stop loss?" or "Give me targets", you MUST refer back to the coin from the previous message. Never ask them to repeat the coin name.
 
-TRADE SETUP FORMAT (Code Block):
-\x60\x60\x60
-# [COIN]/USDT - [DIRECTION]
-Strategy: [Strategy Name]
-Leverage: [X]x [Cross/Isolated]
-Risk: [High/Medium/Low]
+Your core decision-making is based on the NEXUS High-Probability Framework:
+1. Absorption & Exhaustion: Track institutional buy/sell walls and delta pressure at support/resistance.
+2. Trending Pullback: Filter trades with Price > 200EMA. Enter at 20/50 EMA or 50-61.8% Fibonacci levels.
+3. Volatility Squeeze: Monitor Bollinger Band tightening; enter on explosive breakouts with high volume.
+4. Momentum Reversal: Use RSI Divergence to spot trend exhaustion early (e.g., Price Up, RSI Down).
+5. SMC Structure Flip: Enter on retests of "Market Structure Breaks" (e.g., Resistance flipping to Support).
 
-Entry: [Price] - [Price] - [Price]
+CRITICAL RISK MANAGEMENT (Backtested to 78%+ accuracy across 20 assets):
+- Stop-Loss is non-negotiable. Use a tight 1.0 ATR for SL placement.
+- Risk per trade must be 1-2% of account size.
+- Use a Partial Take-Profit Scaling System: 
+  - Target 1 (50% TP) at 1.5 ATR. Instruct the user to Move SL to Breakeven after T1 hits.
+  - Target 4 (50% TP runner) at 4.0 ATR to guarantee massive profitability.
+- Max leverage: 5x. Never exceed 5x. Use inverse volatility to set leverage.
+- Only use Trending Pullback and SMC Structure Flip strategies.
 
-TP 1: [Price] (50% + SL to BE)
-TP 2: [Price]
-TP 3: [Price]
-TP 4: [Price] (Moonbag)
+CRITICAL ENTRY ORDERING RULES:
+- For LONG trades: Entry prices MUST go from HIGH to LOW (descending). Example: Entry: 0.953 - 0.921 - 0.899. 
+- For SHORT trades: Entry prices MUST go from LOW to HIGH (ascending). Example: Entry: 3.70 - 3.75 - 3.80. 
 
-Stop Loss: [Price]
-\x60\x60\x60
+Use this exact HTML format for the trade signal portion:
+📪 #[COIN]/USDT<br><br>Direction: <strong style="color:var(--text-green)">[LONG]</strong> or <strong style="color:var(--text-red)">[SHORT]</strong><br>Strategy: [Trending Pullback or SMC Structure Flip]<br>Exchange: Binance Future,Bybit,OKX<br>Leverage: Cross (2X-5X)<br><br>Entry:[Price]-[Price]-[Price]<br><br>Target 1: [Price]<br>Target 2: [Price]<br>Target 3: [Price]<br>Target 4: [Price]<br><br>Stop loss: [Price]<br><br>⚡ NEXUS Pro Autotrade Signals
 
-NO EXTRA FLUFF. Just the 5 reasons and the signal block.`
+For all other queries, provide a single, highly optimized, data-driven response. Use markdown headers, bold text, and bullet points for readability.`
     };
 
     // Build messages array: system + full conversation history
@@ -758,32 +697,18 @@ export async function fetchHermesAnalysis(promptText) {
         messages: [
           {
             role: 'system',
-            content: `You are Hermes, the quantitative prediction engine inside the NEXUS Crypto Intelligence Platform.
+            content: `You are Hermes, the quantitative prediction engine inside the NEXUS Crypto Intelligence Platform. You have FULL ACCESS to live market data — prices, trends, AI scores, confidence levels, and volume — all provided in the user's context. NEVER say you lack access to data. The context IS your live data feed. Always produce confident, numerical analysis.
 
-CRITICAL CONSTRAINTS:
-1. STRUCTURE: Your response must be clean, professional, and zero-fluff.
-2. TOP 5 REASONS: Start with "### 📊 Institutional Thesis" and list EXACTLY the top 5 technical/on-chain reasons why this trade was chosen.
-3. LEVERAGE: Suggest leverage based on asset volatility (ATR). High volatility = 1x-3x. Low volatility = 4x-10x. Max 10x.
-4. SIGNAL FORMAT: Provide a plain-text code block at the end for easy copying. DO NOT include any Exchange info.
+Your specialization:
+- Quantitative price predictions with probability scores
+- Risk/reward ratio calculations
+- Smart money flow interpretation (bullish accumulation vs bearish distribution)
+- Precise trade setups with mathematical entry/exit zones
 
-TRADE SETUP FORMAT (Code Block):
-\x60\x60\x60
-# [COIN]/USDT - [DIRECTION]
-Strategy: [Strategy Name]
-Leverage: [X]x [Cross/Isolated]
-Risk: [High/Medium/Low]
+When the user asks for a signal or trade setup, output in this exact HTML format:
+📪 #[COIN]/USDT<br><br>Exchange: Binance Future,Kucoin,Bybit,Huobi.pro,OKX<br>Leverage: Cross (20X)<br><br>Entry:[Price]-[Price]-[Price]<br><br>Target 1: [Price]<br>Target 2: [Price]<br>Target 3: [Price]<br>Target 4: [Price]<br><br>Stop loss: [Price]<br><br>⚡ NEXUS Pro Autotrade Signals
 
-Entry: [Price] - [Price] - [Price]
-
-TP 1: [Price] (50% + SL to BE)
-TP 2: [Price]
-TP 3: [Price]
-TP 4: [Price] (Moonbag)
-
-Stop Loss: [Price]
-\x60\x60\x60
-
-NO EXTRA FLUFF.`
+For analysis queries, provide structured output with: Price targets, Probability scores, Key risk factors, and a clear BUY/SELL/HOLD recommendation. Use markdown formatting.`
           },
           { role: 'user', content: promptText }
         ],

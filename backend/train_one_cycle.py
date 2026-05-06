@@ -28,15 +28,13 @@ def run_one_cycle():
     env = DummyVecEnv([lambda: CryptoTradingEnv(features_df)])
     
     # 4. Load or Initialize Model
-    model_path = "backend/nexus_trading_agent_ppo"
-    if not os.path.exists(model_path + ".zip"):
-        model_path = "nexus_trading_agent_ppo"
-
+    model_path = "backend/nexus_trading_agent_ppo_v8"
+    
     if os.path.exists(model_path + ".zip"):
         print(f"Loading existing brain for further optimization: {model_path}")
-        model = PPO.load(model_path, env=env, learning_rate=0.0007) # Higher LR to break local minima
+        model = PPO.load(model_path, env=env, learning_rate=0.0007) 
     else:
-        print("Initializing new PPO brain...")
+        print("Initializing FRESH Pattern Sniper Brain (V8)...")
         model = PPO("MlpPolicy", env, verbose=1, learning_rate=0.0007)
     
     # 5. Train
@@ -44,7 +42,7 @@ def run_one_cycle():
     model.learn(total_timesteps=100_000)
     
     # 6. Save
-    model.save("backend/nexus_trading_agent_ppo")
+    model.save("backend/nexus_trading_agent_ppo_v8")
     print(f"✅ Brain updated and saved. Performance optimized.")
 
 if __name__ == "__main__":

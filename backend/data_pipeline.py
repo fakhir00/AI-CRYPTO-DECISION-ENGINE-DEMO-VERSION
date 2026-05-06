@@ -83,6 +83,13 @@ def engineer_features(df):
     # ATR
     df['atr'] = AverageTrueRange(high=df['high'], low=df['low'], close=df['close'], window=14).average_true_range()
     
+    # Support and Resistance (Pivot Points)
+    df['pivot'] = (df['high'].shift(1) + df['low'].shift(1) + df['close'].shift(1)) / 3
+    df['res1'] = 2 * df['pivot'] - df['low'].shift(1)
+    df['sup1'] = 2 * df['pivot'] - df['high'].shift(1)
+    df['local_res'] = df['high'].rolling(window=24).max()
+    df['local_sup'] = df['low'].rolling(window=24).min()
+    
     # Drop rows with NaN values (due to indicator lookback periods)
     df.dropna(inplace=True)
     
@@ -95,7 +102,8 @@ def get_features(df):
     """
     feature_cols = [
         'rsi', 'macd', 'macd_signal', 'ema_9', 'ema_21', 'atr',
-        'obi', 'funding_rate', 'whale_flow', 'btc_dominance', 'liq_heatmap_density'
+        'obi', 'funding_rate', 'whale_flow', 'btc_dominance', 'liq_heatmap_density',
+        'res1', 'sup1', 'local_res', 'local_sup'
     ]
     # Ensure all columns exist
     for col in feature_cols:

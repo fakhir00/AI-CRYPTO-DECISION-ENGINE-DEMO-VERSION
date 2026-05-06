@@ -8,8 +8,8 @@ def evaluate():
     print("--- NEXUS AI: Performance Evaluation ---")
     
     # 1. Load the trained brain
-    model_path = "backend/nexus_trading_agent_ppo.zip"
-    if not os.path.exists(model_path): model_path = "nexus_trading_agent_ppo.zip"
+    model_path = "backend/nexus_trading_agent_ppo_v8.zip"
+    if not os.path.exists(model_path): model_path = "nexus_trading_agent_ppo_v8.zip"
     try:
         model = PPO.load(model_path)
         print(f"Successfully loaded brain: {model_path}")
@@ -38,7 +38,7 @@ def evaluate():
     
     # 4. Run the simulation
     done = False
-    starting_balance = 100.0
+    starting_balance = 10000.0
     env.balance = starting_balance
     env.initial_balance = starting_balance
     

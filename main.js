@@ -1,5 +1,5 @@
 import './style.css';
-import { fetchMarketData, fetchBinancePatterns, fetchGlobalMarketData, fetchWhaleActivity, fetchSentiment, fetchFearAndGreed, fetchAIAnalysis, fetchHermesAnalysis, fetchDualAI, calculateAlphaScore, fetchDefiPools, fetchNews, fetchTechnicalSignals, fetchTrendingNarratives, fetchChartData, fetchFundingRates, fetchOpenInterest, fetchOrderBookDepth, fetchBtcOnChain, addToAIMemory, clearAIMemory, getAIMemory, fetchAIPrediction } from './api.js';
+import { fetchMarketData, fetchBinancePatterns, fetchGlobalMarketData, fetchWhaleActivity, fetchSentiment, fetchFearAndGreed, fetchAIAnalysis, fetchHermesAnalysis, fetchDualAI, calculateAlphaScore, fetchDefiPools, fetchNews, fetchTechnicalSignals, fetchTrendingNarratives, fetchChartData, fetchFundingRates, fetchOpenInterest, fetchOrderBookDepth, fetchBtcOnChain, addToAIMemory, clearAIMemory, getAIMemory } from './api.js';
 
 
 // --- Navigation & Setup ---
@@ -465,23 +465,10 @@ async function syncLiveApis() {
     }
 
     if (assets.length > 0) {
-      // ═══ PPO ENGINE INTEGRATION ═══
-      // Fetch actual RL Model predictions for the top 3 assets
-      const top3 = assets.slice(0, 3);
-      await Promise.all(top3.map(async (asset) => {
-        const prediction = await fetchAIPrediction(`${asset.symbol}/USDT`);
-        if (prediction) {
-          asset.ppo_prediction = prediction.action_label;
-          asset.ppo_action = prediction.action;
-          // Override heuristic bias with model prediction
-          asset.bias = prediction.action === 1 ? 'bullish' : (prediction.action === 2 ? 'bearish' : 'neutral');
-        }
-      }));
-
+      
       renderDashboard();
       renderOpportunitiesPage();
       renderProSignals();
-      renderAiReports(); // Update Deep Dive Reports with live data
       saveDataCache(); // Persist to localStorage for cross-device consistency
       if(statusEl) statusEl.textContent = "Live Feed Synced";
     }
@@ -548,13 +535,6 @@ function setupSidebar() {
 }
 
 function navigateToPage(pageId) {
-  const targetPage = document.getElementById(`page-${pageId}`);
-  if (!targetPage) {
-    console.warn(`Page not found: ${pageId}`);
-    showToast(`Page "${pageId}" is unavailable.`);
-    return;
-  }
-
   document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
   const activeNav = document.querySelector(`.nav-item[data-page="${pageId}"]`);
   if(activeNav) activeNav.classList.add('active');
@@ -567,7 +547,7 @@ function navigateToPage(pageId) {
   document.querySelectorAll('.page').forEach(page => {
     page.classList.remove('active');
   });
-  targetPage.classList.add('active');
+  document.getElementById(`page-${pageId}`).classList.add('active');
 }
 
 function updateTime() {
@@ -858,9 +838,7 @@ function renderOpportunitiesPage() {
           </div>
         </div>
       </td>
-      <td style="font-family: var(--font-mono); font-weight: 600;" class="${parseFloat(sig.rrRatio) >= 2.0 ? 'text-green' : 'text-primary'}">${sig.rrRatio}:1</td>
-      <td style="font-family: var(--font-mono);" class="text-green">+${profitPot.toFixed(1)}%</td>
-      <td><span class="bias-badge bias-${asset.bias}">${asset.bias === 'bullish' ? '🟢 LONG' : (asset.bias === 'bearish' ? '🔴 SHORT' : '⚪ WAIT')}</span></td>
+
       <td><span class="text-muted" style="font-size: 0.8rem">${asset.reason || 'Analyzing Technicals...'}</span></td>
       <td><button class="action-btn">Analyze</button></td>
     </tr>
@@ -960,11 +938,7 @@ function setupAllButtons() {
 
   // 5. Header Search & Alerts
   const searchBtn = document.getElementById('search-btn');
-  if(searchBtn) searchBtn.addEventListener('click', () => {
-    navigateToPage('ai-research');
-    const aiInput = document.getElementById('ai-chat-input');
-    if (aiInput) aiInput.focus();
-  });
+  if(searchBtn) searchBtn.addEventListener('click', () => navigateToPage('command'));
 
   const headerAlertBtn = document.getElementById('alert-btn');
   if(headerAlertBtn) headerAlertBtn.addEventListener('click', () => {
@@ -1073,51 +1047,23 @@ window.openTradingChart = function(coin) {
 }
 
 function setupAiReports() {
-  // Now handled by renderAiReports dynamically
-}
-
-async function renderAiReports() {
-  const reportList = document.getElementById('ai-report-list');
-  if (!reportList) return;
-
-  const { narratives } = await fetchTrendingNarratives();
-  const news = await fetchNews();
-
-  // Combine top 2 narratives and top 1 news item into reports
-  const reports = [
-    ...narratives.slice(0, 2).map(n => ({
-      title: `${n.name} Intelligence`,
-      desc: `Deep dive into the ${n.name} sector. Market Cap: ${n.marketCap} | 24h Trend: ${n.change.toFixed(1)}%`,
-      prompt: `Analyze the current state of the ${n.name} narrative. What are the top protocols, on-chain flows, and potential risk factors?`
-    })),
-    ...news.slice(0, 1).map(item => ({
-      title: item.title.length > 30 ? item.title.substring(0, 30) + '...' : item.title,
-      desc: `Analysis of the latest institutional developments in the crypto market.`,
-      prompt: `Deep dive into this news topic: "${item.title}". How does this impact the broader market and specific asset valuations?`
-    }))
-  ];
-
-  reportList.innerHTML = reports.map(r => `
-    <div class="report-card" onclick="triggerDeepDiveReport('${r.title}', '${r.prompt}')">
-       <h4>${r.title}</h4>
-       <p>${r.desc}</p>
-       <button class="btn-sm btn-secondary mt-2">Read Report</button>
-    </div>
-  `).join('');
-}
-
-window.triggerDeepDiveReport = function(title, prompt) {
-  const input = document.getElementById('ai-chat-input');
-  const submitBtn = document.getElementById('ai-chat-submit');
-  
-  if (input && submitBtn) {
-    input.value = prompt;
-    submitBtn.click();
-    
-    // Scroll to chat
-    const chatBody = document.querySelector('.chat-body');
-    if (chatBody) chatBody.scrollTop = 0;
-  }
+  const reportCards = document.querySelectorAll('#ai-report-list .report-card');
+  reportCards.forEach(card => {
+    card.addEventListener('click', () => {
+      const title = card.querySelector('h4').textContent;
+      const input = document.getElementById('ai-chat-input');
+      const submitBtn = document.getElementById('ai-chat-submit');
+      
+      if (input && submitBtn) {
+        input.value = `Generate a comprehensive Deep Dive Intelligence Report on: ${title}. Include on-chain data, social narrative maps, and potential trade impact.`;
+        submitBtn.click();
+        
+        // Scroll to chat
+        const chatBody = document.querySelector('.chat-body');
+        if (chatBody) chatBody.scrollTop = 0;
+      }
+    });
+  });
 }
 
 function setupTradingEvents() {
@@ -1385,11 +1331,16 @@ function renderProSignals() {
             <span class="signal-envelope">📪</span>
             <span class="signal-symbol">#${asset.symbol}/USDT</span>
             <span class="signal-dir-badge ${sig.isBull ? 'sig-long' : 'sig-short'}">${dirIcon} ${dirLabel}</span>
-            <span class="badge bg-primary ml-2" style="font-size: 0.65rem; border: 1px solid rgba(255,255,255,0.1)">${asset.ppo_prediction ? 'RL-ENGINE' : sig.type}</span>
+            <span class="badge bg-primary ml-2" style="font-size: 0.65rem; border: 1px solid rgba(255,255,255,0.1)">${sig.type}</span>
           </div>
-          <div class="signal-strength ${sig.strength.cls}">${asset.ppo_prediction ? 'AI OPTIMIZED' : sig.strength.label} ●</div>
+          <div class="signal-strength ${sig.strength.cls}">${sig.strength.label} ●</div>
         </div>
 
+        <!-- Exchanges -->
+        <div class="signal-row">
+          <span class="signal-label">Exchange</span>
+          <span class="signal-value">${sig.exchanges.join(', ')}</span>
+        </div>
 
         <!-- Leverage -->
         <div class="signal-row">
@@ -1462,3 +1413,4 @@ function renderProSignals() {
     `;
   }).join('');
 }
+
