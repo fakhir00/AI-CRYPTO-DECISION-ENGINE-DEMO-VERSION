@@ -42,8 +42,8 @@ def run_training_cycle():
         model = PPO("MlpPolicy", env, verbose=1, learning_rate=0.0005) # Lower LR for fine-tuning
     
     # 5. Train
-    print("Agent is now learning from latest patterns...")
-    model.learn(total_timesteps=50_000)
+    print(f"Agent is now learning from latest patterns (Deep Optimization Mode)...")
+    model.learn(total_timesteps=150_000) # Increased for higher accuracy
     
     # 6. Save
     model.save(model_path)

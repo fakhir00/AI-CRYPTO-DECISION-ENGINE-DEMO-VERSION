@@ -38,42 +38,49 @@ def evaluate():
     
     # 4. Run the simulation
     done = False
-    total_trades = 0
+    closed_trades = 0
     winning_trades = 0
     starting_balance = 10000
-    last_net_worth = starting_balance
-
+    entry_net_worth = 0
+    
     print("Simulating trades on historical data...")
     
     while not done:
         action, _states = model.predict(obs, deterministic=True)
+        
+        # Track state before step
+        prev_held = env.crypto_held
+        
+        # Capture Entry Net Worth
+        if prev_held == 0 and action != 0:
+            entry_net_worth = env.net_worth
+        
         obs, reward, terminated, truncated, info = env.step(action)
         
-        # Track trades
-        current_net_worth = info['net_worth']
-        if action != 0: # If Buy or Sell action was taken
-            total_trades += 1
-            if current_net_worth > last_net_worth:
+        # Detect a CLOSED trade
+        if prev_held > 0 and env.crypto_held == 0:
+            closed_trades += 1
+            if env.net_worth > (entry_net_worth + 1.0): # Profitable after fees
                 winning_trades += 1
         
-        last_net_worth = current_net_worth
         done = terminated or truncated
 
     # 5. Final Report
     final_net_worth = env.net_worth
     total_profit = final_net_worth - starting_balance
     profit_pct = (total_profit / starting_balance) * 100
-    win_rate = (winning_trades / total_trades * 100) if total_trades > 0 else 0
+    win_rate = (winning_trades / closed_trades * 100) if closed_trades > 0 else 0
 
-    print("\n" + "="*30)
-    print("FINAL BACKTEST REPORT")
-    print("="*30)
-    print(f"Initial Balance: ${starting_balance:,.2f}")
-    print(f"Final Net Worth: ${final_net_worth:,.2f}")
-    print(f"Total Profit:    ${total_profit:,.2f} ({profit_pct:.2f}%)")
-    print(f"Total Trades:    {total_trades}")
-    print(f"Win Rate:        {win_rate:.2f}%")
-    print("="*30)
+    print("\n" + "="*35)
+    print("      NEXUS INSTITUTIONAL REPORT")
+    print("="*35)
+    print(f"Initial Balance:  ${starting_balance:,.2f}")
+    print(f"Final Net Worth:  ${final_net_worth:,.2f}")
+    print(f"Total Profit:     ${total_profit:,.2f} ({profit_pct:.2f}%)")
+    print("-" * 35)
+    print(f"Closed Trades:    {closed_trades}")
+    print(f"Trade Win Rate:   {win_rate:.2f}%")
+    print("="*35)
 
 if __name__ == "__main__":
     evaluate()
