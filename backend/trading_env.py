@@ -19,8 +19,8 @@ class CryptoTradingEnv(gym.Env):
         # Risk Management Parameters
         self.max_risk_pct = 0.02      # 2% of account max loss per trade
         self.position_pct = 0.05      # 5% of account per position
-        self.rr_ratio = 1.5           # Reward:Risk
-        self.stop_pct = 0.005         # 0.5% stop loss from entry
+        self.rr_ratio = 4.0           # Institutional 1:4 Reward:Risk
+        self.stop_pct = 0.02          # 2% SL buffer for volatility
         
         # Actions: 0 = Hold, 1 = Buy (Long), 2 = Sell (Short)
         self.action_space = spaces.Discrete(3)
@@ -110,20 +110,24 @@ class CryptoTradingEnv(gym.Env):
         # Calculate Reward
         net_worth_change = (self.net_worth - last_net_worth) / last_net_worth
         
-        # 1. Base Profit Reward
-        reward = net_worth_change * 1000 
+        # 1. Base Profit Reward (Aggressive Scaling)
+        reward = net_worth_change * 5000 
         
-        # 2. Drawdown Penalty: Discourage large losses
-        if net_worth_change < -0.01: # > 1% loss in one step
-            reward -= 5.0
+        # 2. Institutional Win Bonus (Focus on Hit Rate)
+        if net_worth_change > 0.005: # Significant profit
+            reward += 10.0
             
-        # 3. High Net Worth Bonus: Reward reaching new peaks
+        # 3. Devastating Loss Penalty (Extreme Risk Aversion)
+        if net_worth_change < -0.003: # Any meaningful loss
+            reward -= 25.0 # Very heavy penalty to force agent to avoid losses at all costs
+            
+        # 4. Consistency Bonus: Reward reaching new peaks
         if self.net_worth > self.max_net_worth:
-            reward += 1.0
+            reward += 2.0
             
-        # 4. Inactivity Penalty: Discourage being "too safe"
+        # 5. Efficiency Penalty: Discourage over-trading or stagnation
         if action == 0 and self.crypto_held == 0:
-            reward -= 0.05 
+            reward -= 0.01 
         
         # Move to next step
         self.current_step += 1

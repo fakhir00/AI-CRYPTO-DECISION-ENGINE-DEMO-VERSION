@@ -8,21 +8,24 @@ from data_pipeline import fetch_historical_data, engineer_features
 def main():
     print("Initializing RL Trading Agent...")
     
-    # 1. Fetch Data
-    data_file = 'historical_data.csv'
-    if not os.path.exists(data_file):
-        df = fetch_historical_data('BTC/USDT', '1h', 2000)
-        df = engineer_features(df)
-        df.to_csv(data_file)
-    else:
-        df = pd.read_csv(data_file, index_col='timestamp', parse_dates=True)
+    # 1. Fetch Latest Data
+    symbol = 'BTC/USDT'
+    data_file = 'backend/historical_data.csv'
+    if not os.path.exists(data_file): data_file = 'historical_data.csv'
     
-    # Clean data to pass to env
-    # Dropping non-numeric or highly varying raw columns to help the model learn
-    features_df = df.drop(columns=['open', 'high', 'low', 'close', 'volume']).copy()
-    # Normalize features roughly
+    print("Fetching fresh market data...")
+    df = fetch_historical_data(symbol, '1h', 2000)
+    df = engineer_features(df)
+    df.to_csv(data_file, index=False)
+    
+    # 2. Centralized Feature Extraction
+    from data_pipeline import get_features
+    features_df = get_features(df)
+    
+    # Normalize
     features_df = (features_df - features_df.mean()) / features_df.std()
-    # Re-attach close price for the environment to calculate PnL
+    
+    # Re-attach close price
     features_df['close'] = df['close']
     
     # 2. Create Environment
@@ -35,8 +38,8 @@ def main():
     # 4. Train Model
     print("Starting 24/7 Training Loop. Press Ctrl+C to stop.")
     try:
-        # Doubling timesteps to ensure convergence
-        model.learn(total_timesteps=200_000)
+        # Fast initial run to establish model shape
+        model.learn(total_timesteps=10_000)
         
         # Save the model
         model.save("nexus_trading_agent_ppo")

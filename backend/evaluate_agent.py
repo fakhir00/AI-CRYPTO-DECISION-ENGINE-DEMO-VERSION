@@ -1,3 +1,4 @@
+import os
 import pandas as pd
 import numpy as np
 from stable_baselines3 import PPO
@@ -7,7 +8,8 @@ def evaluate():
     print("--- NEXUS AI: Performance Evaluation ---")
     
     # 1. Load the trained brain
-    model_path = "nexus_trading_agent_ppo.zip"
+    model_path = "backend/nexus_trading_agent_ppo.zip"
+    if not os.path.exists(model_path): model_path = "nexus_trading_agent_ppo.zip"
     try:
         model = PPO.load(model_path)
         print(f"Successfully loaded brain: {model_path}")
@@ -16,11 +18,18 @@ def evaluate():
         return
 
     # 2. Load the data
-    df = pd.read_csv('historical_data.csv', index_col='timestamp', parse_dates=True)
+    data_file = 'backend/historical_data.csv'
+    if not os.path.exists(data_file): data_file = 'historical_data.csv'
+    df = pd.read_csv(data_file)
     
-    # Pre-process features exactly like training
-    features_df = df.drop(columns=['open', 'high', 'low', 'close', 'volume']).copy()
+    # 2. Centralized Feature Extraction
+    from data_pipeline import get_features
+    features_df = get_features(df)
+    
+    # Normalize
     features_df = (features_df - features_df.mean()) / features_df.std()
+    
+    # Re-attach close price
     features_df['close'] = df['close']
     
     # 3. Initialize Environment

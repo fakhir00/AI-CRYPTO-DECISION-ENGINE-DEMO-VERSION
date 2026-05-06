@@ -9,6 +9,7 @@ from pydantic import BaseModel
 from stable_baselines3 import PPO
 from data_pipeline import engineer_features, fetch_order_book_obi, fetch_funding_rate, fetch_whale_flow
 from typing import List, Optional
+import traceback
 
 app = FastAPI(title="NEXUS AI Trading Engine API")
 
@@ -91,19 +92,24 @@ async def predict(request: PredictionRequest):
         current_price = latest_row['close']
         
         # 5. Prepare features for model
-        # Remove raw price/vol columns
-        features = latest_row.drop(['timestamp', 'open', 'high', 'low', 'close', 'volume']).to_dict()
+        from data_pipeline import get_features
+        features_dict = get_features(df).iloc[-1].to_dict()
         
         # Normalize
         norm_features = []
-        for col, val in features.items():
+        for col, val in features_dict.items():
             mean = MEAN_STATS.get(col, 0)
             std = STD_STATS.get(col, 1)
             norm_features.append((val - mean) / std)
             
-        # Add balance and crypto_held (mocked for inference)
-        # In a real scenario, this would be the actual account state
-        norm_features.extend([10000.0, 0.0]) # balance, crypto_held
+        # Add 'close' price (normalized using its own stats if available, or just raw/scaled)
+        # Note: Model was trained with 'close' in the features_df
+        close_mean = MEAN_STATS.get('close', current_price)
+        close_std = STD_STATS.get('close', 1.0)
+        norm_features.append((current_price - close_mean) / close_std)
+            
+        # Add account state (mocked)
+        norm_features.extend([10000.0, 0.0])
         
         obs = np.array(norm_features, dtype=np.float32)
         
@@ -122,6 +128,8 @@ async def predict(request: PredictionRequest):
         }
         
     except Exception as e:
+        print("❌ Prediction Error:")
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":

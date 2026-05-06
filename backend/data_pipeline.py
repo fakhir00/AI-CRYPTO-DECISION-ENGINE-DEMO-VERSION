@@ -1,3 +1,4 @@
+import os
 import ccxt
 import pandas as pd
 import numpy as np
@@ -52,15 +53,17 @@ def fetch_historical_data(symbol='BTC/USDT', timeframe='1h', limit=1000):
     
     # 2. Add 5 Condition Signals (Institutional Alpha)
     print("Calculating Institutional Alpha signals...")
-    df['obi'] = [fetch_order_book_obi(symbol) for _ in range(len(df))]
-    df['funding_rate'] = [fetch_funding_rate(symbol) for _ in range(len(df))]
+    # Fetch current OBI and Funding once (for historical, we simulate variances around these)
+    current_obi = fetch_order_book_obi(symbol)
+    current_funding = fetch_funding_rate(symbol)
+    
+    df['obi'] = np.random.normal(current_obi, 0.05, size=len(df))
+    df['funding_rate'] = np.random.normal(current_funding, 0.0001, size=len(df))
     df['whale_flow'] = [fetch_whale_flow() for _ in range(len(df))]
-    df['btc_dominance'] = np.random.uniform(50, 54, size=len(df)) # Simulated for the training run
+    df['btc_dominance'] = np.random.uniform(50, 54, size=len(df))
     df['liq_heatmap_density'] = np.random.uniform(0, 1, size=len(df))
 
     df.dropna(inplace=True)
-    df.to_csv('historical_data.csv', index=False)
-    print(f"Dataset updated with Institutional Alpha. Saved to historical_data.csv")
     return df
 
 def engineer_features(df):
@@ -85,9 +88,43 @@ def engineer_features(df):
     
     return df
 
+def get_features(df):
+    """
+    Standardizes the feature set used by the RL agent.
+    Returns only the numeric features for the observation space.
+    """
+    feature_cols = [
+        'rsi', 'macd', 'macd_signal', 'ema_9', 'ema_21', 'atr',
+        'obi', 'funding_rate', 'whale_flow', 'btc_dominance', 'liq_heatmap_density'
+    ]
+    # Ensure all columns exist
+    for col in feature_cols:
+        if col not in df.columns:
+            df[col] = 0.0
+            
+    return df[feature_cols].copy()
+
 if __name__ == "__main__":
-    df = fetch_historical_data()
+    # 1. Fetch Latest Data
+    symbol = 'BTC/USDT'
+    data_file = 'backend/historical_data.csv'
+    if not os.path.exists(data_file): data_file = 'historical_data.csv'
+    
+    print("Fetching fresh market data...")
+    df = fetch_historical_data(symbol, '1h', 2000)
     df = engineer_features(df)
-    print(df.tail())
-    df.to_csv("historical_data.csv")
-    print("Data saved to historical_data.csv")
+    df.to_csv(data_file, index=False)
+    
+    # 2. Centralized Feature Extraction
+    from data_pipeline import get_features
+    features_df = get_features(df)
+    
+    # Normalize
+    features_df = (features_df - features_df.mean()) / features_df.std()
+    
+    # Re-attach close price
+    features_df['close'] = df['close']
+    
+    print("Feature shape:", features_df.shape)
+    print(features_df.tail())
+    print(f"Data saved to {data_file}")
