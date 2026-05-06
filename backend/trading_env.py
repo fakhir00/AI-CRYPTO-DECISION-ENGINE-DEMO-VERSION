@@ -16,12 +16,12 @@ class CryptoTradingEnv(gym.Env):
         self.initial_balance = initial_balance
         self.fee_percent = 0.001 
         
-        # v4.0 Institutional Geometry Parameters
+        # v4.5 Ultra-Accuracy Geometry (Target 80%+)
         self.max_risk_pct = 0.01      
-        self.position_pct = 0.10      
-        self.sl_atr = 1.0             # SL at 1.0 ATR (Institutional Standard)
-        self.tp1_atr = 1.5            # T1 at 1.5 ATR (Partial Profit)
-        self.tp2_atr = 4.0            # T2 at 4.0 ATR (Runners)
+        self.position_pct = 0.15      # Increased size for high-conviction scalps
+        self.sl_atr = 1.2             # Wider SL to avoid noise shakeouts
+        self.tp1_atr = 0.7            # Lowered T1 for high-probability wins
+        self.tp2_atr = 3.0            # T2 for trend runners
         
         # Actions: 0 = Hold, 1 = Buy (Long), 2 = Sell (Short)
         self.action_space = spaces.Discrete(3)
@@ -181,9 +181,9 @@ class CryptoTradingEnv(gym.Env):
         if self.crypto_held > 0 and net_worth_change > 0:
             reward += 1.0 
             
-        # 8. v4.0 Accuracy Logic: High Reward for T1 (Win Security)
+        # 8. v4.5 Ultra-Accuracy Reward (Priority: Winning Trades)
         if self.partial_profit_taken:
-            reward += 20.0 # Reward for securing the trade
+            reward += 100.0 # MASSIVE reward for securing the win (T1)
             
         # 9. Signal Alignment Reward (Heuristic Guidance)
         rsi = self.df.iloc[self.current_step-1]['rsi']
