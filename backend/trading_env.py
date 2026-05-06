@@ -16,12 +16,12 @@ class CryptoTradingEnv(gym.Env):
         self.initial_balance = initial_balance
         self.fee_percent = 0.001 
         
-        # v4.5 Ultra-Accuracy Geometry (Target 80%+)
-        self.max_risk_pct = 0.01      
-        self.position_pct = 0.15      # Increased size for high-conviction scalps
-        self.sl_atr = 1.2             # Wider SL to avoid noise shakeouts
-        self.tp1_atr = 0.7            # Lowered T1 for high-probability wins
-        self.tp2_atr = 3.0            # T2 for trend runners
+        # v6.0 Small Account Power Mode ($100 All-In)
+        self.max_risk_pct = 0.05      # 5% risk per trade (Aggressive)
+        self.position_pct = 1.0       # 100% Position Size for maximum impact
+        self.sl_atr = 1.0             # Tight 1.0 ATR Stop
+        self.tp1_atr = 2.5            # 2.5 ATR Target (Major Trend Sniping)
+        self.tp2_atr = 5.0            # High-Alpha Runner
         
         # Actions: 0 = Hold, 1 = Buy (Long), 2 = Sell (Short)
         self.action_space = spaces.Discrete(3)
@@ -84,6 +84,8 @@ class CryptoTradingEnv(gym.Env):
 
     def step(self, action):
         current_price = self.df.iloc[self.current_step]['close']
+        prev_held = self.crypto_held
+        prev_net_worth = self.net_worth
         
         # Execute Action with v4.0 Geometry & Institutional Trend Filter
         if action != 0 and self.crypto_held == 0:
@@ -99,7 +101,7 @@ class CryptoTradingEnv(gym.Env):
                 stop, tp1, tp2 = self._calculate_sl_tp_v4(current_price, action, atr)
                 position_usd = self._calculate_position_size(current_price, stop, action)
                 
-                if position_usd >= 20: 
+                if position_usd >= 5: 
                     fee = position_usd * self.fee_percent
                     self.balance -= (position_usd + fee)
                     self.crypto_held = position_usd / current_price
@@ -109,6 +111,8 @@ class CryptoTradingEnv(gym.Env):
                     self.tp2 = tp2
                     self.trade_direction = action
                     self.partial_profit_taken = False
+        
+        self.t1_hit_this_step = False
         
         # Check SL/TP if in position
         if self.crypto_held > 0:
@@ -120,6 +124,7 @@ class CryptoTradingEnv(gym.Env):
                     self.balance += sell_amount
                     self.crypto_held *= 0.5
                     self.partial_profit_taken = True
+                    self.t1_hit_this_step = True
                     # Move SL to Entry (Risk-Free)
                     self.stop_loss = self.entry_price 
                 
@@ -134,6 +139,7 @@ class CryptoTradingEnv(gym.Env):
                     self.balance += (self.entry_price * (self.crypto_held * 0.5) + profit) * (1 - self.fee_percent)
                     self.crypto_held *= 0.5
                     self.partial_profit_taken = True
+                    self.t1_hit_this_step = True
                     self.stop_loss = self.entry_price
                 
                 # 2. Final TP (T2) or SL
@@ -150,54 +156,32 @@ class CryptoTradingEnv(gym.Env):
         # Calculate Reward
         net_worth_change = (self.net_worth - last_net_worth) / last_net_worth
         
-        # 1. Base Profit Reward (Non-linear for high conviction)
-        if net_worth_change > 0:
-            reward = (net_worth_change * 20000) ** 1.1 # Stronger pull for gains
-        else:
-            reward = net_worth_change * 15000 # Proportional penalty
+        # v4.9 Pure Accuracy Optimizer Logic
+        reward = 0
         
-        # 2. Win Bonus (Hit Rate focus)
-        if net_worth_change > 0.001: 
-            reward += 15.0
+        # 1. Immediate Win Reward (T1 Hit)
+        if getattr(self, 't1_hit_this_step', False):
+            reward += 200.0 # Massive reward for the win
             
-        # 3. Loss Penalty (Strict but fair)
-        if net_worth_change < -0.005:
-            reward -= 30.0 
+        # 2. Devastating SL Penalty
+        if prev_held > 0 and self.crypto_held == 0 and self.net_worth < prev_net_worth:
+            reward -= 300.0 # Extreme penalty for losing a trade
             
-        # 4. Consistency & Peak Reward
-        if self.net_worth > self.max_net_worth:
-            reward += 10.0 
-            self.max_net_worth = self.net_worth
-            
-        # 5. Accuracy Alignment: Penalize churning
-        if action != 0 and abs(net_worth_change) < 0.0001:
-            reward -= 2.0 
-        
-        # 6. Market Engagement: Penalize extreme stagnation (CRITICAL)
+        # 3. Market Participation Pressure
         if action == 0 and self.crypto_held == 0:
-            reward -= 0.5 # Much higher penalty to force the agent to find a move
-        
-        # 7. Holding Reward: Encourage staying in profit
-        if self.crypto_held > 0 and net_worth_change > 0:
-            reward += 1.0 
+            reward -= 0.1
             
-        # 8. v4.5 Ultra-Accuracy Reward (Priority: Winning Trades)
-        if self.partial_profit_taken:
-            reward += 100.0 # MASSIVE reward for securing the win (T1)
-            
-        # 9. Signal Alignment Reward (Heuristic Guidance)
+        # 4. Entry Guidance (Success Pattern Alignment)
         rsi = self.df.iloc[self.current_step-1]['rsi']
         ema9 = self.df.iloc[self.current_step-1]['ema_9']
         ema21 = self.df.iloc[self.current_step-1]['ema_21']
         
         if action == 1: # LONG
-            if rsi < 45: reward += 10.0 # Success Pattern
-            if ema9 > ema21: reward += 5.0 # Trend Alignment
-            if rsi > 65: reward -= 25.0 # FOMO Penalty
+            if rsi < 40: reward += 20.0 # Dip Buy
+            if ema9 > ema21: reward += 10.0 # Trend Match
         elif action == 2: # SHORT
-            if rsi > 55: reward += 10.0 # Success Pattern
-            if ema9 < ema21: reward += 5.0 # Trend Alignment
-            if rsi < 35: reward -= 25.0 # FOMO Penalty
+            if rsi > 60: reward += 20.0 # Peak Sell
+            if ema9 < ema21: reward += 10.0 # Trend Match
         
         # Move to next step
         self.current_step += 1

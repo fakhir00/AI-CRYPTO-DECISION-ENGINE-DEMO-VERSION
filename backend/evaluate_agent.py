@@ -38,12 +38,19 @@ def evaluate():
     
     # 4. Run the simulation
     done = False
-    closed_trades = 0
-    winning_trades = 0
-    starting_balance = 10000
-    entry_net_worth = 0
+    starting_balance = 100.0
+    env.balance = starting_balance
+    env.initial_balance = starting_balance
     
-    print("Simulating trades on historical data...")
+    closed_trades = 0
+    wins = 0
+    losses = 0
+    breakevens = 0
+    
+    win_profits = []
+    loss_amounts = []
+    
+    print(f"Simulating $100 Portfolio Growth...")
     
     while not done:
         action, _states = model.predict(obs, deterministic=True)
@@ -51,7 +58,6 @@ def evaluate():
         # Track state before step
         prev_held = env.crypto_held
         
-        # Capture Entry Net Worth
         if prev_held == 0 and action != 0:
             entry_net_worth = env.net_worth
         
@@ -60,27 +66,40 @@ def evaluate():
         # Detect a CLOSED trade
         if prev_held > 0 and env.crypto_held == 0:
             closed_trades += 1
-            if env.net_worth > (entry_net_worth + 1.0): # Profitable after fees
-                winning_trades += 1
+            final_net_worth = env.net_worth
+            trade_pnl_pct = ((final_net_worth - entry_net_worth) / entry_net_worth) * 100
+            
+            if trade_pnl_pct > 0.1: # Profitable
+                wins += 1
+                win_profits.append(trade_pnl_pct)
+            elif trade_pnl_pct < -0.1: # Loss
+                losses += 1
+                loss_amounts.append(trade_pnl_pct)
+            else: # Breakeven
+                breakevens += 1
         
         done = terminated or truncated
 
-    # 5. Final Report
+    # 5. Final Granular Report
     final_net_worth = env.net_worth
-    total_profit = final_net_worth - starting_balance
-    profit_pct = (total_profit / starting_balance) * 100
-    win_rate = (winning_trades / closed_trades * 100) if closed_trades > 0 else 0
+    total_increase = ((final_net_worth - starting_balance) / starting_balance) * 100
+    avg_win = np.mean(win_profits) if win_profits else 0
+    avg_loss = np.mean(loss_amounts) if loss_amounts else 0
 
-    print("\n" + "="*35)
-    print("      NEXUS INSTITUTIONAL REPORT")
-    print("="*35)
-    print(f"Initial Balance:  ${starting_balance:,.2f}")
-    print(f"Final Net Worth:  ${final_net_worth:,.2f}")
-    print(f"Total Profit:     ${total_profit:,.2f} ({profit_pct:.2f}%)")
-    print("-" * 35)
-    print(f"Closed Trades:    {closed_trades}")
-    print(f"Trade Win Rate:   {win_rate:.2f}%")
-    print("="*35)
+    print("\n" + "="*40)
+    print("      $100 PORTFOLIO IMPACT REPORT")
+    print("="*40)
+    print(f"Starting Balance:    ${starting_balance:,.2f}")
+    print(f"Final Net Worth:     ${final_net_worth:,.2f}")
+    print(f"Total Portfolio %:   {total_increase:+.2f}%")
+    print("-" * 40)
+    print(f"Total Trades:        {closed_trades}")
+    print(f"Successful Wins:     {wins} (Avg: {avg_win:+.2f}%)")
+    print(f"Losses:              {losses} (Avg: {avg_loss:+.2f}%)")
+    print(f"Break-evens:         {breakevens}")
+    print("-" * 40)
+    print(f"OVERALL WIN RATE:    {(wins/closed_trades*100):.2f}%" if closed_trades > 0 else "0.00%")
+    print("="*40)
 
 if __name__ == "__main__":
     evaluate()

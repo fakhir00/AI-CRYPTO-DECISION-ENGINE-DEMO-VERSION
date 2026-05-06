@@ -40,8 +40,8 @@ def run_one_cycle():
         model = PPO("MlpPolicy", env, verbose=1, learning_rate=0.0007)
     
     # 5. Train
-    print(f"Agent is now learning (150,000 steps) for 80% ACCURACY TARGET (T1 Priority Mode)...")
-    model.learn(total_timesteps=150_000)
+    print(f"Agent is now learning (100,000 steps) for PURE ACCURACY optimization...")
+    model.learn(total_timesteps=100_000)
     
     # 6. Save
     model.save("backend/nexus_trading_agent_ppo")
