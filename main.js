@@ -858,7 +858,9 @@ function renderOpportunitiesPage() {
           </div>
         </div>
       </td>
-
+      <td style="font-family: var(--font-mono); font-weight: 600;" class="${parseFloat(sig.rrRatio) >= 2.0 ? 'text-green' : 'text-primary'}">${sig.rrRatio}:1</td>
+      <td style="font-family: var(--font-mono);" class="text-green">+${profitPot.toFixed(1)}%</td>
+      <td><span class="bias-badge bias-${asset.bias}">${asset.bias === 'bullish' ? '🟢 LONG' : (asset.bias === 'bearish' ? '🔴 SHORT' : '⚪ WAIT')}</span></td>
       <td><span class="text-muted" style="font-size: 0.8rem">${asset.reason || 'Analyzing Technicals...'}</span></td>
       <td><button class="action-btn">Analyze</button></td>
     </tr>
