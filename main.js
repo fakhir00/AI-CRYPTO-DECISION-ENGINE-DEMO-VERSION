@@ -430,7 +430,14 @@ async function syncLiveApis() {
       if (serverRes.ok) {
         const serverData = await serverRes.json();
         if (serverData.data && serverData.data.length > 0) {
-          serverAssets = serverData.data;
+          serverAssets = serverData.data.map(a => {
+            if (binancePatterns && binancePatterns[a.symbol]) {
+               a.reason = binancePatterns[a.symbol];
+            } else if (!a.reason) {
+               a.reason = generateReason(a, a.score);
+            }
+            return a;
+          });
           console.log(`✅ Server market data loaded (source: ${serverData.source}, age: ${serverData.age}s)`);
         }
       }
@@ -439,23 +446,8 @@ async function syncLiveApis() {
     }
 
     if (serverAssets) {
-      // Use server-computed assets directly (guaranteed cross-device consistency)
-      assets = serverAssets.map(a => {
-        if (binancePatterns && binancePatterns[a.symbol]) {
-           a.reason = binancePatterns[a.symbol];
-        } else if (!a.reason) {
-           a.reason = generateReason(a, a.score);
-        }
-        return a;
-      });
+      assets = serverAssets;
     } else if (marketData && marketData.length > 0) {
-      // Fallback: compute client-side (only if server endpoint is down)
-      assets = marketData.map(coin => {
-         const symbol = coin.symbol.toUpperCase();
-         const change24h = coin.price_change_percentage_24h || 0;
-         const volRatio = coin.market_cap > 0 ? (coin.total_volume / coin.market_cap) : 0;
-         const mcapRank = coin.market_cap_rank || 50;
-         const momentumRaw = Math.min(35, Math.max(0, 17.5 + (change24h * 2.5)));
          const volConviction = Math.min(25, volRatio * 250);
          const mcapTier = Math.min(20, Math.max(5, 20 - (mcapRank * 0.3)));
          const absChange = Math.abs(change24h);
@@ -858,7 +850,7 @@ function renderOpportunitiesPage() {
       
       navigateToPage('ai-research'); // Switch to AI Research Analyst Page
       setTimeout(() => {
-         triggerMcp(`Give me a quantitative algorithmic trade setup for ${symbol} with entry and exit targets, stop loss, and R:R.`);
+         triggerMcp(`Give me a quantitative algorithmic trade setup for ${symbol}. The current detected pattern is "${asset.reason}". Align your analysis with this pattern and provide the 5 rationales.`);
       }, 100);
     });
   });
@@ -1412,7 +1404,7 @@ function renderProSignals() {
         <!-- Footer -->
         <div class="signal-footer">
           <span>Alpha: <strong class="text-primary">${asset.score}/100</strong></span>
-          <span>R:R <strong class="text-green">1:${sig.rrRatio}</strong></span>
+          <span>Risk:Reward <strong class="text-green">${sig.rrRatio}</strong></span>
           <span>Vol: <strong class="text-warning">${(sig.atrPct * 100).toFixed(1)}%</strong></span>
           <span class="signal-brand">⚡ NEXUS Pro</span>
         </div>
