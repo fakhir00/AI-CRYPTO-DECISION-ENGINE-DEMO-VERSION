@@ -6,7 +6,7 @@ import ccxt
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from stable_baselines3 import PPO
+from sb3_contrib import RecurrentPPO
 from data_pipeline import engineer_features, fetch_order_book_obi, fetch_funding_rate, fetch_whale_flow
 from typing import List, Optional
 import traceback
@@ -23,15 +23,15 @@ app.add_middleware(
 )
 
 # Load model
-MODEL_PATH = "backend/nexus_trading_agent_ppo.zip"
+MODEL_PATH = "backend/nexus_trading_agent_ppo_v11.zip"
 if not os.path.exists(MODEL_PATH):
     # Fallback if run from backend/ directory
-    MODEL_PATH = "nexus_trading_agent_ppo.zip"
+    MODEL_PATH = "nexus_trading_agent_ppo_v11.zip"
 
 model = None
 try:
-    model = PPO.load(MODEL_PATH)
-    print(f"✅ Model loaded from {MODEL_PATH}")
+    model = RecurrentPPO.load(MODEL_PATH)
+    print(f"✅ Recurrent Model (v11) loaded from {MODEL_PATH}")
 except Exception as e:
     print(f"❌ Error loading model: {e}")
 
@@ -113,8 +113,12 @@ async def predict(request: PredictionRequest):
         
         obs = np.array(norm_features, dtype=np.float32)
         
-        # 6. Predict
-        action, _states = model.predict(obs, deterministic=True)
+        # 6. Predict with LSTM state (stateless prediction for single snapshot)
+        # We use a fresh state and episode_start=True for a single-step inference
+        lstm_states = None
+        episode_start = np.ones((1,), dtype=bool)
+        
+        action, _states = model.predict(obs, state=lstm_states, episode_start=episode_start, deterministic=True)
         
         labels = ["HOLD", "BUY (LONG)", "SELL (SHORT)"]
         

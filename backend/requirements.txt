@@ -3,4 +3,7 @@ pandas
 ta
 gymnasium
 stable-baselines3
+sb3-contrib
 numpy
+fastapi
+uvicorn
