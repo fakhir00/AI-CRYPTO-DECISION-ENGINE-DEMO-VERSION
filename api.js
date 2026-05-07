@@ -763,6 +763,10 @@ export async function fetchRLPrediction(symbol = 'BTC/USDT') {
 
 // ─── 9. Dual AI Fusion — Optimized Unified Response ───────────
 export async function fetchDualAI(userQuery, assetContext = '') {
+  const context = assetContext
+    ? `Current context: ${assetContext}. User query: ${userQuery}`
+    : userQuery;
+
   // 1. Detect if the query is about a specific asset
   const symbolMatch = userQuery.match(/\b([A-Z0-9]{2,10})\b/i);
   let rlData = null;
