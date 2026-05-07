@@ -356,13 +356,20 @@ async function syncLiveApis() {
   if(statusEl) statusEl.textContent = "Syncing Live APIs...";
   
   try {
-    const [marketData, whales, narrativesData, chartPrices, fundingData, oiData, depthData, btcChainData, binancePatterns] = await Promise.all([
-      fetchMarketData(),
+    // 1. Fetch Market Leaderboard First (Top 50)
+    const marketData = await fetchMarketData();
+    if (!marketData) throw new Error('Failed to fetch market leaderboard');
+
+    const topSymbols = marketData.map(c => c.symbol.toUpperCase());
+    const derivativeSymbols = topSymbols.slice(0, 15); // Top 15 for heavy OI/Funding data
+
+    // 2. Fetch all other data using discovered symbols
+    const [whales, narrativesData, chartPrices, fundingData, oiData, depthData, btcChainData, binancePatterns] = await Promise.all([
       fetchWhaleActivity(),
       fetchTrendingNarratives(),
       fetchChartData('BTC'),
-      fetchFundingRates(),
-      fetchOpenInterest(),
+      fetchFundingRates(derivativeSymbols),
+      fetchOpenInterest(derivativeSymbols),
       fetchOrderBookDepth('BTC'),
       fetchBtcOnChain(),
       fetchBinancePatterns()

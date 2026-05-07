@@ -54,13 +54,10 @@ export function getAIMemory() { return AI_MEMORY.getMessages(); }
 
 // ─── 1. CoinGecko: Real-time price, market cap, volume ───────────────────────
 export async function fetchMarketData() {
-  const coins = [
-    'bitcoin', 'ethereum', 'solana', 'injective-protocol',
-    'ondo-finance', 'avalanche-2', 'arbitrum'
-  ];
   try {
+    // Dynamically fetch top 50 coins by market cap from CoinGecko
     const url = `https://api.coingecko.com/api/v3/coins/markets`
-      + `?vs_currency=usd&ids=${coins.join(',')}`
+      + `?vs_currency=usd&order=market_cap_desc&per_page=50&page=1`
       + `&x_cg_demo_api_key=${KEYS.coingecko}&sparkline=false`;
 
     const res = await fetch(url, { cache: 'no-store' });
@@ -69,7 +66,7 @@ export async function fetchMarketData() {
     console.log('✅ CoinGecko data fetched:', data.length, 'coins');
     return data;
   } catch (e) {
-    console.warn('⚠️ CoinGecko failed, using mock data:', e.message);
+    console.warn('⚠️ CoinGecko failed:', e.message);
     return null;
   }
 }
@@ -104,9 +101,9 @@ export async function fetchBinancePatterns() {
          else if (ticker.priceChangePercent < -5) pattern = 'Momentum Contraction';
        }
        
-       // Handle standard mapping
-       let sym = ticker.symbol.replace('USDT', '');
-       if (sym === 'BTC' || sym === 'ETH' || sym === 'SOL' || sym === 'INJ' || sym === 'AVAX' || sym === 'ARB') {
+       // Map patterns for all coins in the ticker (only USDT pairs)
+       if (ticker.symbol.endsWith('USDT')) {
+          let sym = ticker.symbol.replace('USDT', '');
           patterns[sym] = pattern;
        }
     });
@@ -341,7 +338,8 @@ export async function fetchTrendingNarratives() {
 }
 
 // ─── 4C. Binance & TAAPI: Technical Signals ──────────────────────────────────
-export async function fetchTechnicalSignals(symbols = ['BTC', 'ETH', 'SOL', 'INJ', 'AVAX', 'ARB', 'ONDO']) {
+export async function fetchTechnicalSignals(symbols = []) {
+  if (symbols.length === 0) return null;
   try {
     // 1. Fetch 24h ticker data from Binance for volume/price action
     const binancePromises = symbols.map(sym => 
@@ -411,7 +409,8 @@ export async function fetchTechnicalSignals(symbols = ['BTC', 'ETH', 'SOL', 'INJ
 }
 
 // ─── 4C-2. Binance Futures: Funding Rates (FREE, NO KEY) ─────────────────────
-export async function fetchFundingRates(symbols = ['BTC', 'ETH', 'SOL', 'INJ', 'AVAX', 'ARB']) {
+export async function fetchFundingRates(symbols = []) {
+  if (symbols.length === 0) return [];
   try {
     const promises = symbols.map(sym =>
       fetch(`https://fapi.binance.com/fapi/v1/fundingRate?symbol=${sym}USDT&limit=1`)
@@ -429,7 +428,8 @@ export async function fetchFundingRates(symbols = ['BTC', 'ETH', 'SOL', 'INJ', '
 }
 
 // ─── 4C-3. Binance Futures: Open Interest (FREE, NO KEY) ─────────────────────
-export async function fetchOpenInterest(symbols = ['BTC', 'ETH', 'SOL', 'INJ', 'AVAX', 'ARB']) {
+export async function fetchOpenInterest(symbols = []) {
+  if (symbols.length === 0) return [];
   try {
     const promises = symbols.map(sym =>
       fetch(`https://fapi.binance.com/fapi/v1/openInterest?symbol=${sym}USDT`)
