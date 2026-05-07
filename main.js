@@ -448,6 +448,13 @@ async function syncLiveApis() {
     if (serverAssets) {
       assets = serverAssets;
     } else if (marketData && marketData.length > 0) {
+      // Fallback: compute client-side (only if server endpoint is down)
+      assets = marketData.map(coin => {
+         const symbol = coin.symbol.toUpperCase();
+         const change24h = coin.price_change_percentage_24h || 0;
+         const volRatio = coin.market_cap > 0 ? (coin.total_volume / coin.market_cap) : 0;
+         const mcapRank = coin.market_cap_rank || 50;
+         const momentumRaw = Math.min(35, Math.max(0, 17.5 + (change24h * 2.5)));
          const volConviction = Math.min(25, volRatio * 250);
          const mcapTier = Math.min(20, Math.max(5, 20 - (mcapRank * 0.3)));
          const absChange = Math.abs(change24h);
