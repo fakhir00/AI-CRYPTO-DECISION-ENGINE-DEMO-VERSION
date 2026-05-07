@@ -742,15 +742,41 @@ For analysis queries, provide structured output with: Price targets, Probability
   }
 }
 
+// ─── 8-2. Nexus RL Agent — Deep Memory Oracle Prediction ──────────────────────
+export async function fetchRLPrediction(symbol = 'BTC/USDT') {
+  try {
+    const formattedSymbol = symbol.includes('/') ? symbol : `${symbol}/USDT`;
+    const res = await fetch('http://localhost:8000/predict', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ symbol: formattedSymbol, timeframe: '1h' })
+    });
+    if (!res.ok) throw new Error(`RL Engine offline`);
+    const data = await res.json();
+    console.log(`✅ RL Prediction for ${formattedSymbol}:`, data.action_label);
+    return data;
+  } catch (e) {
+    console.warn('⚠️ RL Agent fetch failed:', e.message);
+    return null;
+  }
+}
+
 // ─── 9. Dual AI Fusion — Optimized Unified Response ───────────
 export async function fetchDualAI(userQuery, assetContext = '') {
-  const context = assetContext
-    ? `Current context: ${assetContext}. User query: ${userQuery}`
-    : userQuery;
+  // 1. Detect if the query is about a specific asset
+  const symbolMatch = userQuery.match(/\b([A-Z0-9]{2,10})\b/i);
+  let rlData = null;
+  if (symbolMatch) {
+    rlData = await fetchRLPrediction(symbolMatch[1].toUpperCase());
+  }
 
-  // Since we optimized the prompt to do both quantitative and contextual analysis simultaneously,
-  // we only need to make one API call, saving time and money while providing a cohesive response.
-  const result = await fetchAIAnalysis(context);
+  // 2. Add RL prediction to context if available
+  let enhancedContext = context;
+  if (rlData) {
+    enhancedContext += ` | [NEXUS RL AGENT PREDICTION]: Action: ${rlData.action_label}, Confidence: ${rlData.confidence * 100}%, Current Price: $${rlData.price}. Use this as your primary quantitative bias.`;
+  }
+
+  const result = await fetchAIAnalysis(enhancedContext);
 
   if (!result) return null;
 
