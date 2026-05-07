@@ -11,10 +11,6 @@ let cacheTimestamp = 0;
 const CACHE_TTL = 15 * 1000; // 15 seconds (High-Precision Snapshot)
 
 const COINGECKO_KEY = 'CG-7gTv8kk2qS7r8kj515m2rVQJ';
-const COINS = [
-  'bitcoin', 'ethereum', 'solana', 'injective-protocol',
-  'ondo-finance', 'avalanche-2', 'arbitrum'
-];
 
 function computeAlphaScore(coin) {
   const change24h = coin.price_change_percentage_24h || 0;
@@ -46,7 +42,7 @@ export default async function handler(req, res) {
 
   try {
     const url = `https://api.coingecko.com/api/v3/coins/markets`
-      + `?vs_currency=usd&ids=${COINS.join(',')}`
+      + `?vs_currency=usd&order=market_cap_desc&per_page=50&page=1`
       + `&x_cg_demo_api_key=${COINGECKO_KEY}&sparkline=false`;
 
     const [cgRes, binanceRes] = await Promise.all([
