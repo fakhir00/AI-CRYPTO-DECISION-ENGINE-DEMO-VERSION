@@ -1,17 +1,17 @@
 import os
 import pandas as pd
 import numpy as np
-from stable_baselines3 import PPO
+from sb3_contrib import RecurrentPPO
 from trading_env import CryptoTradingEnv
 
 def evaluate():
     print("--- NEXUS AI: Performance Evaluation ---")
     
     # 1. Load the trained brain
-    model_path = "backend/nexus_trading_agent_ppo_v8.zip"
-    if not os.path.exists(model_path): model_path = "nexus_trading_agent_ppo_v8.zip"
+    model_path = "backend/nexus_trading_agent_ppo_v11.zip"
+    if not os.path.exists(model_path): model_path = "nexus_trading_agent_ppo_v11.zip"
     try:
-        model = PPO.load(model_path)
+        model = RecurrentPPO.load(model_path)
         print(f"Successfully loaded brain: {model_path}")
     except Exception as e:
         print(f"Error loading model: {e}")
@@ -50,13 +50,32 @@ def evaluate():
     win_profits = []
     loss_amounts = []
     
+    # Track Directional Accuracy
+    correct_directions = 0
+    total_steps = 0
+    
     print(f"Simulating $100 Portfolio Growth...")
     
+    lstm_states = None
+    episode_start = np.ones((1,), dtype=bool)
+    
     while not done:
-        action, _states = model.predict(obs, deterministic=True)
+        # Pass states for LSTM memory tracking
+        action, lstm_states = model.predict(obs, state=lstm_states, episode_start=episode_start, deterministic=True)
+        episode_start = np.zeros((1,), dtype=bool) # Turn off after first step
         
         # Track state before step
         prev_held = env.crypto_held
+        row = env.df.iloc[env.current_step]
+        next_row = env.df.iloc[env.current_step + 1] if env.current_step + 1 < len(env.df) else None
+        
+        if next_row is not None:
+            total_steps += 1
+            price_up = next_row['close'] > row['close']
+            if (action == 1 and price_up) or (action == 2 and not price_up):
+                correct_directions += 1
+            elif action == 0 and abs(next_row['close'] - row['close']) / row['close'] < 0.001:
+                correct_directions += 1 # Correct hold on flat market
         
         if prev_held == 0 and action != 0:
             entry_net_worth = env.net_worth
@@ -85,6 +104,7 @@ def evaluate():
     total_increase = ((final_net_worth - starting_balance) / starting_balance) * 100
     avg_win = np.mean(win_profits) if win_profits else 0
     avg_loss = np.mean(loss_amounts) if loss_amounts else 0
+    dir_acc = (correct_directions / total_steps * 100) if total_steps > 0 else 0
 
     print("\n" + "="*40)
     print("      $100 PORTFOLIO IMPACT REPORT")
@@ -94,11 +114,13 @@ def evaluate():
     print(f"Total Portfolio %:   {total_increase:+.2f}%")
     print("-" * 40)
     print(f"Total Trades:        {closed_trades}")
+    print(f"Trade Win Rate:      {(wins/closed_trades*100):.2f}%" if closed_trades > 0 else "0.00%")
+    print(f"DIRECTIONAL ACCURACY: {dir_acc:.2f}%")
+    print("-" * 40)
     print(f"Successful Wins:     {wins} (Avg: {avg_win:+.2f}%)")
     print(f"Losses:              {losses} (Avg: {avg_loss:+.2f}%)")
     print(f"Break-evens:         {breakevens}")
     print("-" * 40)
-    print(f"OVERALL WIN RATE:    {(wins/closed_trades*100):.2f}%" if closed_trades > 0 else "0.00%")
     print("="*40)
 
 if __name__ == "__main__":

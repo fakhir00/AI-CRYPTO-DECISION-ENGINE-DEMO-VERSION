@@ -51,17 +51,26 @@ def fetch_historical_data(symbol='BTC/USDT', timeframe='1h', limit=1000):
     df['ema_21'] = ta.trend.ema_indicator(df['close'], window=21)
     df['atr'] = ta.volatility.average_true_range(df['high'], df['low'], df['close'], window=14)
     
-    # 2. Add 5 Condition Signals (Institutional Alpha)
+    # 2. Add 5 Condition Signals (Institutional Alpha Proxies)
     print("Calculating Institutional Alpha signals...")
-    # Fetch current OBI and Funding once (for historical, we simulate variances around these)
-    current_obi = fetch_order_book_obi(symbol)
-    current_funding = fetch_funding_rate(symbol)
     
-    df['obi'] = np.random.normal(current_obi, 0.05, size=len(df))
-    df['funding_rate'] = np.random.normal(current_funding, 0.0001, size=len(df))
-    df['whale_flow'] = [fetch_whale_flow() for _ in range(len(df))]
-    df['btc_dominance'] = np.random.uniform(50, 54, size=len(df))
-    df['liq_heatmap_density'] = np.random.uniform(0, 1, size=len(df))
+    # Volume Delta (Proxy for OBI)
+    df['obi'] = (df['volume'] - df['volume'].rolling(window=20).mean()) / df['volume'].rolling(window=20).std()
+    
+    # Chaikin Money Flow (Proxy for Whale Flow)
+    mfv = ((df['close'] - df['low']) - (df['high'] - df['close'])) / (df['high'] - df['low']) * df['volume']
+    df['whale_flow'] = mfv.rolling(window=20).sum() / df['volume'].rolling(window=20).sum()
+    
+    # Bollinger Width (Proxy for Liquidation Density/Volatility)
+    bb_high = df['close'].rolling(window=20).mean() + (df['close'].rolling(window=20).std() * 2)
+    bb_low = df['close'].rolling(window=20).mean() - (df['close'].rolling(window=20).std() * 2)
+    df['liq_heatmap_density'] = (bb_high - bb_low) / df['close'].rolling(window=20).mean()
+    
+    # Momentum ROC (Proxy for BTC Dominance/Market Power)
+    df['btc_dominance'] = df['close'].pct_change(periods=24)
+    
+    # Stochastic RSI (Proxy for Funding Rate/Crowdedness)
+    df['funding_rate'] = ta.momentum.stochrsi(df['close'], window=14)
 
     df.dropna(inplace=True)
     return df

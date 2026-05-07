@@ -84,6 +84,7 @@ class CryptoTradingEnv(gym.Env):
 
     def step(self, action):
         current_price = self.df.iloc[self.current_step]['close']
+        last_price = self.df.iloc[self.current_step-1]['close']
         prev_held = self.crypto_held
         prev_net_worth = self.net_worth
         
@@ -163,32 +164,20 @@ class CryptoTradingEnv(gym.Env):
         # Calculate Reward
         net_worth_change = (self.net_worth - last_net_worth) / last_net_worth
         
-        # v4.9 Pure Accuracy Optimizer Logic
+        # v10.0 Directional Oracle Reward (80% Accuracy Push)
         reward = 0
-        
-        # 1. Immediate Win Reward (T1 Hit)
-        if getattr(self, 't1_hit_this_step', False):
-            reward += 200.0 # Massive reward for the win
-            
-        # 2. Devastating SL Penalty
-        if prev_held > 0 and self.crypto_held == 0 and self.net_worth < prev_net_worth:
-            reward -= 300.0 # Extreme penalty for losing a trade
-            
-        # 3. Market Participation Pressure
-        if action == 0 and self.crypto_held == 0:
-            reward -= 0.1
-            
-        # 4. Entry Guidance (Success Pattern Alignment)
-        rsi = self.df.iloc[self.current_step-1]['rsi']
-        ema9 = self.df.iloc[self.current_step-1]['ema_9']
-        ema21 = self.df.iloc[self.current_step-1]['ema_21']
+        price_change = (current_price - last_price) / last_price
         
         if action == 1: # LONG
-            if rsi < 40: reward += 20.0 # Dip Buy
-            if ema9 > ema21: reward += 10.0 # Trend Match
+            reward = price_change * 100.0 # Reward for up-move
         elif action == 2: # SHORT
-            if rsi > 60: reward += 20.0 # Peak Sell
-            if ema9 < ema21: reward += 10.0 # Trend Match
+            reward = -price_change * 100.0 # Reward for down-move
+        else: # HOLD
+            reward = -abs(price_change) * 5.0 # Small penalty for missing a move
+            
+        # Bonus for hitting TP levels
+        if getattr(self, 't1_hit_this_step', False):
+            reward += 10.0
         
         # Move to next step
         self.current_step += 1
