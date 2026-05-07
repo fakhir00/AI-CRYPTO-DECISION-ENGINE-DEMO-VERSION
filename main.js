@@ -67,10 +67,10 @@ function loadDataCache() {
     if (!raw) return false;
     const cache = JSON.parse(raw);
     
-    // Check TTL
-    if (Date.now() - cache.timestamp > DATA_CACHE_TTL) {
+    // Check TTL or force refresh if assets length is below 15 (legacy cache)
+    if (Date.now() - cache.timestamp > DATA_CACHE_TTL || (cache.assets && cache.assets.length < 15)) {
       localStorage.removeItem(DATA_CACHE_KEY);
-      console.log('🗑️ Cache expired, fetching fresh data');
+      console.log('🗑️ Cache expired or legacy detected, fetching fresh data');
       return false;
     }
     
@@ -608,10 +608,10 @@ function renderDashboard() {
   `;
   if (typeof feather !== 'undefined') feather.replace();
 
-  // Dash Opportunities Mini — deterministic sort
+  // Dash Opportunities Mini — Show top 15 for comprehensive overview
   const dashOpps = document.getElementById('dash-opportunities-list');
   const sortedForDash = [...assets].sort((a, b) => (b.score - a.score) || a.symbol.localeCompare(b.symbol));
-  dashOpps.innerHTML = sortedForDash.slice(0, 5).map(asset => `
+  dashOpps.innerHTML = sortedForDash.slice(0, 15).map(asset => `
     <div class="asset-row">
       <div class="asset-info">
         <div class="asset-icon">${asset.symbol[0]}</div>
@@ -1288,8 +1288,8 @@ function renderProSignals() {
   const grid = document.getElementById('pro-signals-grid');
   if (!grid) return;
 
-  // Use top 5 assets by alpha score with a deterministic tie-breaker
-  const top = [...assets].sort((a, b) => (b.score - a.score) || a.symbol.localeCompare(b.symbol)).slice(0, 5);
+  // Use top 15 assets by alpha score for the Pro Signals grid
+  const top = [...assets].sort((a, b) => (b.score - a.score) || a.symbol.localeCompare(b.symbol)).slice(0, 15);
 
   if (!top.length) {
     grid.innerHTML = `<div style="text-align:center;color:var(--text-muted);padding:3rem;">No assets loaded yet. Live data syncs on startup.</div>`;
