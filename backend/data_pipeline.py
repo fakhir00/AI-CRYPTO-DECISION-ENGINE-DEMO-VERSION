@@ -2,6 +2,7 @@ import os
 import ccxt
 import pandas as pd
 import numpy as np
+import json
 import ta
 from ta.momentum import RSIIndicator
 from ta.trend import MACD, EMAIndicator
@@ -121,6 +122,27 @@ def get_features(df):
             
     return df[feature_cols].copy()
 
+def normalize_features(df, is_training=True):
+    """
+    Normalizes features and saves/loads the scaler to prevent data leakage.
+    """
+    scaler_path = os.path.join(os.path.dirname(__file__), 'scaler.json')
+    
+    if is_training:
+        mean = df.mean().to_dict()
+        std = df.std().to_dict()
+        with open(scaler_path, 'w') as f:
+            json.dump({'mean': mean, 'std': std}, f)
+    else:
+        if not os.path.exists(scaler_path):
+            raise FileNotFoundError("Scaler not found. Train the agent first.")
+        with open(scaler_path, 'r') as f:
+            scaler = json.load(f)
+        mean = pd.Series(scaler['mean'])
+        std = pd.Series(scaler['std'])
+        
+    return (df - mean) / std
+
 if __name__ == "__main__":
     # 1. Fetch Latest Data
     symbol = 'BTC/USDT'
@@ -137,7 +159,7 @@ if __name__ == "__main__":
     features_df = get_features(df)
     
     # Normalize
-    features_df = (features_df - features_df.mean()) / features_df.std()
+    features_df = normalize_features(features_df, is_training=True)
     
     # Re-attach close price
     features_df['close'] = df['close']

@@ -23,14 +23,23 @@ def evaluate():
     df = pd.read_csv(data_file)
     
     # 2. Centralized Feature Extraction
-    from data_pipeline import get_features
+    from data_pipeline import get_features, normalize_features
     features_df = get_features(df)
     
     # Normalize
-    features_df = (features_df - features_df.mean()) / features_df.std()
+    features_df = normalize_features(features_df, is_training=False)
     
-    # Re-attach close price
+    # Re-attach price columns needed for environment execution
     features_df['close'] = df['close']
+    features_df['high'] = df['high']
+    features_df['low'] = df['low']
+    features_df['raw_atr'] = df['atr']
+    features_df['raw_res1'] = df['res1']
+    features_df['raw_sup1'] = df['sup1']
+    features_df['raw_local_res'] = df['local_res']
+    features_df['raw_local_sup'] = df['local_sup']
+    features_df['raw_ema_9'] = df['ema_9']
+    features_df['raw_ema_21'] = df['ema_21']
     
     # 3. Initialize Environment
     env = CryptoTradingEnv(features_df)
@@ -83,10 +92,9 @@ def evaluate():
         obs, reward, terminated, truncated, info = env.step(action)
         
         # Detect a CLOSED trade
-        if prev_held > 0 and env.crypto_held == 0:
+        if info.get('trade_closed', False):
             closed_trades += 1
-            final_net_worth = env.net_worth
-            trade_pnl_pct = ((final_net_worth - entry_net_worth) / entry_net_worth) * 100
+            trade_pnl_pct = info.get('trade_pnl_pct', 0)
             
             if trade_pnl_pct > 0.1: # Profitable
                 wins += 1

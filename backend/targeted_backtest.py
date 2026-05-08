@@ -7,7 +7,7 @@ import sys
 
 # Ensure backend is in path
 sys.path.append(os.path.join(os.getcwd(), 'backend'))
-from data_pipeline import get_features
+from data_pipeline import get_features, normalize_features
 
 def targeted_backtest(num_trades=100):
     print(f"--- NEXUS AI: Institutional Backtest (Target: {num_trades} Trades) ---")
@@ -29,8 +29,17 @@ def targeted_backtest(num_trades=100):
     
     # 3. Extract Features
     features_df = get_features(df)
-    features_df = (features_df - features_df.mean()) / features_df.std()
+    features_df = normalize_features(features_df, is_training=False)
     features_df['close'] = df['close']
+    features_df['high'] = df['high']
+    features_df['low'] = df['low']
+    features_df['raw_atr'] = df['atr']
+    features_df['raw_res1'] = df['res1']
+    features_df['raw_sup1'] = df['sup1']
+    features_df['raw_local_res'] = df['local_res']
+    features_df['raw_local_sup'] = df['local_sup']
+    features_df['raw_ema_9'] = df['ema_9']
+    features_df['raw_ema_21'] = df['ema_21']
     
     # 4. Initialize Environment
     env = CryptoTradingEnv(features_df)
@@ -56,10 +65,11 @@ def targeted_backtest(num_trades=100):
         obs, reward, terminated, truncated, info = env.step(action)
         
         # Detect a CLOSED trade
-        # In this env, if crypto_held goes from >0 to 0, a trade was closed.
-        if prev_held > 0 and env.crypto_held == 0:
+        if info.get('trade_closed', False):
             trades_executed += 1
-            if env.net_worth > prev_net_worth:
+            trade_pnl_pct = info.get('trade_pnl_pct', 0)
+            
+            if trade_pnl_pct > 0.1:
                 winning_trades += 1
             else:
                 losing_trades += 1
