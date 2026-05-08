@@ -16,13 +16,13 @@ class CryptoTradingEnv(gym.Env):
         self.initial_balance = initial_balance
         self.fee_percent = 0.001 
         
-        # v8.5 Hyper-Growth Geometry
+        # v6.0 Asymmetric Risk/Reward Geometry
         self.max_risk_pct = 0.03      # 3% Risk (Aggressive Growth)
         self.position_pct = 0.20      # 20% Position
-        self.sl_atr = 2.5             # Deep Defense (Avoid Shakeouts)
-        self.tp1_atr = 1.5            # T1 at 1.5 ATR
-        self.tp2_atr = 6.0            # T2 for Major Portfolio Growth
-        self.trailing_sl_multiplier = 1.5 # Trail SL by 1.5 ATR
+        self.sl_atr = 1.5             # Tighter Defense (Minimize Losses)
+        self.tp1_atr = 2.0            # T1 at 2.0 ATR (> 1R initial)
+        self.tp2_atr = 4.0            # T2 for Major Portfolio Growth
+        self.trailing_sl_multiplier = 1.0 # Trail SL tightly by 1.0 ATR
         
         # Actions: 0 = Hold, 1 = Buy (Long), 2 = Sell (Short)
         self.action_space = spaces.Discrete(3)
@@ -53,19 +53,18 @@ class CryptoTradingEnv(gym.Env):
         obs.extend([self.balance, self.crypto_held])
         return np.array(obs, dtype=np.float32)
 
-    def _calculate_sl_tp_v5(self, entry_price, action, atr, row):
-        # Dynamic SL based on ATR
+    def _calculate_sl_tp_v6(self, entry_price, action, atr, row):
+        # v6.0 Geometry: Strict ATR based asymmetric targets
         sl_dist = atr * self.sl_atr
         
-        # Resistance-Based TP (Using Local Res/Pivot)
         if action == 1: # LONG
             stop_price = entry_price - sl_dist
-            tp1_price = max(entry_price + (atr * 0.5), row['res1']) # At least 0.5 ATR or Pivot Res
-            tp2_price = max(tp1_price + (atr * 1.0), row['local_res']) # Second target at Local High
+            tp1_price = entry_price + (atr * self.tp1_atr)
+            tp2_price = entry_price + (atr * self.tp2_atr)
         else: # SHORT
             stop_price = entry_price + sl_dist
-            tp1_price = min(entry_price - (atr * 0.5), row['sup1']) # At least 0.5 ATR or Pivot Sup
-            tp2_price = min(tp1_price - (atr * 1.0), row['local_sup']) # Second target at Local Low
+            tp1_price = entry_price - (atr * self.tp1_atr)
+            tp2_price = entry_price - (atr * self.tp2_atr)
             
         return stop_price, tp1_price, tp2_price
 
@@ -88,10 +87,10 @@ class CryptoTradingEnv(gym.Env):
         prev_held = self.crypto_held
         prev_net_worth = self.net_worth
         
-        # Execute Action with v5.0 Resistance-Based Geometry
+        # Execute Action with v6.0 Geometry
         if action != 0 and self.crypto_held == 0:
             row = self.df.iloc[self.current_step]
-            stop, tp1, tp2 = self._calculate_sl_tp_v5(current_price, action, row['atr'], row)
+            stop, tp1, tp2 = self._calculate_sl_tp_v6(current_price, action, row['atr'], row)
             position_usd = self._calculate_position_size(current_price, stop, action)
             
             if (action == 1 and row['ema_9'] < row['ema_21']) or (action == 2 and row['ema_9'] > row['ema_21']):
@@ -113,7 +112,7 @@ class CryptoTradingEnv(gym.Env):
         # Check SL/TP if in position
         if self.crypto_held > 0:
             if self.trade_direction == 1: # LONG
-                # 1. Partial Profit Taking (T1) + Trailing SL Init
+                # 1. Partial Profit Taking (T1) + Trailing SL Init (Break-Even)
                 if not self.partial_profit_taken and current_price >= self.tp1:
                     # Sell 50%
                     sell_amount = (self.crypto_held * 0.5) * current_price * (1 - self.fee_percent)
@@ -121,8 +120,8 @@ class CryptoTradingEnv(gym.Env):
                     self.crypto_held *= 0.5
                     self.partial_profit_taken = True
                     self.t1_hit_this_step = True
-                    # Initialize Trailing SL
-                    self.stop_loss = current_price - (self.df.iloc[self.current_step]['atr'] * self.trailing_sl_multiplier)
+                    # Initialize Trailing SL (Move to Entry Price / Break-Even)
+                    self.stop_loss = self.entry_price
                 
                 # 2. Final TP (T2) or SL
                 if current_price <= self.stop_loss or current_price >= self.tp2:
@@ -135,14 +134,15 @@ class CryptoTradingEnv(gym.Env):
                     if new_sl > self.stop_loss:
                         self.stop_loss = new_sl
             else: # SHORT
-                # 1. Partial Profit Taking (T1) + Trailing SL Init
+                # 1. Partial Profit Taking (T1) + Trailing SL Init (Break-Even)
                 if not self.partial_profit_taken and current_price <= self.tp1:
                     profit = (self.entry_price - current_price) * (self.crypto_held * 0.5)
                     self.balance += (self.entry_price * (self.crypto_held * 0.5) + profit) * (1 - self.fee_percent)
                     self.crypto_held *= 0.5
                     self.partial_profit_taken = True
                     self.t1_hit_this_step = True
-                    self.stop_loss = current_price + (self.df.iloc[self.current_step]['atr'] * self.trailing_sl_multiplier)
+                    # Initialize Trailing SL (Move to Entry Price / Break-Even)
+                    self.stop_loss = self.entry_price
                 
                 # 2. Final TP (T2) or SL
                 if current_price >= self.stop_loss or current_price <= self.tp2:
