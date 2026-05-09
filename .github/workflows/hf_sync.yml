@@ -19,4 +19,6 @@ jobs:
         run: |
           git config --global user.email "huggingface-sync@github.com"
           git config --global user.name "HF Sync"
-          git push --force https://fakhir27:$HF_TOKEN@huggingface.co/spaces/fakhir27/cryto-trading-brain main
+          # Try to push main to main with explicit remote and force
+          git remote add hf https://fakhir27:${{ secrets.HF_TOKEN }}@huggingface.co/spaces/fakhir27/cryto-trading-brain
+          git push hf main --force
