@@ -93,6 +93,7 @@ def get_features(df):
     Returns only the numeric features for the observation space.
     """
     feature_cols = [
+        'open', 'high', 'low', 'close', 'volume',
         'rsi', 'macd', 'macd_signal', 'ema_9', 'ema_21', 'atr',
         'obi', 'funding_rate', 'whale_flow', 'btc_dominance', 'liq_heatmap_density',
         'res1', 'sup1', 'local_res', 'local_sup', 'obv', 'force_index'
