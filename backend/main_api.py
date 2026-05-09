@@ -26,9 +26,16 @@ app.add_middleware(
 # Load latest brain (Main or Checkpoint)
 def load_latest_model():
     import glob
-    model_path = "backend/nexus_trading_agent_ppo_v11.zip"
-    checkpoints = glob.glob("backend/checkpoints/*.zip")
+    # Search in both 'backend/checkpoints' and 'checkpoints' depending on where we are running
+    search_paths = ["backend/checkpoints/*.zip", "checkpoints/*.zip"]
+    checkpoints = []
+    for path in search_paths:
+        checkpoints.extend(glob.glob(path))
     
+    model_path = "backend/nexus_trading_agent_ppo_v11.zip"
+    if not os.path.exists(model_path):
+        model_path = "nexus_trading_agent_ppo_v11.zip"
+
     if checkpoints:
         try:
             # Sort by step count (nexus_v11_XXXX_steps.zip)
@@ -36,8 +43,6 @@ def load_latest_model():
             model_path = latest_checkpoint
             print(f"Loading latest institutional checkpoint for API: {model_path}")
         except: pass
-    elif not os.path.exists(model_path):
-        model_path = "nexus_trading_agent_ppo_v11.zip"
         
     try:
         return RecurrentPPO.load(model_path)
@@ -115,4 +120,6 @@ async def predict(request: PredictionRequest):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    # Railway provides the port via the PORT environment variable
+    port = int(os.environ.get("PORT", 8000))
+    uvicorn.run(app, host="0.0.0.0", port=port)
