@@ -8,7 +8,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
           lfs: true
@@ -17,5 +17,6 @@ jobs:
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
-          # Use the HF_TOKEN to push to the Hugging Face Space
-          git push --force https://fakhir00:$HF_TOKEN@huggingface.co/spaces/fakhir00/cryto-trading-brain main
+          git config --global user.email "huggingface-sync@github.com"
+          git config --global user.name "HF Sync"
+          git push --force https://fakhir27:$HF_TOKEN@huggingface.co/spaces/fakhir27/cryto-trading-brain main
