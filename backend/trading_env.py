@@ -184,44 +184,48 @@ class CryptoTradingEnv(gym.Env):
         self.net_worth = self.balance + (self.crypto_held * current_price)
         self.max_net_worth = max(self.net_worth, self.max_net_worth)
         
-        # --- v12.0 INSTITUTIONAL SNIPER REWARD ENGINE ---
+        # --- v14.0 HUNTER REWARD ENGINE ---
         reward = 0
+        pnl_pct = 0.0
+        price_change = 0.0
         
-        # 1. Realized PnL Reward (FORCING POSITIVE EXPECTANCY)
+        # Calculate price change safely
+        if last_price > 0:
+            price_change = (current_price - last_price) / last_price
+        # 1. Realized PnL Reward (PREDATOR AGGRESSION)
         if trade_just_closed:
             trade_pnl_usd = self.balance - self.balance_before_trade
             pnl_pct = (trade_pnl_usd / self.initial_position_value) * 100
             
             if pnl_pct > 0:
-                # ONLY reward wins that have healthy magnitude
                 if pnl_pct > 1.5:
-                    reward += (pnl_pct ** 2) * 20.0 # Massive reward for "Big Winners"
+                    reward += (pnl_pct ** 2) * 40.0 # Extreme reward for winners
                 else:
-                    reward += 1.0 # Tiny reward for small wins (stop scalping)
+                    reward += 5.0 # Healthy incentive for small wins
             else:
-                # CATASTROPHIC PENALTY for large losses
                 if pnl_pct < -1.5:
-                    reward -= 500.0 
+                    reward -= 75.0 # Significant, but not paralyzing
                 else:
-                    reward += pnl_pct * 25.0 
+                    reward += pnl_pct * 15.0 
                 
-        # 2. Unrealized Momentum Reward (Tighten the leash)
+        # 2. POSITION REWARD (The Hunger)
         if self.crypto_held > 0:
-            price_change = (current_price - last_price) / last_price
+            reward += 0.5 # Skin in the game reward
+            
+            # 3. Unrealized Momentum Reward (Trend Riding)
             if self.trade_direction == 1: # LONG
-                reward += price_change * 150.0 # Reward riding trends hard
+                reward += price_change * 300.0 # Massive reward for trend-following
             else: # SHORT
-                reward -= price_change * 150.0
+                reward -= price_change * 300.0
                 
-        # 3. HOLD / OPPORTUNITY COST Logic
+        # 4. HOLD / OPPORTUNITY COST Logic (THE HUNGER)
         if action == 0 and self.crypto_held == 0:
-            # Reward staying out ONLY during extreme chaos
             volatility = abs((high_price - low_price) / current_price)
             if volatility > 0.03: 
                 reward += 1.0 
             else:
-                # Opportunity Cost: Penalty for sitting flat in a trending market
-                reward -= 0.2 
+                # High penalty for cowardice (force a decision)
+                reward -= 1.0 
                 
         # 4. Hitting TP1 (Partial Profit)
         if getattr(self, 't1_hit_this_step', False):

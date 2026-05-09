@@ -17,13 +17,17 @@ function computeAlphaScore(coin) {
   const volRatio = coin.market_cap > 0 ? (coin.total_volume / coin.market_cap) : 0;
   const mcapRank = coin.market_cap_rank || 50;
   
-  const momentumRaw = Math.min(35, Math.max(0, 17.5 + (change24h * 2.5)));
-  const volConviction = Math.min(25, volRatio * 250);
-  const mcapTier = Math.min(20, Math.max(5, 20 - (mcapRank * 0.3)));
-  const absChange = Math.abs(change24h);
-  const stability = absChange < 1 ? 10 : (absChange < 5 ? 18 : (absChange < 10 ? 15 : 8));
+  // Primary Trend Direction (50% Weight)
+  const momentumRaw = Math.min(50, Math.max(0, 25 + (change24h * 4.0))); 
   
-  return Math.round(Math.min(100, Math.max(0, momentumRaw + volConviction + mcapTier + stability)));
+  // Volume & Tier (Supporting Context)
+  const volConviction = Math.min(20, volRatio * 200);
+  const mcapTier = Math.min(15, Math.max(5, 15 - (mcapRank * 0.2)));
+  const absChange = Math.abs(change24h);
+  const stability = absChange < 1 ? 15 : (absChange < 5 ? 10 : 5);
+  
+  const score = Math.round(Math.min(100, Math.max(0, momentumRaw + volConviction + mcapTier + stability)));
+  return score;
 }
 
 export default async function handler(req, res) {
@@ -80,7 +84,7 @@ export default async function handler(req, res) {
         price: coin.current_price,
         change,
         score: alpha,
-        bias: alpha >= 60 ? 'bullish' : (alpha <= 40 ? 'bearish' : 'neutral'),
+        bias: alpha >= 65 ? 'bullish' : (alpha <= 45 ? 'bearish' : 'neutral'),
         confidence: Math.min(99, alpha),
         vol: '$' + (coin.total_volume / 1e9).toFixed(1) + 'B',
         market_cap_rank: coin.market_cap_rank,
