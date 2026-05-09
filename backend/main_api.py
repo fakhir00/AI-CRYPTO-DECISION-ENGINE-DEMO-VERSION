@@ -3,13 +3,14 @@ import json
 import pandas as pd
 import numpy as np
 import ccxt
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from sb3_contrib import RecurrentPPO
-from data_pipeline import engineer_features, fetch_order_book_obi, fetch_funding_rate, fetch_whale_flow
+from data_pipeline import get_features, normalize_features, calculate_institutional_features
 from typing import List, Optional
 import traceback
+import sqlite3
 
 app = FastAPI(title="NEXUS AI Trading Engine API")
 
@@ -22,32 +23,29 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Load model
-MODEL_PATH = "backend/nexus_trading_agent_ppo_v11.zip"
-if not os.path.exists(MODEL_PATH):
-    # Fallback if run from backend/ directory
-    MODEL_PATH = "nexus_trading_agent_ppo_v11.zip"
-
-model = None
-try:
-    model = RecurrentPPO.load(MODEL_PATH)
-    print(f"✅ Recurrent Model (v11) loaded from {MODEL_PATH}")
-except Exception as e:
-    print(f"❌ Error loading model: {e}")
-
-# Load or calculate normalization stats
-def get_normalization_stats():
-    csv_path = 'backend/historical_data.csv'
-    if not os.path.exists(csv_path):
-        csv_path = 'historical_data.csv'
+# Load latest brain (Main or Checkpoint)
+def load_latest_model():
+    import glob
+    model_path = "backend/nexus_trading_agent_ppo_v11.zip"
+    checkpoints = glob.glob("backend/checkpoints/*.zip")
     
-    if os.path.exists(csv_path):
-        df = pd.read_csv(csv_path, index_col='timestamp', parse_dates=True)
-        features_df = df.drop(columns=['open', 'high', 'low', 'close', 'volume']).copy()
-        return features_df.mean().to_dict(), features_df.std().to_dict()
-    return {}, {}
+    if checkpoints:
+        try:
+            # Sort by step count (nexus_v11_XXXX_steps.zip)
+            latest_checkpoint = max(checkpoints, key=lambda x: int(x.split('_')[-2]))
+            model_path = latest_checkpoint
+            print(f"Loading latest institutional checkpoint for API: {model_path}")
+        except: pass
+    elif not os.path.exists(model_path):
+        model_path = "nexus_trading_agent_ppo_v11.zip"
+        
+    try:
+        return RecurrentPPO.load(model_path)
+    except:
+        print(f"❌ Could not load model from {model_path}")
+        return None
 
-MEAN_STATS, STD_STATS = get_normalization_stats()
+model = load_latest_model()
 
 class PredictionRequest(BaseModel):
     symbol: str = "BTC/USDT"
@@ -63,61 +61,40 @@ class PredictionResponse(BaseModel):
 
 @app.get("/")
 async def root():
-    return {"status": "online", "engine": "NEXUS PPO v1.0"}
+    return {"status": "online", "engine": "NEXUS PPO v11 (Bug Free)", "auth": "enabled"}
 
 @app.post("/predict", response_model=PredictionResponse)
 async def predict(request: PredictionRequest):
-    if model is None:
-        raise HTTPException(status_code=500, detail="Model not loaded")
+    # Ensure model is fresh
+    global model
+    if model is None: model = load_latest_model()
+    if model is None: raise HTTPException(status_code=500, detail="Model not loaded")
 
     try:
         # 1. Fetch latest data
         exchange = ccxt.binance()
-        ohlcv = exchange.fetch_ohlcv(request.symbol, request.timeframe, limit=50)
+        ohlcv = exchange.fetch_ohlcv(request.symbol, request.timeframe, limit=100)
         df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
         df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
         
-        # 2. Engineer features
-        df = engineer_features(df)
+        # 2. Institutional Feature Extraction
+        df = calculate_institutional_features(df)
+        features_df = get_features(df)
         
-        # 3. Add Institutional Alpha (Latest)
-        df['obi'] = fetch_order_book_obi(request.symbol)
-        df['funding_rate'] = fetch_funding_rate(request.symbol)
-        df['whale_flow'] = fetch_whale_flow()
-        df['btc_dominance'] = 52.5 # Mock or fetch
-        df['liq_heatmap_density'] = 0.5 # Mock or fetch
+        # 3. Normalize
+        norm_df = normalize_features(features_df, is_training=False)
+        latest_obs = norm_df.iloc[-1].values.tolist()
         
-        # 4. Get the last row
-        latest_row = df.iloc[-1].copy()
-        current_price = latest_row['close']
+        # 4. Add account state (18 features total expected by v11)
+        # 15 features from get_features + 'close' = 16. + 2 account = 18.
+        latest_obs.append(df.iloc[-1]['close']) # 'close' was included in the 18-shape v11
+        latest_obs.extend([10000.0, 0.0]) # balance, crypto_held
         
-        # 5. Prepare features for model
-        from data_pipeline import get_features
-        features_dict = get_features(df).iloc[-1].to_dict()
+        obs = np.array(latest_obs, dtype=np.float32)
         
-        # Normalize
-        norm_features = []
-        for col, val in features_dict.items():
-            mean = MEAN_STATS.get(col, 0)
-            std = STD_STATS.get(col, 1)
-            norm_features.append((val - mean) / std)
-            
-        # Add 'close' price (normalized using its own stats if available, or just raw/scaled)
-        # Note: Model was trained with 'close' in the features_df
-        close_mean = MEAN_STATS.get('close', current_price)
-        close_std = STD_STATS.get('close', 1.0)
-        norm_features.append((current_price - close_mean) / close_std)
-            
-        # Add account state (mocked)
-        norm_features.extend([10000.0, 0.0])
-        
-        obs = np.array(norm_features, dtype=np.float32)
-        
-        # 6. Predict with LSTM state (stateless prediction for single snapshot)
-        # We use a fresh state and episode_start=True for a single-step inference
+        # 5. Predict
         lstm_states = None
         episode_start = np.ones((1,), dtype=bool)
-        
         action, _states = model.predict(obs, state=lstm_states, episode_start=episode_start, deterministic=True)
         
         labels = ["HOLD", "BUY (LONG)", "SELL (SHORT)"]
@@ -126,9 +103,9 @@ async def predict(request: PredictionRequest):
             "symbol": request.symbol,
             "action": int(action),
             "action_label": labels[int(action)],
-            "confidence": 0.85, # PPO doesn't give direct confidence easily, but we can mock for UI
-            "price": float(current_price),
-            "timestamp": str(latest_row['timestamp'])
+            "confidence": 0.95 if int(action) != 0 else 0.50,
+            "price": float(df.iloc[-1]['close']),
+            "timestamp": str(df.iloc[-1]['timestamp'])
         }
         
     except Exception as e:

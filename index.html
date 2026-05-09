@@ -13,8 +13,25 @@
   <script src="https://unpkg.com/feather-icons"></script>
   <!-- Chart.js -->
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-  <!-- TradingView -->
+   <!-- TradingView -->
   <script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script>
+  <link rel="stylesheet" href="/style.css">
+  <style>
+    /* Critical CSS to prevent FOUC (Flash of Unstyled Content) */
+    :root { --bg-dark: #05070D; --primary: #8B78FF; }
+    body { background-color: #05070D !important; margin: 0; padding: 0; color: #fff; overflow: hidden; }
+    #app { background: #05070D; min-height: 100vh; }
+    .loading-screen {
+      position: fixed; inset: 0; background: #05070D;
+      display: flex; justify-content: center; align-items: center; z-index: 99999;
+      font-family: 'Inter', sans-serif;
+    }
+    .loading-content { text-align: center; }
+    .loading-title { font-size: 3rem; font-weight: 900; letter-spacing: 0.25em; margin: 1rem 0 0.5rem; color: #fff; }
+    .loading-subtitle { color: #8B78FF; font-size: 0.9rem; letter-spacing: 0.15em; }
+    .hidden { display: none !important; }
+    .main-app.hidden { visibility: hidden; height: 0; overflow: hidden; }
+  </style>
 </head>
 <body>
   <div id="app">
@@ -208,6 +225,7 @@
                       <th>Alpha Score</th>
 
                       <th>Pattern Detected</th>
+                      <th>Signal</th>
                       <th>Action</th>
                     </tr>
                   </thead>

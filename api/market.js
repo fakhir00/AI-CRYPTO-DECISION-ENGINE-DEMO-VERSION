@@ -80,7 +80,7 @@ export default async function handler(req, res) {
         price: coin.current_price,
         change,
         score: alpha,
-        bias: alpha > 75 ? 'bullish' : (alpha < 50 ? 'bearish' : 'neutral'),
+        bias: alpha >= 60 ? 'bullish' : (alpha <= 40 ? 'bearish' : 'neutral'),
         confidence: Math.min(99, alpha),
         vol: '$' + (coin.total_volume / 1e9).toFixed(1) + 'B',
         market_cap_rank: coin.market_cap_rank,

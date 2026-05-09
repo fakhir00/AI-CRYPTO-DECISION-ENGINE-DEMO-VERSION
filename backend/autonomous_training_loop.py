@@ -1,32 +1,34 @@
-import time
 import os
+import time
 import pandas as pd
-from stable_baselines3 import PPO
+import numpy as np
+import ccxt
 from stable_baselines3.common.vec_env import DummyVecEnv
+from sb3_contrib import RecurrentPPO
 from trading_env import CryptoTradingEnv
-from data_pipeline import fetch_historical_data, engineer_features
+from data_pipeline import fetch_historical_data, get_features, normalize_features, calculate_institutional_features
 
 def run_training_cycle():
     print(f"\n--- Starting Training Cycle at {time.strftime('%Y-%m-%d %H:%M:%S')} ---")
     
-    # 1. Fetch Latest Data
+    # 1. Fetch Latest Data + Engineer Features (Consolidated)
     symbol = 'BTC/USDT'
     data_file = 'backend/historical_data.csv'
     if not os.path.exists(data_file): data_file = 'historical_data.csv'
     
-    print("Fetching fresh market data...")
-    df = fetch_historical_data(symbol, '1h', 2000)
-    df = engineer_features(df)
+    print(f"Fetching fresh market data...")
+    # Using 5,000 candles for a good balance of speed and depth
+    df = fetch_historical_data(symbol, '1h', 5000)
     df.to_csv(data_file, index=False)
     
     # 2. Centralized Feature Extraction
-    from data_pipeline import get_features, normalize_features
     features_df = get_features(df)
     
     # Normalize
     features_df = normalize_features(features_df, is_training=True)
     
-    # Re-attach price columns
+    # Re-attach price columns needed for environment logic (raw_*)
+    # IMPORTANT: We include 'close' to match the v11 shape (18 total features in obs)
     features_df['close'] = df['close']
     features_df['high'] = df['high']
     features_df['low'] = df['low']
@@ -42,19 +44,27 @@ def run_training_cycle():
     env = DummyVecEnv([lambda: CryptoTradingEnv(features_df)])
     
     # 4. Load or Initialize Model
-    model_path = "nexus_trading_agent_ppo"
+    model_path = "backend/nexus_trading_agent_ppo_v11"
+    
     if os.path.exists(model_path + ".zip"):
         print("Loading existing brain for further optimization...")
-        model = PPO.load(model_path, env=env)
+        model = RecurrentPPO.load(model_path, env=env)
     else:
-        print("Initializing new PPO brain...")
-        model = PPO("MlpPolicy", env, verbose=1, learning_rate=0.0005) # Lower LR for fine-tuning
+        print("Initializing new RecurrentPPO brain...")
+        model = RecurrentPPO("MlpLstmPolicy", env, verbose=1, learning_rate=1e-4)
     
-    # 5. Train
-    print(f"Agent is now learning from latest patterns (Deep Optimization Mode)...")
-    model.learn(total_timesteps=150_000) # Increased for higher accuracy
+    # 5. Train with Checkpoints
+    from stable_baselines3.common.callbacks import CheckpointCallback
+    checkpoint_callback = CheckpointCallback(
+        save_freq=10000,
+        save_path='backend/checkpoints/',
+        name_prefix='nexus_v12_profitability'
+    )
     
-    # 6. Save
+    print(f"Agent is now in GLOBAL OPTIMIZATION MODE...")
+    model.learn(total_timesteps=250_000, callback=checkpoint_callback) 
+    
+    # Also save to the main path
     model.save(model_path)
     print(f"✅ Brain updated and saved. Performance optimized.")
 
@@ -66,7 +76,9 @@ if __name__ == "__main__":
         try:
             run_training_cycle()
             print("Cooling down for 1 hour before next optimization cycle...")
-            time.sleep(3600) # Wait 1 hour between training cycles
+            time.sleep(3600)
         except Exception as e:
             print(f"❌ Training cycle failed: {e}")
-            time.sleep(60) # Wait a minute before retrying
+            import traceback
+            traceback.print_exc()
+            time.sleep(60)

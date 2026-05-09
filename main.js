@@ -165,12 +165,17 @@ document.addEventListener('DOMContentLoaded', () => {
     } else {
       clearInterval(interval);
       loadingBar.style.width = '100%';
+      
+      // Hydrate UI from cache BEFORE showing it
+      initApp();
+      
       setTimeout(() => {
         loadingScreen.style.opacity = '0';
         setTimeout(() => {
           loadingScreen.classList.add('hidden');
           mainApp.classList.remove('hidden');
-          initApp();
+          // Start the first live sync after showing the UI to ensure no delay
+          syncLiveApis();
         }, 500);
       }, 500);
     }
@@ -203,9 +208,6 @@ function initApp() {
   setupModals();
   setupAllButtons();
   setupTradingEvents();
-  
-  // Sync live APIs on load (will overwrite cache with fresh data)
-  syncLiveApis();
   
   // Real-time market data polling (every 20 seconds for high-precision accuracy)
   setInterval(syncLiveApis, 20000);
@@ -281,41 +283,44 @@ async function initCharts(timeframe = '24H') {
   });
 
   // Social Volume Chart (Sentiment Page)
-  const ctxSocial = document.getElementById('socialChart').getContext('2d');
-  const gradientSocial = ctxSocial.createLinearGradient(0, 0, 0, 200);
-  gradientSocial.addColorStop(0, 'rgba(0, 230, 118, 0.3)');
-  gradientSocial.addColorStop(1, 'rgba(0, 230, 118, 0.0)');
+  const socialCanvas = document.getElementById('socialChart');
+  if (socialCanvas) {
+    const ctxSocial = socialCanvas.getContext('2d');
+    const gradientSocial = ctxSocial.createLinearGradient(0, 0, 0, 200);
+    gradientSocial.addColorStop(0, 'rgba(0, 230, 118, 0.3)');
+    gradientSocial.addColorStop(1, 'rgba(0, 230, 118, 0.0)');
 
-  // Generate a realistic 24h momentum curve ending at current score
-  const socialData = Array.from({length: 24}, (_, i) => {
-    const progress = i / 23;
-    const base = 40 + (progress * (LIVE_SENTIMENT.score - 40));
-    const noise = Math.sin(i * 0.5) * 8;
-    return Math.max(0, Math.min(100, base + noise));
-  });
+    // Generate a realistic 24h momentum curve ending at current score
+    const socialData = Array.from({length: 24}, (_, i) => {
+      const progress = i / 23;
+      const base = 40 + (progress * (LIVE_SENTIMENT.score - 40));
+      const noise = Math.sin(i * 0.5) * 8;
+      return Math.max(0, Math.min(100, base + noise));
+    });
 
-  socialChart = new Chart(ctxSocial, {
-    type: 'line',
-    data: {
-      labels: Array.from({length: 24}, (_, i) => `${i}h`),
-      datasets: [{
-        label: 'Social Mentions Index',
-        data: socialData,
-        borderColor: '#00E676',
-        backgroundColor: gradientSocial,
-        borderWidth: 2,
-        pointRadius: 0,
-        fill: true,
-        tension: 0.3
-      }]
-    },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      plugins: { legend: { display: false } },
-      scales: { x: { display: false }, y: { display: true, min: 0, max: 100 } }
-    }
-  });
+    socialChart = new Chart(ctxSocial, {
+      type: 'line',
+      data: {
+        labels: Array.from({length: 24}, (_, i) => `${i}h`),
+        datasets: [{
+          label: 'Social Mentions Index',
+          data: socialData,
+          borderColor: '#00E676',
+          backgroundColor: gradientSocial,
+          borderWidth: 2,
+          pointRadius: 0,
+          fill: true,
+          tension: 0.3
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: { legend: { display: false } },
+        scales: { x: { display: false }, y: { display: true, min: 0, max: 100 } }
+      }
+    });
+  }
 }
 
 function simulateMarketTick() {
@@ -364,7 +369,7 @@ async function syncLiveApis() {
     const derivativeSymbols = topSymbols.slice(0, 15); // Top 15 for heavy OI/Funding data
 
     // 2. Fetch all other data using discovered symbols
-    const [whales, narrativesData, chartPrices, fundingData, oiData, depthData, btcChainData, binancePatterns] = await Promise.all([
+    const [whales, narrativesData, chartPrices, fundingData, oiData, depthData, btcChainData, binancePatterns, sentimentData] = await Promise.all([
       fetchWhaleActivity(),
       fetchTrendingNarratives(),
       fetchChartData('BTC'),
@@ -372,8 +377,30 @@ async function syncLiveApis() {
       fetchOpenInterest(derivativeSymbols),
       fetchOrderBookDepth('BTC'),
       fetchBtcOnChain(),
-      fetchBinancePatterns()
+      fetchBinancePatterns(),
+      fetchSentiment()
     ]);
+
+    // Update Global Narratives & Sentiment
+    if (narrativesData && narrativesData.narratives) {
+      NARRATIVES.length = 0;
+      narrativesData.narratives.forEach(n => {
+        // Add a random 'val' for the progress bar (calculated based on change)
+        const progress = Math.min(100, Math.max(20, 50 + (n.change * 3)));
+        NARRATIVES.push({ ...n, val: progress });
+      });
+      renderNarrativeMomentum();
+    }
+
+    if (sentimentData) {
+      LIVE_SENTIMENT = sentimentData;
+      // If data is unavailable or neutral (50), inject dynamic bias from market performance
+      if (LIVE_SENTIMENT.score === 50 && assets.length > 0) {
+        const avgChange = assets.slice(0, 10).reduce((acc, a) => acc + a.change, 0) / 10;
+        LIVE_SENTIMENT.score = Math.min(95, Math.max(5, 50 + (avgChange * 5)));
+        LIVE_SENTIMENT.source = 'Momentum Engine';
+      }
+    }
 
     // Store derivatives data globally
     if (fundingData && fundingData.length > 0) LIVE_FUNDING = fundingData;
@@ -845,7 +872,19 @@ function renderOpportunitiesPage() {
         </div>
       </td>
 
+
       <td><span class="text-muted" style="font-size: 0.8rem">${asset.reason || 'Analyzing Technicals...'}</span></td>
+      <td>
+        ${sig.type === 'WAIT' ? `
+          <span class="badge" style="background: rgba(255,255,255,0.05); color: var(--text-muted); font-size: 0.65rem; padding: 0.2rem 0.5rem;">
+            ⏸ WAIT
+          </span>
+        ` : `
+          <span class="badge ${sig.isBull ? 'sig-long' : 'sig-short'}" style="font-size: 0.65rem; padding: 0.2rem 0.5rem; display: inline-flex; align-items: center; gap: 4px;">
+            ${sig.isBull ? '📈' : '📉'} ${sig.isBull ? 'LONG' : 'SHORT'}
+          </span>
+        `}
+      </td>
       <td><button class="action-btn">Analyze</button></td>
     </tr>
   `}).join('');
@@ -859,7 +898,7 @@ function renderOpportunitiesPage() {
       
       navigateToPage('ai-research'); // Switch to AI Research Analyst Page
       setTimeout(() => {
-         triggerMcp(`Give me a quantitative algorithmic trade setup for ${symbol}. The current detected pattern is "${reason}". Align your analysis with this pattern and provide the 5 rationales.`);
+         triggerMcp(`Give me a quantitative algorithmic trade setup for ${symbol}. The current detected pattern is "${reason}". MANDATORY: Provide exactly 5 Institutional Trade Rationales and place them at the ABSOLUTE BOTTOM of your response.`);
       }, 100);
     });
   });
@@ -1232,8 +1271,23 @@ function generateSignalForAsset(asset) {
       };
   }
 
-  const bias = asset.bias;
+  const bias = asset.bias || 'neutral';
   const isBull = bias === 'bullish';
+  const isBear = bias === 'bearish';
+  
+  // ═══ GATE 2: BIAS PROTOCOL ═══
+  if (bias === 'neutral' || (!isBull && !isBear)) {
+      return {
+          type: 'WAIT',
+          isBull: null,
+          strength: { label: 'NEUTRAL ZONE', cls: 'text-muted' },
+          exchanges: ['Binance'],
+          leverage: 'None',
+          entry1: 0, entry2: 0, entry3: 0,
+          t1: 0, t2: 0, t3: 0, t4: 0, sl: 0, rrRatio: '0.0',
+          waitReason: 'Market bias is neutral. Institutional algorithms are in "Wait and See" mode.'
+      };
+  }
   
   // Use live ATR if available, otherwise use a percentage-based proxy
   const emaInfo = window._liveEmaData ? window._liveEmaData[sym] : null;

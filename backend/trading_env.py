@@ -184,34 +184,60 @@ class CryptoTradingEnv(gym.Env):
         self.net_worth = self.balance + (self.crypto_held * current_price)
         self.max_net_worth = max(self.net_worth, self.max_net_worth)
         
-        # Calculate Reward
-        net_worth_change = (self.net_worth - last_net_worth) / last_net_worth
-        
-        # v10.0 Directional Oracle Reward (80% Accuracy Push)
+        # --- v12.0 INSTITUTIONAL SNIPER REWARD ENGINE ---
         reward = 0
-        price_change = (current_price - last_price) / last_price
         
-        if action == 1: # LONG
-            reward = price_change * 100.0 # Reward for up-move
-        elif action == 2: # SHORT
-            reward = -price_change * 100.0 # Reward for down-move
-        else: # HOLD
-            reward = -abs(price_change) * 5.0 # Small penalty for missing a move
+        # 1. Realized PnL Reward (The most important for profitability)
+        if trade_just_closed:
+            trade_pnl_usd = self.balance - self.balance_before_trade
+            pnl_pct = (trade_pnl_usd / self.initial_position_value) * 100
             
-        # Bonus for hitting TP levels
+            if pnl_pct > 0:
+                # Quadratic reward for wins (incentivize big wins)
+                reward += (pnl_pct ** 2) * 2.0 
+                # Massive bonus for high R:R wins
+                if pnl_pct > 3.0: reward += 50.0 
+            else:
+                # Severe penalty for losses (3x more weight than wins)
+                reward += pnl_pct * 15.0 
+                
+        # 2. Unrealized Momentum Reward
+        if self.crypto_held > 0:
+            price_change = (current_price - last_price) / last_price
+            if self.trade_direction == 1: # LONG
+                reward += price_change * 50.0
+            else: # SHORT
+                reward -= price_change * 50.0
+                
+        # 3. HOLD / SELECTIVITY Reward
+        if action == 0 and self.crypto_held == 0:
+            # Reward staying out during high volatility or uncertainty
+            volatility = abs((high_price - low_price) / current_price)
+            if volatility > 0.02: # 2% candle
+                reward += 2.0 # Good job sitting on hands during chaos
+            else:
+                reward += 0.1 # Tiny reward for patience
+                
+        # 4. Hitting TP1 (Partial Profit)
         if getattr(self, 't1_hit_this_step', False):
-            reward += 10.0
-        
+            reward += 15.0
+            
+        # 5. Drawdown Penalty
+        drawdown = (self.max_net_worth - self.net_worth) / self.max_net_worth
+        if drawdown > 0.05: # >5% Drawdown
+            reward -= (drawdown * 100.0)
+
         # Move to next step
         self.current_step += 1
         
         # Check if done
         terminated = self.current_step >= len(self.df) - 1
-        truncated = self.net_worth <= 0 # Bankrupt
+        truncated = self.net_worth <= (self.initial_balance * 0.5) # Bankruptcy at 50% drawdown
         
         info = {
             'net_worth': self.net_worth,
-            'step': self.current_step
+            'step': self.current_step,
+            'reward': reward
         }
         
         if trade_just_closed:
