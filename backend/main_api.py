@@ -1,16 +1,15 @@
 import os
-import json
 import pandas as pd
 import numpy as np
 import ccxt
-from fastapi import FastAPI, HTTPException, Depends
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from sb3_contrib import RecurrentPPO
 from data_pipeline import get_features, normalize_features, calculate_institutional_features
-from typing import List, Optional
+from signal_engine import analyze_timeframe, merge_timeframe_signals, get_higher_timeframe
+from typing import Dict, List, Optional
 import traceback
-import sqlite3
 
 app = FastAPI(title="NEXUS AI Trading Engine API")
 
@@ -63,6 +62,19 @@ class PredictionResponse(BaseModel):
     confidence: float
     price: float
     timestamp: str
+    signal_score: float
+    regime: str
+    pattern: str
+    setup: str
+    stop_loss: float
+    take_profit_1: float
+    take_profit_2: float
+    risk_reward: float
+    timeframe_confluence: str
+    higher_timeframe: Optional[str] = None
+    higher_timeframe_score: float
+    reasons: List[str]
+    components: Dict[str, float]
 
 @app.get("/")
 async def root():
@@ -72,47 +84,90 @@ async def root():
 async def predict(request: PredictionRequest):
     # Ensure model is fresh
     global model
-    if model is None: model = load_latest_model()
-    if model is None: raise HTTPException(status_code=500, detail="Model not loaded")
+    if model is None:
+        model = load_latest_model()
 
     try:
-        # 1. Fetch latest data
+        # 1. Fetch latest data for primary timeframe
         exchange = ccxt.binance()
-        ohlcv = exchange.fetch_ohlcv(request.symbol, request.timeframe, limit=100)
-        df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-        df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
-        
-        # 2. Institutional Feature Extraction
+        ohlcv = exchange.fetch_ohlcv(request.symbol, request.timeframe, limit=260)
+        if not ohlcv:
+            raise HTTPException(status_code=400, detail="No market data returned from exchange")
+
+        df = pd.DataFrame(ohlcv, columns=["timestamp", "open", "high", "low", "close", "volume"])
+        df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
+
+        # 2. Institutional feature extraction
         df = calculate_institutional_features(df)
+        if len(df) < 40:
+            raise HTTPException(status_code=400, detail="Not enough processed candles for reliable analysis")
+
+        # 3. RL signal (used as a weighted confluence, not the only decision maker)
+        rl_action = None
         features_df = get_features(df)
-        
-        # 3. Normalize
         norm_df = normalize_features(features_df, is_training=False)
         latest_obs = norm_df.iloc[-1].values.tolist()
-        
-        # 4. Add account state (18 features total expected by v11)
-        # 15 features from get_features + 'close' = 16. + 2 account = 18.
-        latest_obs.append(df.iloc[-1]['close']) # 'close' was included in the 18-shape v11
-        latest_obs.extend([10000.0, 0.0]) # balance, crypto_held
-        
+
+        latest_obs.append(df.iloc[-1]["close"])
+        latest_obs.extend([10000.0, 0.0])
         obs = np.array(latest_obs, dtype=np.float32)
-        
-        # 5. Predict
-        lstm_states = None
-        episode_start = np.ones((1,), dtype=bool)
-        action, _states = model.predict(obs, state=lstm_states, episode_start=episode_start, deterministic=True)
-        
-        labels = ["HOLD", "BUY (LONG)", "SELL (SHORT)"]
-        
+
+        if model is not None:
+            try:
+                lstm_states = None
+                episode_start = np.ones((1,), dtype=bool)
+                rl_pred, _states = model.predict(
+                    obs, state=lstm_states, episode_start=episode_start, deterministic=True
+                )
+                rl_action = int(rl_pred)
+            except Exception:
+                rl_action = None
+
+        # 4. Primary timeframe analysis
+        primary = analyze_timeframe(df, request.timeframe, rl_action=rl_action)
+
+        # 5. Higher timeframe confluence analysis
+        higher_timeframe = get_higher_timeframe(request.timeframe)
+        higher = None
+        if higher_timeframe != request.timeframe:
+            try:
+                higher_ohlcv = exchange.fetch_ohlcv(request.symbol, higher_timeframe, limit=260)
+                if higher_ohlcv:
+                    higher_df = pd.DataFrame(
+                        higher_ohlcv, columns=["timestamp", "open", "high", "low", "close", "volume"]
+                    )
+                    higher_df["timestamp"] = pd.to_datetime(higher_df["timestamp"], unit="ms")
+                    higher_df = calculate_institutional_features(higher_df)
+                    if len(higher_df) >= 40:
+                        higher = analyze_timeframe(higher_df, higher_timeframe, rl_action=None)
+            except Exception:
+                higher = None
+
+        final_signal = merge_timeframe_signals(primary, higher)
+        latest_row = df.iloc[-1]
+
         return {
             "symbol": request.symbol,
-            "action": int(action),
-            "action_label": labels[int(action)],
-            "confidence": 0.95 if int(action) != 0 else 0.50,
-            "price": float(df.iloc[-1]['close']),
-            "timestamp": str(df.iloc[-1]['timestamp'])
+            "action": int(final_signal["action"]),
+            "action_label": final_signal["action_label"],
+            "confidence": float(final_signal["confidence"]),
+            "price": float(latest_row["close"]),
+            "timestamp": str(latest_row["timestamp"]),
+            "signal_score": float(final_signal["signal_score"]),
+            "regime": final_signal["regime"],
+            "pattern": final_signal["pattern"],
+            "setup": final_signal["setup"],
+            "stop_loss": float(final_signal["stop_loss"]),
+            "take_profit_1": float(final_signal["take_profit_1"]),
+            "take_profit_2": float(final_signal["take_profit_2"]),
+            "risk_reward": float(final_signal["risk_reward"]),
+            "timeframe_confluence": final_signal["timeframe_confluence"],
+            "higher_timeframe": final_signal["higher_timeframe"],
+            "higher_timeframe_score": float(final_signal["higher_timeframe_score"]),
+            "reasons": final_signal["reasons"],
+            "components": {k: float(v) for k, v in final_signal["components"].items()},
         }
-        
+
     except Exception as e:
         print("❌ Prediction Error:")
         traceback.print_exc()

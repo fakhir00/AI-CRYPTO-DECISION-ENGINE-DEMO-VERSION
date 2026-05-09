@@ -797,7 +797,11 @@ export async function fetchDualAI(userQuery, assetContext = '') {
   // 2. Add RL prediction to context if available
   let enhancedContext = context;
   if (rlData) {
-    enhancedContext += ` | [NEXUS RL AGENT PREDICTION]: Action: ${rlData.action_label}, Confidence: ${rlData.confidence * 100}%, Current Price: $${rlData.price}. Use this as your primary quantitative bias.`;
+    const componentsText = rlData.components
+      ? Object.entries(rlData.components).map(([k, v]) => `${k}:${v}`).join(', ')
+      : 'n/a';
+    const reasonsText = Array.isArray(rlData.reasons) ? rlData.reasons.join(' || ') : 'n/a';
+    enhancedContext += ` | [NEXUS QUANT SIGNAL]: Action: ${rlData.action_label}, Confidence: ${(rlData.confidence * 100).toFixed(1)}%, Score: ${rlData.signal_score}, Regime: ${rlData.regime}, Pattern: ${rlData.pattern}, Setup: ${rlData.setup}, Price: $${rlData.price}, Stop: $${rlData.stop_loss}, TP1: $${rlData.take_profit_1}, TP2: $${rlData.take_profit_2}, R:R ${rlData.risk_reward}, Confluence: ${rlData.timeframe_confluence}, Higher TF: ${rlData.higher_timeframe || 'N/A'} (${rlData.higher_timeframe_score || 0}). Components => ${componentsText}. Reasons => ${reasonsText}. Use this structured quant signal as your primary bias.`;
   }
 
   const result = await fetchAIAnalysis(enhancedContext);
@@ -812,4 +816,3 @@ export async function fetchDualAI(userQuery, assetContext = '') {
       <div style="color:#BAC2DE;line-height:1.6;">${renderMarkdown(result)}</div>
     </div>`;
 }
-
