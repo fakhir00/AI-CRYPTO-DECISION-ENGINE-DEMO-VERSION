@@ -127,6 +127,11 @@ class CryptoTradingEnv(gym.Env):
                 hit_tp1 = high_price >= self.tp1 and not self.partial_profit_taken
                 hit_tp2 = high_price >= self.tp2
 
+                # FAIR WICK LOGIC: If both hit, assume Win if candle is green
+                if hit_sl and hit_tp1:
+                    if row['close'] > row['open']: hit_sl = False 
+                    else: hit_tp1 = False
+
                 if hit_sl:
                     self.balance += (self.crypto_held * self.stop_loss) * (1 - self.fee_percent)
                     self.crypto_held = 0
@@ -138,7 +143,9 @@ class CryptoTradingEnv(gym.Env):
                         self.crypto_held *= 0.5
                         self.partial_profit_taken = True
                         self.t1_hit_this_step = True
-                        self.stop_loss = current_price - (row['raw_atr'] * self.trailing_sl_multiplier)
+                        # TRAILING SL: Only move UP
+                        new_sl = current_price - (row.get('raw_atr', 0) * self.trailing_sl_multiplier)
+                        self.stop_loss = max(self.stop_loss, new_sl)
 
                     if hit_tp2:
                         self.balance += (self.crypto_held * self.tp2) * (1 - self.fee_percent)
@@ -146,13 +153,17 @@ class CryptoTradingEnv(gym.Env):
                         trade_just_closed = True
 
                     if self.partial_profit_taken and self.crypto_held > 0:
-                        new_sl = current_price - (row['raw_atr'] * self.trailing_sl_multiplier)
-                        if new_sl > self.stop_loss:
-                            self.stop_loss = new_sl
+                        new_sl = current_price - (row.get('raw_atr', 0) * self.trailing_sl_multiplier)
+                        self.stop_loss = max(self.stop_loss, new_sl)
             else: # SHORT
                 hit_sl = high_price >= self.stop_loss
                 hit_tp1 = low_price <= self.tp1 and not self.partial_profit_taken
                 hit_tp2 = low_price <= self.tp2
+
+                # FAIR WICK LOGIC: If both hit, assume Win if candle is red
+                if hit_sl and hit_tp1:
+                    if row['close'] < row['open']: hit_sl = False
+                    else: hit_tp1 = False
 
                 if hit_sl:
                     profit = (self.entry_price - self.stop_loss) * self.crypto_held
@@ -166,7 +177,9 @@ class CryptoTradingEnv(gym.Env):
                         self.crypto_held *= 0.5
                         self.partial_profit_taken = True
                         self.t1_hit_this_step = True
-                        self.stop_loss = current_price + (row['atr'] * self.trailing_sl_multiplier)
+                        # TRAILING SL: Only move DOWN for shorts
+                        new_sl = current_price + (row.get('atr', 0) * self.trailing_sl_multiplier)
+                        self.stop_loss = min(self.stop_loss, new_sl)
 
                     if hit_tp2:
                         profit = (self.entry_price - self.tp2) * self.crypto_held
@@ -175,9 +188,8 @@ class CryptoTradingEnv(gym.Env):
                         trade_just_closed = True
 
                     if self.partial_profit_taken and self.crypto_held > 0:
-                        new_sl = current_price + (row['atr'] * self.trailing_sl_multiplier)
-                        if new_sl < self.stop_loss:
-                            self.stop_loss = new_sl
+                        new_sl = current_price + (row.get('atr', 0) * self.trailing_sl_multiplier)
+                        self.stop_loss = min(self.stop_loss, new_sl)
                 
         # Calculate new net worth
         last_net_worth = self.net_worth
