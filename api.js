@@ -731,7 +731,9 @@ For analysis queries, provide structured output with: Price targets, Probability
 export async function fetchRLPrediction(symbol = 'BTC/USDT') {
   try {
     const formattedSymbol = symbol.includes('/') ? symbol : `${symbol}/USDT`;
-    const res = await fetch('http://localhost:8000/predict', {
+    // Dynamic Backend Discovery: Use VITE_BACKEND_URL if set (for production), else fallback to localhost
+    const backendUrl = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000';
+    const res = await fetch(`${backendUrl}/predict`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ symbol: formattedSymbol, timeframe: '1h' })
