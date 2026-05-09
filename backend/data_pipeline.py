@@ -48,6 +48,10 @@ def calculate_institutional_features(df):
     df['local_res'] = df['high'].rolling(window=24).max()
     df['local_sup'] = df['low'].rolling(window=24).min()
 
+    # 5. Volume Dynamics (Smart Money Tracking)
+    df['obv'] = ta.volume.on_balance_volume(df['close'], df['volume'])
+    df['force_index'] = (df['close'] - df['close'].shift(1)) * df['volume']
+    
     df.dropna(inplace=True)
     return df
 
@@ -91,7 +95,7 @@ def get_features(df):
     feature_cols = [
         'rsi', 'macd', 'macd_signal', 'ema_9', 'ema_21', 'atr',
         'obi', 'funding_rate', 'whale_flow', 'btc_dominance', 'liq_heatmap_density',
-        'res1', 'sup1', 'local_res', 'local_sup'
+        'res1', 'sup1', 'local_res', 'local_sup', 'obv', 'force_index'
     ]
     # Ensure all columns exist
     for col in feature_cols:

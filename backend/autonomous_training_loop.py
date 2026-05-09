@@ -44,24 +44,22 @@ def run_training_cycle():
     env = DummyVecEnv([lambda: CryptoTradingEnv(features_df)])
     
     # 4. Load or Initialize Model
-    model_path = "backend/nexus_trading_agent_ppo_v11"
+    model_name = "nexus_v13_profit_surgery"
+    model_path = f"backend/{model_name}"
     
-    if os.path.exists(model_path + ".zip"):
-        print("Loading existing brain for further optimization...")
-        model = RecurrentPPO.load(model_path, env=env)
-    else:
-        print("Initializing new RecurrentPPO brain...")
-        model = RecurrentPPO("MlpLstmPolicy", env, verbose=1, learning_rate=1e-4)
+    # Initialize FRESH to purge the negative expectancy bias
+    print("Launching v13 'PROFIT SURGERY' brain...")
+    model = RecurrentPPO("MlpLstmPolicy", env, verbose=1, learning_rate=1e-4)
     
     # 5. Train with Checkpoints
     from stable_baselines3.common.callbacks import CheckpointCallback
     checkpoint_callback = CheckpointCallback(
         save_freq=10000,
         save_path='backend/checkpoints/',
-        name_prefix='nexus_v12_profitability'
+        name_prefix=model_name
     )
     
-    print(f"Agent is now in GLOBAL OPTIMIZATION MODE...")
+    print(f"Agent is now in EMERGENCY PROFITABILITY MODE...")
     model.learn(total_timesteps=250_000, callback=checkpoint_callback) 
     
     # Also save to the main path

@@ -565,7 +565,7 @@ Your core decision-making is based on the NEXUS High-Probability Framework.
 CRITICAL: Every trade signal MUST include 5 "Institutional Trade Rationales" that justify the setup based on technical and on-chain data. 
 
 MANDATORY SIGNAL FORMAT (FOLLOW STICTLY):
-📪 #[COIN]/USDT<br><br>Direction: <strong style="color:var(--green)">[LONG]</strong> or <strong style="color:var(--red)">[SHORT]</strong><br>Leverage: Cross (2X-5X)<br><br>Entry: [Price] - [Price] - [Price]<br><br>Target 1: [Price]<br>Target 2: [Price]<br>Target 3: [Price]<br>Target 4: [Price]<br><br>Stop loss: [Price]<br><br>Risk:Reward Ratio: 1:[Value]<br><br>⚡ NEXUS Pro Autotrade Signals<br><br><strong>5 Institutional Trade Rationales:</strong><br>1. [Rationale 1]<br>2. [Rationale 2]<br>3. [Rationale 3]<br>4. [Rationale 4]<br>5. [Rationale 5]
+📪 #[COIN]/USDT<br><br>Direction: <strong style="color:var(--green)">[LONG]</strong> or <strong style="color:var(--red)">[SHORT]</strong><br>Leverage: Cross (2X-5X)<br><br>Entry: [Price] - [Price] - [Price]<br><br>Target 1: [Price]<br>Target 2: [Price]<br>Target 3: [Price]<br>Target 4: [Price]<br><br>Stop loss: [Price]<br><br>Risk:Reward Ratio: 1:[Value]<br><br>🛡️ <strong>Risk Management Protocol:</strong><br>- Move SL to Entry (Break-Even) after Target 1 is hit.<br>- Trail SL into profit after Target 2 is hit.<br>- Exit 50% position at Target 1 (Scale Out).<br><br>⚡ NEXUS Pro Autotrade Signals<br><br><strong>5 Institutional Trade Rationales:</strong><br>1. [Rationale 1]<br>2. [Rationale 2]<br>3. [Rationale 3]<br>4. [Rationale 4]<br>5. [Rationale 5]
 
 CRITICAL: Do NOT include 'Strategy' or 'Exchange' in the signal block. Place the rationales at the ABSOLUTE BOTTOM. 
 
