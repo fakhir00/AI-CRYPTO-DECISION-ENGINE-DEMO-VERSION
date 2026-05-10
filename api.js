@@ -861,26 +861,43 @@ export async function fetchDualAI(userQuery, assetContext = '') {
 
   if (!result) return null;
 
-  // Split the response into Signal and Rationales
-  let signalText = result;
+  // Split the response into Preamble, Signal, and Rationales
+  let preamble = "";
+  let signalText = "";
   let rationalesText = "";
   
-  const splitIndex = result.indexOf('5 Institutional Trade Rationales');
-  if (splitIndex !== -1) {
-    const strongSplit = result.lastIndexOf('<strong>', splitIndex);
-    if (strongSplit !== -1 && (splitIndex - strongSplit) < 20) {
-       signalText = result.substring(0, strongSplit).trim();
-       rationalesText = result.substring(strongSplit).trim();
-    } else {
-       const newlineSplit = result.lastIndexOf('\n', splitIndex);
-       if (newlineSplit !== -1) {
-         signalText = result.substring(0, newlineSplit).trim();
-         rationalesText = result.substring(newlineSplit).trim();
+  const signalStart = result.indexOf('⚡⚡ #');
+  if (signalStart !== -1) {
+    preamble = result.substring(0, signalStart).trim();
+    
+    const rationalesStart = result.indexOf('5 Institutional Trade Rationales');
+    if (rationalesStart !== -1) {
+       const strongSplit = result.lastIndexOf('<strong>', rationalesStart);
+       // Sometimes markdown headers are used instead of <strong>
+       const mdHeaderSplit = result.lastIndexOf('##', rationalesStart);
+       const mdHeader1Split = result.lastIndexOf('**5', rationalesStart);
+       
+       let splitEnd = rationalesStart;
+       if (strongSplit !== -1 && (rationalesStart - strongSplit) < 20) {
+         splitEnd = strongSplit;
+       } else if (mdHeaderSplit !== -1 && (rationalesStart - mdHeaderSplit) < 20) {
+         splitEnd = mdHeaderSplit;
+       } else if (mdHeader1Split !== -1 && (rationalesStart - mdHeader1Split) < 20) {
+         splitEnd = mdHeader1Split;
        } else {
-         signalText = result.substring(0, splitIndex).trim();
-         rationalesText = result.substring(splitIndex).trim();
+         const newlineSplit = result.lastIndexOf('\n', rationalesStart);
+         if (newlineSplit !== -1 && (rationalesStart - newlineSplit) < 20) {
+           splitEnd = newlineSplit;
+         }
        }
+       
+       signalText = result.substring(signalStart, splitEnd).trim();
+       rationalesText = result.substring(splitEnd).trim();
+    } else {
+       signalText = result.substring(signalStart).trim();
     }
+  } else {
+    rationalesText = result;
   }
 
   // Escape the signal text for the clipboard copy command
@@ -915,7 +932,8 @@ export async function fetchDualAI(userQuery, assetContext = '') {
         🧠 Nexus Dual-Engine (GPT-4o + Hermes)
       </div>
       ${patternBadge}
-      ${splitIndex !== -1 ? signalHtml : ''}
-      <div style="color:#BAC2DE;line-height:1.6;">${renderMarkdown(rationalesText || result)}</div>
+      ${preamble ? `<div style="color:#BAC2DE;line-height:1.6;margin-bottom:0.5rem;">${renderMarkdown(preamble)}</div>` : ''}
+      ${signalText ? signalHtml : ''}
+      ${rationalesText ? `<div style="color:#BAC2DE;line-height:1.6;">${renderMarkdown(rationalesText)}</div>` : ''}
     </div>`;
 }
