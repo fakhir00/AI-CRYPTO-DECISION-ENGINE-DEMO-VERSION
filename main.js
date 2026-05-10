@@ -59,27 +59,58 @@ function saveDataCache() {
       LIVE_CATALYSTS: [...LIVE_CATALYSTS]
     };
     localStorage.setItem(DATA_CACHE_KEY, JSON.stringify(cache));
-    console.log('💾 Data cache saved to localStorage');
+    
+    // 🌐 PUSH TO SUPABASE (Global Sync)
+    pushToGlobalCache(cache);
+    
+    console.log('💾 Data cache saved locally & synced to Supabase');
   } catch(e) { console.warn('⚠️ Cache save failed:', e.message); }
 }
 
-function loadDataCache() {
+async function pushToGlobalCache(cache) {
   try {
+    const { error } = await supabase
+      .from('global_market_cache')
+      .upsert({ id: 'market_data_v1', data: cache, updated_at: new Date().toISOString() });
+    if (error) throw error;
+  } catch (e) {
+    console.warn('⚠️ Global Sync Push Failed:', e.message);
+  }
+}
+
+async function loadDataCache() {
+  try {
+    let cache = null;
     const raw = localStorage.getItem(DATA_CACHE_KEY);
-    if (!raw) return false;
-    const cache = JSON.parse(raw);
     
-    // Check TTL or force refresh if assets length is below 15 (legacy cache)
-    if (Date.now() - cache.timestamp > DATA_CACHE_TTL || (cache.assets && cache.assets.length < 15)) {
-      localStorage.removeItem(DATA_CACHE_KEY);
-      console.log('🗑️ Cache expired or legacy detected, fetching fresh data');
-      return false;
+    if (raw) {
+      cache = JSON.parse(raw);
+      // Check local TTL
+      if (Date.now() - cache.timestamp > DATA_CACHE_TTL || (cache.assets && cache.assets.length < 15)) {
+        cache = null;
+      }
     }
+
+    // 🌐 PULL FROM SUPABASE if local is missing/expired
+    if (!cache) {
+      console.log('🌐 Local cache empty/expired, pulling from Supabase...');
+      const { data, error } = await supabase
+        .from('global_market_cache')
+        .select('data')
+        .eq('id', 'market_data_v1')
+        .single();
+      
+      if (data && data.data) {
+        cache = data.data;
+        console.log('✅ Global cache pulled from Supabase');
+      }
+    }
+
+    if (!cache) return false;
     
     // Hydrate all data stores
     if (cache.assets && cache.assets.length > 0) {
       assets = cache.assets.map(a => {
-        // Self-heal: If cached asset lacks 'reason', generate it now
         if (!a.reason) a.reason = generateReason(a, a.score);
         return a;
       });
@@ -93,7 +124,7 @@ function loadDataCache() {
       if (cache.LIVE_FNG) LIVE_FNG = cache.LIVE_FNG;
       if (cache.LIVE_CATALYSTS) LIVE_CATALYSTS = cache.LIVE_CATALYSTS;
       
-      console.log('✅ Data cache loaded from localStorage (' + assets.length + ' assets, age: ' + Math.round((Date.now() - cache.timestamp) / 1000) + 's)');
+      console.log('✅ Data hydrated (' + assets.length + ' assets)');
       return true;
     }
     return false;
@@ -217,7 +248,7 @@ function startLoadingSequence(loadingScreen, mainApp, loadingBar) {
       loadingBar.style.width = '100%';
       
       // Hydrate UI from cache BEFORE showing it
-      initApp();
+      await initApp();
       
       setTimeout(() => {
         loadingScreen.style.opacity = '0';
@@ -232,15 +263,15 @@ function startLoadingSequence(loadingScreen, mainApp, loadingBar) {
   }, 500);
 }
 
-function initApp() {
+async function initApp() {
   setupSidebar();
   updateTime();
   setInterval(updateTime, 1000);
   
-  // Load cached data instantly for zero-delay UI hydration
-  const hasCachedData = loadDataCache();
+  // Load cached data instantly for zero-delay UI hydration (Now pulling from Supabase if local is empty)
+  const hasCachedData = await loadDataCache();
   if (hasCachedData) {
-    console.log('⚡ Instant hydration from cache — UI is ready');
+    console.log('⚡ Data hydrated — UI is ready');
   }
 
   // Setup Charts
