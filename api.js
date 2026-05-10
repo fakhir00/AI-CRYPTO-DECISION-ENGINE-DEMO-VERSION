@@ -687,6 +687,181 @@ async function writeMirroredSignal(symbol, interval = '4h', html, meta = {}) {
   }
 }
 
+function extractPriceTokens(text = '') {
+  return [...String(text).matchAll(/\$?\d[\d,]*(?:\.\d+)?/g)]
+    .map(m => (m[0] || '').replace(/\$/g, '').replace(/,/g, '').trim())
+    .filter(Boolean);
+}
+
+function extractFirstPrice(text = '') {
+  const cleaned = String(text).replace(/^\s*\d+\)\s*/, '').replace(/^\s*Target\s*\d+\s*:\s*/i, '').trim();
+  const prices = extractPriceTokens(cleaned);
+  return prices.length > 0 ? prices[0] : null;
+}
+
+function stripForbiddenSignalAnnotations(text = '') {
+  return String(text)
+    .replace(/⚡\s*NEXUS\s*Pro\s*Autotrade\s*Signals/gi, '')
+    .replace(/\s*\(1:\s*\d+(?:\.\d+)?\s*R:R\)\s*/gi, '')
+    .replace(/\s*\(1\.5\s*ATR\)\s*/gi, '')
+    .replace(/📪\s*/g, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+function parseSignalDirection(text = '') {
+  const signalTypeMatch = String(text).match(/Signal Type:\s*Regular\s*\((Long|Short)\)/i);
+  if (signalTypeMatch) return signalTypeMatch[1].toUpperCase();
+
+  const directionMatch = String(text).match(/Direction:\s*\[?\s*(LONG|SHORT)\s*\]?/i);
+  if (directionMatch) return directionMatch[1].toUpperCase();
+
+  return 'LONG';
+}
+
+function buildCanonicalSignalText(rawSignalText = '', fallbackSymbol = 'BTC') {
+  const cleaned = stripForbiddenSignalAnnotations(rawSignalText);
+  if (!cleaned) return '';
+
+  let symbol = String(fallbackSymbol || 'BTC').toUpperCase();
+  const pairMatch = cleaned.match(/#\s*([A-Z0-9]{2,10})\s*\/\s*USDT/i);
+  if (pairMatch) symbol = pairMatch[1].toUpperCase();
+
+  const direction = parseSignalDirection(cleaned);
+  const directionLabel = direction === 'SHORT' ? 'Short' : 'Long';
+
+  const lines = cleaned.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+  let entries = [];
+  let targets = [];
+  let stops = [];
+  let inEntry = false;
+  let inTargets = false;
+  let inStops = false;
+
+  for (const line of lines) {
+    if (/^Take-?Profit Targets\s*:/i.test(line)) {
+      inEntry = false;
+      inTargets = true;
+      inStops = false;
+      continue;
+    }
+
+    if (/^Stop(?:\s*Loss|\s*Targets?)\s*:/i.test(line)) {
+      inEntry = false;
+      inTargets = false;
+      inStops = true;
+      const inlineStop = extractFirstPrice(line.split(':').slice(1).join(':'));
+      if (inlineStop) stops.push(inlineStop);
+      continue;
+    }
+
+    if (/^Entry(?:\s*Zone)?\s*:/i.test(line)) {
+      inEntry = true;
+      inTargets = false;
+      inStops = false;
+      const inlineEntries = extractPriceTokens(line.split(':').slice(1).join(':'));
+      entries.push(...inlineEntries);
+      continue;
+    }
+
+    if (/^Trailing Configuration\s*:/i.test(line) || /Trade Rationales/i.test(line)) {
+      inEntry = false;
+      inTargets = false;
+      inStops = false;
+      continue;
+    }
+
+    if (/^Target\s*[1-4]\s*:/i.test(line)) {
+      const targetPrice = extractFirstPrice(line);
+      if (targetPrice) targets.push(targetPrice);
+      continue;
+    }
+
+    if (inEntry) {
+      entries.push(...extractPriceTokens(line));
+    } else if (inTargets) {
+      const targetPrice = extractFirstPrice(line);
+      if (targetPrice) targets.push(targetPrice);
+    } else if (inStops) {
+      const stopPrice = extractFirstPrice(line);
+      if (stopPrice) stops.push(stopPrice);
+    }
+  }
+
+  entries = [...new Set(entries)].slice(0, 3);
+  targets = [...new Set(targets)].slice(0, 4);
+  stops = [...new Set(stops)];
+  const stop = stops[0] || null;
+
+  // If parsing fails, still return a cleaned copy-ready signal without forbidden annotations.
+  if (entries.length < 3 || targets.length < 4 || !stop) {
+    return cleaned;
+  }
+
+  return `#${symbol}/USDT
+
+Exchanges: Binance Futures
+
+Signal Type: Regular (${directionLabel})
+
+Leverage: Cross (20X)
+
+Entry :
+${entries[0]} - ${entries[1]} - ${entries[2]}
+
+Take-Profit Targets:
+1) ${targets[0]}
+2) ${targets[1]}
+3) ${targets[2]}
+4) ${targets[3]}
+
+Stop Targets:
+1) ${stop}
+
+Trailing Configuration:
+Stop: Percent Below Highest (4%)
+  - Trail starts immediately.
+Breakeven: Trigger at +2% profit
+  - Stop moves to entry after +2%.`;
+}
+
+function extractTradeRationales(text = '', symbol = 'COIN') {
+  const lines = String(text).split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+  const points = [];
+  let capture = false;
+
+  for (const line of lines) {
+    if (/Trade Rationales|Institutional Trade Rationales|Quantitative Rationales/i.test(line)) {
+      capture = true;
+      continue;
+    }
+
+    if (!capture) continue;
+
+    if (/^#\s*[A-Z0-9]{2,10}\s*\/\s*USDT/i.test(line) || /^Exchanges\s*:/i.test(line) || /^Signal Type\s*:/i.test(line)) {
+      break;
+    }
+
+    const item = line
+      .replace(/^[-•*]\s*/, '')
+      .replace(/^\d+[.)]\s*/, '')
+      .trim();
+
+    if (!item) continue;
+    points.push(item);
+    if (points.length === 5) break;
+  }
+
+  if (points.length === 0) return '';
+
+  return `### ${String(symbol || 'COIN').toUpperCase()} Trade Rationales
+1. ${points[0]}
+${points[1] ? `2. ${points[1]}` : ''}
+${points[2] ? `3. ${points[2]}` : ''}
+${points[3] ? `4. ${points[3]}` : ''}
+${points[4] ? `5. ${points[4]}` : ''}`.replace(/\n{2,}/g, '\n');
+}
+
 // ─── 6. OpenAI: Dual Engine Fusion (Contextual + Quantitative) ───────────────
 // Now uses AI_MEMORY for full conversation context.
 export async function fetchAIAnalysis(promptText, candleContext = null, options = {}) {
@@ -713,34 +888,40 @@ MATHEMATICAL TARGET GENERATION (STRICT): You will be provided with PRE-CALCULATE
 CRITICAL: You MUST use the exact Entry, Stop Loss, and TP1-TP4 values provided in the context. Do NOT calculate your own. If the context says the Stop Loss is $3.85, you output $3.85. No exceptions. This ensures all devices (PC and Mobile) show identical signals.
 
 MANDATORY SIGNAL FORMAT (FOLLOW STRICTLY):
-📪 #[SYMBOL]/USDT
+# [SYMBOL]/USDT
 
-Direction: [LONG/SHORT]
-Exchange: Binance Future, Kucoin, Bybit, Huobi.pro, OKX
-Leverage: Cross (2X-5X)
+Exchanges: Binance Futures
 
-Entry Zone: 
-[Price 1] - [Price 2] - [Price 3] (MUST be 3 distinct staggered prices)
+Signal Type: Regular ([Long/Short])
+
+Leverage: Cross (20X)
+
+Entry :
+[Price 1] - [Price 2] - [Price 3]
 
 Take-Profit Targets:
-1) [Price] (1:1 R:R)
-2) [Price] (1:2 R:R)
-3) [Price] (1:3 R:R)
-4) [Price] (1:4 R:R)
+1) [Price]
+2) [Price]
+3) [Price]
+4) [Price]
 
-Stop Loss: 
-[Price] (1.5 ATR)
+Stop Targets:
+1) [Price]
 
-⚡ NEXUS Pro Autotrade Signals
+Trailing Configuration:
+Stop: Percent Below Highest (4%)
+  - Trail starts immediately.
+Breakeven: Trigger at +2% profit
+  - Stop moves to entry after +2%.
 
-### 5 Institutional Trade Rationales:
+[SYMBOL] Trade Rationales
 1. [Rationale 1]
 2. [Rationale 2]
 3. [Rationale 3]
 4. [Rationale 4]
 5. [Rationale 5]
 
-CRITICAL: Do NOT include 'Strategy' or 'Exchange' in the signal block. Place the rationales at the ABSOLUTE BOTTOM. 
+CRITICAL: NEVER add "(1:1 R:R)", "(1:2 R:R)", "(1:3 R:R)", "(1:4 R:R)" or "(1.5 ATR)" anywhere in the signal. 
 
 For all other queries, provide a single, highly optimized, data-driven response. Use markdown headers, bold text, and bullet points for readability.`
     };
@@ -997,42 +1178,27 @@ export async function fetchDualAI(userQuery, assetContext = '') {
   let signalText = "";
   let rationalesText = "";
 
-  let signalStart = result.indexOf('⚡⚡ #');
+  let signalStart = result.search(/#\s*[A-Z0-9]{2,10}\s*\/\s*USDT/i);
   if (signalStart === -1) {
     signalStart = result.indexOf('📪 #');
   }
   if (signalStart !== -1) {
     preamble = result.substring(0, signalStart).trim();
 
-    const rationalesStart = result.indexOf('5 Institutional Trade Rationales');
-    if (rationalesStart !== -1) {
-      const strongSplit = result.lastIndexOf('<strong>', rationalesStart);
-      // Sometimes markdown headers are used instead of <strong>
-      const mdHeaderSplit = result.lastIndexOf('##', rationalesStart);
-      const mdHeader1Split = result.lastIndexOf('**5', rationalesStart);
-
-      let splitEnd = rationalesStart;
-      if (strongSplit !== -1 && (rationalesStart - strongSplit) < 20) {
-        splitEnd = strongSplit;
-      } else if (mdHeaderSplit !== -1 && (rationalesStart - mdHeaderSplit) < 20) {
-        splitEnd = mdHeaderSplit;
-      } else if (mdHeader1Split !== -1 && (rationalesStart - mdHeader1Split) < 20) {
-        splitEnd = mdHeader1Split;
-      } else {
-        const newlineSplit = result.lastIndexOf('\n', rationalesStart);
-        if (newlineSplit !== -1 && (rationalesStart - newlineSplit) < 20) {
-          splitEnd = newlineSplit;
-        }
-      }
-
-      signalText = result.substring(signalStart, splitEnd).trim();
-      rationalesText = result.substring(splitEnd).trim();
+    const rationalesStart = result.search(/(?:^|\n)\s*(?:#{1,6}\s*)?(?:\*\*)?\s*(?:[A-Z0-9]{2,10}\s+)?Trade Rationales(?:\*\*)?:?/i);
+    if (rationalesStart !== -1 && rationalesStart > signalStart) {
+      signalText = result.substring(signalStart, rationalesStart).trim();
+      rationalesText = result.substring(rationalesStart).trim();
     } else {
       signalText = result.substring(signalStart).trim();
     }
   } else {
     rationalesText = result;
   }
+
+  const fallbackSymbol = extractedSymbol || (candleData?.symbol ? candleData.symbol.replace('USDT', '') : 'COIN');
+  signalText = buildCanonicalSignalText(signalText, fallbackSymbol);
+  const extractedRationales = extractTradeRationales(`${preamble}\n${rationalesText}\n${result}`, fallbackSymbol);
 
   // Escape the signal text for the clipboard copy command
   const escapedSignal = signalText.replace(/"/g, '&quot;').replace(/'/g, '&#39;').replace(/\n/g, '\\n');
@@ -1062,13 +1228,10 @@ export async function fetchDualAI(userQuery, assetContext = '') {
 
   const finalHtml = `
     <div style="width:100%;">
-      <div style="font-size:0.65rem;font-weight:800;letter-spacing:0.1em;color:var(--primary);margin-bottom:0.4rem;text-transform:uppercase;opacity:0.8;">
-        🧠 Nexus Dual-Engine (GPT-4o + Hermes)
-      </div>
       ${patternBadge}
       ${preamble ? `<div style="color:#BAC2DE;line-height:1.6;margin-bottom:0.5rem;">${renderMarkdown(preamble)}</div>` : ''}
+      ${extractedRationales ? `<div style="color:#BAC2DE;line-height:1.6;margin-bottom:0.75rem;">${renderMarkdown(extractedRationales)}</div>` : ''}
       ${signalText ? signalHtml : ''}
-      ${rationalesText ? `<div style="color:#BAC2DE;line-height:1.6;">${renderMarkdown(rationalesText)}</div>` : ''}
     </div>`;
 
   // Save canonical mirrored signal so every device receives identical output.
