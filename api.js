@@ -7,7 +7,8 @@ const KEYS = {
   cmc: 'e7080786d0f14b3abfc6c58de5f61adc',
   etherscan: 'CRSWB6SIH2SAAPCPFGBK2NN473EC5JIS9M',
   taapi: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJjbHVlIjoiNjlmNWJjMTVlZTAzMzMxMWE0ZjJjOGRiIiwiaWF0IjoxNzc3NzEyMTQ5LCJleHAiOjMzMjgyMTc2MTQ5fQ.8Htit-r6kGZC5LZn7_EZLozYC7yOyCu4Z1WzhuPIH34',
-  lunarcrush: '8a0hxklrnp6i5kfiowg77edxjemoobmyiw0g62whp'
+  lunarcrush: '8a0hxklrnp6i5kfiowg77edxjemoobmyiw0g62whp',
+  openai: import.meta.env.VITE_OPENAI_API_KEY
 };
 
 // ─── 0. AI Conversation Memory Buffer ────────────────────────────────────────
