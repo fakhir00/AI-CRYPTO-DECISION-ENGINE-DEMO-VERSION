@@ -1537,3 +1537,67 @@ function renderProSignals() {
   }).join('');
 }
 
+
+async function setupSettingsPage() {
+  const user = clerk.user;
+  if (!user) return;
+
+  const nameInput = document.getElementById('settings-display-name');
+  const emailInput = document.getElementById('settings-email');
+  const telegramInput = document.getElementById('settings-telegram');
+  const updateBtn = document.getElementById('update-identity-btn');
+
+  // Populate from Clerk
+  if (nameInput) nameInput.value = user.fullName || user.username || '';
+  if (emailInput) emailInput.value = user.primaryEmailAddress?.emailAddress || '';
+
+  // Fetch additional data from Supabase
+  try {
+    const { data, error } = await supabase
+      .from('user_profiles')
+      .select('telegram_handle')
+      .eq('clerk_id', user.id)
+      .single();
+
+    if (data && telegramInput) {
+      telegramInput.value = data.telegram_handle || '';
+    }
+  } catch (e) {
+    console.warn('⚠️ Could not fetch Supabase profile:', e.message);
+  }
+
+  // Handle Updates
+  updateBtn?.addEventListener('click', async () => {
+    updateBtn.disabled = true;
+    updateBtn.textContent = 'Updating...';
+
+    const payload = {
+      clerk_id: user.id,
+      full_name: nameInput.value,
+      email: emailInput.value,
+      telegram_handle: telegramInput.value,
+      updated_at: new Date().toISOString()
+    };
+
+    const { error } = await supabase
+      .from('user_profiles')
+      .upsert(payload, { onConflict: 'clerk_id' });
+
+    if (error) {
+      showToast('❌ Update failed: ' + error.message);
+    } else {
+      showToast('✅ Identity updated successfully.');
+      updateUserProfileUI(user);
+    }
+
+    updateBtn.disabled = false;
+    updateBtn.textContent = 'Update Identity';
+  });
+}
+
+document.querySelector('.subscription-body button')?.addEventListener('click', () => {
+  showToast('💳 Redirecting to Stripe Customer Portal...');
+  setTimeout(() => {
+    alert('Subscription management is currently in Sandbox mode. Please contact support to upgrade your limits.');
+  }, 1000);
+});
