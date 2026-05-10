@@ -16,7 +16,7 @@ const KEYS = {
 const AI_MEMORY = {
   history: [],   // Array of { role: 'user'|'assistant', content: string }
   maxPairs: 10,  // Keep last 10 exchanges (20 messages total)
-  
+
   add(role, content) {
     this.history.push({ role, content });
     // Trim to max capacity (maxPairs * 2 messages)
@@ -24,23 +24,23 @@ const AI_MEMORY = {
       this.history.shift();
     }
     // Persist to localStorage for cross-refresh consistency
-    try { localStorage.setItem('nexus_ai_memory', JSON.stringify(this.history)); } catch(e) {}
+    try { localStorage.setItem('nexus_ai_memory', JSON.stringify(this.history)); } catch (e) { }
   },
-  
+
   getMessages() {
     return [...this.history];
   },
-  
+
   clear() {
     this.history = [];
-    try { localStorage.removeItem('nexus_ai_memory'); } catch(e) {}
+    try { localStorage.removeItem('nexus_ai_memory'); } catch (e) { }
   },
-  
+
   load() {
     try {
       const saved = localStorage.getItem('nexus_ai_memory');
       if (saved) this.history = JSON.parse(saved);
-    } catch(e) { this.history = []; }
+    } catch (e) { this.history = []; }
   }
 };
 
@@ -63,11 +63,11 @@ export async function fetchMarketData() {
     const res = await fetch(url, { cache: 'no-store' });
     if (!res.ok) throw new Error(`CoinGecko HTTP ${res.status}`);
     const data = await res.json();
-    
+
     // Filter out stablecoins
     const STABLECOINS = ['USDT', 'USDC', 'DAI', 'BUSD', 'FDUSD', 'TUSD', 'PYUSD', 'USDE'];
     const filteredData = data.filter(c => !STABLECOINS.includes(c.symbol.toUpperCase()));
-    
+
     console.log('✅ CoinGecko data fetched:', filteredData.length, 'coins');
     return filteredData;
   } catch (e) {
@@ -81,40 +81,40 @@ export async function fetchBinancePatterns() {
     const res = await fetch('https://api.binance.com/api/v3/ticker/24hr');
     if (!res.ok) throw new Error('Binance HTTP ' + res.status);
     const data = await res.json();
-    
+
     const patterns = {};
     data.forEach(ticker => {
-       const o = parseFloat(ticker.openPrice);
-       const h = parseFloat(ticker.highPrice);
-       const l = parseFloat(ticker.lowPrice);
-       const c = parseFloat(ticker.lastPrice);
-       const body = Math.abs(c - o);
-       const range = h - l;
-       const v = parseFloat(ticker.volume);
-       const qv = parseFloat(ticker.quoteVolume);
-       
-       let pattern = 'Accumulation Zone';
-       if (range > 0) {
-         if (c > o && body > range * 0.7) pattern = 'Bullish Marubozu';
-         else if (c < o && body > range * 0.7) pattern = 'Bearish Marubozu';
-         else if (body < range * 0.2 && c > l + range * 0.6) pattern = 'Bullish Hammer';
-         else if (body < range * 0.2 && c < h - range * 0.6) pattern = 'Shooting Star';
-         else if (body < range * 0.1) pattern = 'Doji Indecision';
-         else if (c > o && v > 10000) pattern = 'High-Volume Breakout';
-         else if (c < o && v > 10000) pattern = 'Volume Distribution';
-         else if (ticker.priceChangePercent > 5) pattern = 'Momentum Expansion';
-         else if (ticker.priceChangePercent < -5) pattern = 'Momentum Contraction';
-       }
-       
-       // Map patterns for all coins in the ticker (only USDT pairs)
-       if (ticker.symbol.endsWith('USDT')) {
-          let sym = ticker.symbol.replace('USDT', '');
-          patterns[sym] = pattern;
-       }
+      const o = parseFloat(ticker.openPrice);
+      const h = parseFloat(ticker.highPrice);
+      const l = parseFloat(ticker.lowPrice);
+      const c = parseFloat(ticker.lastPrice);
+      const body = Math.abs(c - o);
+      const range = h - l;
+      const v = parseFloat(ticker.volume);
+      const qv = parseFloat(ticker.quoteVolume);
+
+      let pattern = 'Accumulation Zone';
+      if (range > 0) {
+        if (c > o && body > range * 0.7) pattern = 'Bullish Marubozu';
+        else if (c < o && body > range * 0.7) pattern = 'Bearish Marubozu';
+        else if (body < range * 0.2 && c > l + range * 0.6) pattern = 'Bullish Hammer';
+        else if (body < range * 0.2 && c < h - range * 0.6) pattern = 'Shooting Star';
+        else if (body < range * 0.1) pattern = 'Doji Indecision';
+        else if (c > o && v > 10000) pattern = 'High-Volume Breakout';
+        else if (c < o && v > 10000) pattern = 'Volume Distribution';
+        else if (ticker.priceChangePercent > 5) pattern = 'Momentum Expansion';
+        else if (ticker.priceChangePercent < -5) pattern = 'Momentum Contraction';
+      }
+
+      // Map patterns for all coins in the ticker (only USDT pairs)
+      if (ticker.symbol.endsWith('USDT')) {
+        let sym = ticker.symbol.replace('USDT', '');
+        patterns[sym] = pattern;
+      }
     });
     console.log('✅ Binance patterns calculated');
     return patterns;
-  } catch(e) {
+  } catch (e) {
     console.warn('⚠️ Binance pattern detection failed:', e.message);
     return null;
   }
@@ -188,7 +188,7 @@ export async function fetchSentiment() {
     const lcRes = await fetch('https://lunarcrush.com/api4/public/coins/bitcoin/v1', {
       headers: { 'Authorization': `Bearer ${KEYS.lunarcrush}` }
     });
-    
+
     if (lcRes.ok) {
       const lcData = await lcRes.json();
       if (!lcData.error && lcData.data) {
@@ -256,7 +256,7 @@ export async function fetchFearAndGreed() {
         value: parseInt(fData.data[0].value),
         label: fData.data[0].value_classification
       };
-    } catch(err) {
+    } catch (err) {
       return { value: 50, label: 'Neutral' };
     }
   }
@@ -288,7 +288,7 @@ export async function fetchNews() {
     if (!res.ok) throw new Error('RSS Proxy Error');
     const data = await res.json();
     if (!data.items || data.items.length === 0) throw new Error('No items in RSS');
-    
+
     console.log(`✅ Fetched ${data.items.length} live news items`);
     return data.items.slice(0, 15);
   } catch (e) {
@@ -309,14 +309,14 @@ export async function fetchTrendingNarratives() {
     const res = await fetch('https://api.coingecko.com/api/v3/search/trending');
     if (!res.ok) throw new Error('CoinGecko Trending HTTP ' + res.status);
     const data = await res.json();
-    
+
     // Extract top categories (Narratives) and top coins
     const narratives = data.categories.slice(0, 6).map(c => ({
       name: c.name,
       marketCap: c.data.market_cap ? `$${(c.data.market_cap / 1e9).toFixed(1)}B` : 'N/A',
       change: c.data.market_cap_change_percentage_24h ? (c.data.market_cap_change_percentage_24h.usd || c.data.market_cap_change_percentage_24h.btc || 0) : 0
     }));
-    
+
     const trendingCoins = data.coins.slice(0, 5).map(c => ({
       symbol: c.item.symbol,
       name: c.item.name,
@@ -347,7 +347,7 @@ export async function fetchTechnicalSignals(symbols = []) {
   if (symbols.length === 0) return null;
   try {
     // 1. Fetch 24h ticker data from Binance for volume/price action
-    const binancePromises = symbols.map(sym => 
+    const binancePromises = symbols.map(sym =>
       fetch(`https://api.binance.com/api/v3/ticker/24hr?symbol=${sym}USDT`)
         .then(r => r.json())
         .catch(() => null)
@@ -370,10 +370,10 @@ export async function fetchTechnicalSignals(symbols = []) {
         const closes = klines.map(k => parseFloat(k[4]));
         const highs = klines.map(k => parseFloat(k[2]));
         const lows = klines.map(k => parseFloat(k[3]));
-        
+
         const ema9 = computeEMA(closes, 9);
         const ema21 = computeEMA(closes, 21);
-        
+
         // Mathematically correct ATR: True Range = max(H-L, abs(H-PrevC), abs(L-PrevC))
         let trSum = 0;
         const period = 14;
@@ -400,7 +400,7 @@ export async function fetchTechnicalSignals(symbols = []) {
         btcRsi = taapiJson.value;
         console.log('✅ TAAPI RSI fetched:', btcRsi);
       }
-    } catch(err) {
+    } catch (err) {
       console.warn('⚠️ TAAPI rate limit or error:', err.message);
     }
 
@@ -456,16 +456,16 @@ export async function fetchOrderBookDepth(symbol = 'BTC') {
     const res = await fetch(`https://api.binance.com/api/v3/depth?symbol=${symbol}USDT&limit=500`);
     if (!res.ok) throw new Error(`Depth HTTP ${res.status}`);
     const data = await res.json();
-    
+
     // Calculate bid wall (support) and ask wall (resistance)
     const bidTotal = data.bids.reduce((sum, [price, qty]) => sum + parseFloat(price) * parseFloat(qty), 0);
     const askTotal = data.asks.reduce((sum, [price, qty]) => sum + parseFloat(price) * parseFloat(qty), 0);
-    
+
     const strongestBid = data.bids.reduce((max, [p, q]) => parseFloat(q) > max.qty ? { price: parseFloat(p), qty: parseFloat(q) } : max, { price: 0, qty: 0 });
     const strongestAsk = data.asks.reduce((max, [p, q]) => parseFloat(q) > max.qty ? { price: parseFloat(p), qty: parseFloat(q) } : max, { price: 0, qty: 0 });
-    
+
     const buyPressure = bidTotal / (bidTotal + askTotal) * 100;
-    
+
     console.log(`✅ Order book depth fetched for ${symbol}: Buy pressure ${buyPressure.toFixed(1)}%`);
     return {
       symbol,
@@ -489,7 +489,7 @@ export async function fetchBtcOnChain() {
       fetch('https://blockchain.info/q/unconfirmedcount').then(r => r.text()).catch(() => '0'),
       fetch('https://blockchain.info/q/getdifficulty').then(r => r.text()).catch(() => '0')
     ]);
-    
+
     console.log('✅ BTC on-chain stats fetched');
     return {
       hashRate: (parseFloat(hashRate) / 1e9).toFixed(2), // GH/s → EH/s
@@ -531,7 +531,7 @@ export async function fetchNarratives() {
 // ─── 4E. Binance Klines: Real Chart Data ─────────────────────────────────────
 export async function fetchChartData(symbol = 'BTC', interval = '1h', limit = 48) {
   try {
-    const res = await fetch(`https://api.binance.com/api/v3/klines?symbol=${symbol.replace('USDT','') }USDT&interval=${interval}&limit=${limit}`);
+    const res = await fetch(`https://api.binance.com/api/v3/klines?symbol=${symbol.replace('USDT', '')}USDT&interval=${interval}&limit=${limit}`);
     if (!res.ok) throw new Error(`Binance Klines HTTP ${res.status}`);
     const data = await res.json();
     // Binance returns [OpenTime, Open, High, Low, Close, Volume, ...]
@@ -565,7 +565,7 @@ export async function fetchCandlePatterns(symbol, interval = '4h') {
 export async function fetchAIAnalysis(promptText, candleContext = null) {
   // Store the user message in memory
   AI_MEMORY.add('user', promptText);
-  
+
   try {
     const systemMessage = {
       role: 'system',
@@ -678,19 +678,19 @@ For all other queries, provide a single, highly optimized, data-driven response.
 export function calculateAlphaScore(whaleActive, sentimentScore, techScore, newsScore, volScore, alphaSources, emaConfluence = 0) {
   // Detect market regime: trending (sentiment > 65 or < 35) vs ranging
   const isTrending = sentimentScore > 65 || sentimentScore < 35;
-  
+
   // Adaptive weights: In trending markets, tech and whale signals matter more.
   // In ranging markets, volume and sentiment divergences matter more.
   let whaleWeight, sentWeight, techWeight, newsWeight, volWeight, alphaWeight, emaWeight;
-  
+
   if (isTrending) {
-    whaleWeight = 20;   sentWeight = 0.15;  techWeight = 22;
-    newsWeight = 12;    volWeight = 8;      alphaWeight = 10;   emaWeight = 15;
+    whaleWeight = 20; sentWeight = 0.15; techWeight = 22;
+    newsWeight = 12; volWeight = 8; alphaWeight = 10; emaWeight = 15;
   } else {
-    whaleWeight = 15;   sentWeight = 0.25;  techWeight = 15;
-    newsWeight = 15;    volWeight = 15;     alphaWeight = 12;   emaWeight = 8;
+    whaleWeight = 15; sentWeight = 0.25; techWeight = 15;
+    newsWeight = 15; volWeight = 15; alphaWeight = 12; emaWeight = 8;
   }
-  
+
   const raw =
     (whaleActive ? whaleWeight : 0) +
     (sentimentScore * sentWeight) +
@@ -706,7 +706,7 @@ export function calculateAlphaScore(whaleActive, sentimentScore, techScore, news
 // Converts raw markdown from AI responses into styled HTML
 function renderMarkdown(md) {
   if (!md) return '';
-  
+
   // First protect code blocks
   let blocks = [];
   let html = md.replace(/```(\w*)\n([\s\S]*?)```/g, (match, lang, code) => {
@@ -807,7 +807,7 @@ export async function fetchDualAI(userQuery, assetContext = '') {
   if (symbolMatch) {
     const symbol = symbolMatch[1].toUpperCase();
     // Skip if it's a common English word, not a crypto symbol
-    const skipWords = ['THE','FOR','AND','BUT','NOT','CAN','ARE','YOU','HIS','HER','GET','SET','USE','HOW','WHY','WHAT','GIVE','LONG','SHORT','SELL','BUY'];
+    const skipWords = ['THE', 'FOR', 'AND', 'BUT', 'NOT', 'CAN', 'ARE', 'YOU', 'HIS', 'HER', 'GET', 'SET', 'USE', 'HOW', 'WHY', 'WHAT', 'GIVE', 'LONG', 'SHORT', 'SELL', 'BUY'];
     if (!skipWords.includes(symbol)) {
       candleData = await fetchCandlePatterns(symbol, '4h');
     }
@@ -819,10 +819,10 @@ export async function fetchDualAI(userQuery, assetContext = '') {
     if (candleData.atr) {
       const p = candleData.currentPrice;
       const atr = candleData.atr;
-      
+
       const longSl = p - (1.5 * atr);
       const shortSl = p + (1.5 * atr);
-      
+
       const riskLong = p - longSl;
       const riskShort = shortSl - p;
 
@@ -865,39 +865,39 @@ export async function fetchDualAI(userQuery, assetContext = '') {
   let preamble = "";
   let signalText = "";
   let rationalesText = "";
-  
+
   let signalStart = result.indexOf('⚡⚡ #');
   if (signalStart === -1) {
     signalStart = result.indexOf('📪 #');
   }
   if (signalStart !== -1) {
     preamble = result.substring(0, signalStart).trim();
-    
+
     const rationalesStart = result.indexOf('5 Institutional Trade Rationales');
     if (rationalesStart !== -1) {
-       const strongSplit = result.lastIndexOf('<strong>', rationalesStart);
-       // Sometimes markdown headers are used instead of <strong>
-       const mdHeaderSplit = result.lastIndexOf('##', rationalesStart);
-       const mdHeader1Split = result.lastIndexOf('**5', rationalesStart);
-       
-       let splitEnd = rationalesStart;
-       if (strongSplit !== -1 && (rationalesStart - strongSplit) < 20) {
-         splitEnd = strongSplit;
-       } else if (mdHeaderSplit !== -1 && (rationalesStart - mdHeaderSplit) < 20) {
-         splitEnd = mdHeaderSplit;
-       } else if (mdHeader1Split !== -1 && (rationalesStart - mdHeader1Split) < 20) {
-         splitEnd = mdHeader1Split;
-       } else {
-         const newlineSplit = result.lastIndexOf('\n', rationalesStart);
-         if (newlineSplit !== -1 && (rationalesStart - newlineSplit) < 20) {
-           splitEnd = newlineSplit;
-         }
-       }
-       
-       signalText = result.substring(signalStart, splitEnd).trim();
-       rationalesText = result.substring(splitEnd).trim();
+      const strongSplit = result.lastIndexOf('<strong>', rationalesStart);
+      // Sometimes markdown headers are used instead of <strong>
+      const mdHeaderSplit = result.lastIndexOf('##', rationalesStart);
+      const mdHeader1Split = result.lastIndexOf('**5', rationalesStart);
+
+      let splitEnd = rationalesStart;
+      if (strongSplit !== -1 && (rationalesStart - strongSplit) < 20) {
+        splitEnd = strongSplit;
+      } else if (mdHeaderSplit !== -1 && (rationalesStart - mdHeaderSplit) < 20) {
+        splitEnd = mdHeaderSplit;
+      } else if (mdHeader1Split !== -1 && (rationalesStart - mdHeader1Split) < 20) {
+        splitEnd = mdHeader1Split;
+      } else {
+        const newlineSplit = result.lastIndexOf('\n', rationalesStart);
+        if (newlineSplit !== -1 && (rationalesStart - newlineSplit) < 20) {
+          splitEnd = newlineSplit;
+        }
+      }
+
+      signalText = result.substring(signalStart, splitEnd).trim();
+      rationalesText = result.substring(splitEnd).trim();
     } else {
-       signalText = result.substring(signalStart).trim();
+      signalText = result.substring(signalStart).trim();
     }
   } else {
     rationalesText = result;
