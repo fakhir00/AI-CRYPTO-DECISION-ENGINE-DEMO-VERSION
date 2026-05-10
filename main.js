@@ -895,7 +895,7 @@ function renderOpportunitiesPage() {
       
       navigateToPage('ai-research'); // Switch to AI Research Analyst Page
       setTimeout(() => {
-         triggerMcp(`Analyze ${symbol}`);
+         triggerMcp(`Generate a strict quantitative algorithmic trade setup for ${symbol} using the provided market structure and candlestick patterns.`);
       }, 100);
     });
   });
