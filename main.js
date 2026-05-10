@@ -238,7 +238,7 @@ function startLoadingSequence(loadingScreen, mainApp, loadingBar) {
   ];
   
   let step = 0;
-  const interval = setInterval(() => {
+  const interval = setInterval(async () => {
     step++;
     if (step < statuses.length) {
       document.getElementById('loading-status').textContent = statuses[step];
