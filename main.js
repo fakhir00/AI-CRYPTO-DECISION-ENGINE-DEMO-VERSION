@@ -103,6 +103,10 @@ async function loadDataCache() {
       if (data && data.data) {
         cache = data.data;
         console.log('✅ Global cache pulled from Supabase');
+      } else if (error) {
+        console.error('❌ Supabase Pull Error:', error.message);
+      } else {
+        console.log('ℹ️ Global cache is empty in Supabase. Waiting for a device to push data.');
       }
     }
 
