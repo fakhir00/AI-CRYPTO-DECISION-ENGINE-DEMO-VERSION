@@ -578,11 +578,122 @@ export async function fetchCandlePatterns(symbol, interval = '4h') {
   }
 }
 
+const MIRROR_SIGNAL_TTL_MS = 5 * 60 * 1000; // 5 minutes
+const SIGNAL_QUERY_RE = /\b(signal|trade\s*setup|entry|entries|stop\s*loss|targets?|take[-\s]?profit|leverage|long|short)\b/i;
+const SYMBOL_STOP_WORDS = new Set([
+  'THE', 'FOR', 'AND', 'BUT', 'NOT', 'CAN', 'ARE', 'YOU', 'HIS', 'HER', 'GET', 'SET', 'USE', 'HOW', 'WHY', 'WHAT',
+  'GIVE', 'LONG', 'SHORT', 'SELL', 'BUY', 'TRADE', 'SETUP', 'ANALYSIS', 'PLEASE', 'WITH', 'THIS', 'THAT', 'THEN',
+  'TARGET', 'TARGETS', 'STOP', 'LOSS', 'ENTRY', 'ZONE', 'PRICE', 'MARKET', 'NEXUS', 'DUAL', 'ENGINE', 'GPT', 'HERMES',
+  'CURRENT', 'CONTEXT', 'LATEST', 'LIVE', 'DATA', 'USER', 'QUERY', 'USDT'
+]);
+
+function isSignalRequest(text = '') {
+  return SIGNAL_QUERY_RE.test(text);
+}
+
+function escapeRegExp(text = '') {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function parseSymbolsFromAssetContext(assetContext = '') {
+  const symbols = new Set();
+  const upper = String(assetContext || '').toUpperCase();
+  const re = /\b([A-Z0-9]{2,10})\s*:\s*\$/g;
+  let match;
+  while ((match = re.exec(upper)) !== null) {
+    symbols.add(match[1]);
+  }
+  return symbols;
+}
+
+function extractPrimarySymbol(userQuery = '', assetContext = '') {
+  const q = String(userQuery || '').toUpperCase();
+  const knownSymbols = parseSymbolsFromAssetContext(assetContext);
+
+  // Prefer explicit pair declarations first: SUI/USDT or SUIUSDT
+  const pairMatch = q.match(/\b([A-Z0-9]{2,10})\s*\/\s*USDT\b/);
+  if (pairMatch) return pairMatch[1];
+
+  const compactPairMatch = q.match(/\b([A-Z0-9]{2,10})USDT\b/);
+  if (compactPairMatch) return compactPairMatch[1];
+
+  // Then #SYMBOL tags
+  const hashMatch = q.match(/#([A-Z0-9]{2,10})\b/);
+  if (hashMatch) return hashMatch[1];
+
+  // Then scan known symbols from live context
+  if (knownSymbols.size > 0) {
+    const ranked = [...knownSymbols].sort((a, b) => b.length - a.length);
+    for (const sym of ranked) {
+      const symRe = new RegExp(`\\b${escapeRegExp(sym)}\\b`, 'i');
+      if (symRe.test(q)) return sym;
+    }
+  }
+
+  // Last fallback: first non-stopword token
+  const tokens = q.match(/[A-Z0-9]{2,10}/g) || [];
+  for (const token of tokens) {
+    if (knownSymbols.has(token)) return token;
+  }
+  for (const token of tokens) {
+    if (!SYMBOL_STOP_WORDS.has(token)) return token;
+  }
+
+  return null;
+}
+
+function getSignalMirrorCacheKey(symbol, interval = '4h') {
+  return `mirror_signal_${symbol}_${interval}`;
+}
+
+async function readMirroredSignal(symbol, interval = '4h') {
+  if (!symbol) return null;
+  try {
+    const { supabase } = await import('./lib/supabase.js');
+    const cacheKey = getSignalMirrorCacheKey(symbol, interval);
+    const { data, error } = await supabase
+      .from('global_market_cache')
+      .select('data, updated_at')
+      .eq('id', cacheKey)
+      .single();
+
+    if (error || !data?.data?.html || !data?.updated_at) return null;
+    const age = Date.now() - new Date(data.updated_at).getTime();
+    if (age > MIRROR_SIGNAL_TTL_MS) return null;
+    return data.data.html;
+  } catch (e) {
+    console.warn('⚠️ Mirror cache read failed:', e.message);
+    return null;
+  }
+}
+
+async function writeMirroredSignal(symbol, interval = '4h', html, meta = {}) {
+  if (!symbol || !html) return;
+  try {
+    const { supabase } = await import('./lib/supabase.js');
+    const cacheKey = getSignalMirrorCacheKey(symbol, interval);
+    await supabase.from('global_market_cache').upsert({
+      id: cacheKey,
+      data: {
+        html,
+        symbol,
+        interval,
+        ...meta
+      },
+      updated_at: new Date().toISOString()
+    });
+  } catch (e) {
+    console.warn('⚠️ Mirror cache write failed:', e.message);
+  }
+}
+
 // ─── 6. OpenAI: Dual Engine Fusion (Contextual + Quantitative) ───────────────
 // Now uses AI_MEMORY for full conversation context.
-export async function fetchAIAnalysis(promptText, candleContext = null) {
-  // Store the user message in memory
-  AI_MEMORY.add('user', promptText);
+export async function fetchAIAnalysis(promptText, candleContext = null, options = {}) {
+  const useMemory = options.useMemory !== false;
+
+  // Store the user message in memory unless request is stateless/deterministic
+  if (useMemory) AI_MEMORY.add('user', promptText);
 
   try {
     const systemMessage = {
@@ -634,9 +745,12 @@ CRITICAL: Do NOT include 'Strategy' or 'Exchange' in the signal block. Place the
 For all other queries, provide a single, highly optimized, data-driven response. Use markdown headers, bold text, and bullet points for readability.`
     };
 
-    // Build messages array: system + full conversation history
-    // If we have candle context, prepend it to the last user message
-    const messages = [systemMessage, ...AI_MEMORY.getMessages()];
+    // Build messages array: system + full conversation history (or stateless single prompt)
+    const messages = useMemory
+      ? [systemMessage, ...AI_MEMORY.getMessages()]
+      : [systemMessage, { role: 'user', content: promptText }];
+
+    // If we have candle context, append pattern block to the latest user message
     if (candleContext && candleContext.patterns && candleContext.patterns.length > 0) {
       const patternBlock = `\n\n📊 CANDLESTICK PATTERN FEED (${candleContext.interval} — ${candleContext.symbol}):\n${candleContext.summary}`;
       // Append to the last user message
@@ -654,7 +768,7 @@ For all other queries, provide a single, highly optimized, data-driven response.
       },
       body: JSON.stringify({
         model: 'gpt-4o',
-        messages: [systemMessage, ...AI_MEMORY.getMessages()],
+        messages,
         temperature: 0.0,
         seed: 42,
         top_p: 1,
@@ -673,8 +787,8 @@ For all other queries, provide a single, highly optimized, data-driven response.
     if (data.choices?.[0]?.message?.content) {
       const reply = data.choices[0].message.content;
       // Store the AI response in memory
-      AI_MEMORY.add('assistant', reply);
-      console.log('✅ OpenAI response received (memory depth:', AI_MEMORY.history.length, 'messages)');
+      if (useMemory) AI_MEMORY.add('assistant', reply);
+      console.log('✅ OpenAI response received (memory depth:', useMemory ? AI_MEMORY.history.length : 0, 'messages)');
       return reply;
     }
     return `[OpenAI Error: No valid content returned]`;
@@ -810,17 +924,24 @@ export async function fetchDualAI(userQuery, assetContext = '') {
     ? `Current context: ${assetContext}. User query: ${userQuery}`
     : userQuery;
 
+  const signalMode = isSignalRequest(userQuery);
+  const extractedSymbol = extractPrimarySymbol(userQuery, assetContext);
+  const interval = '4h';
+
+  // Global Mirror Protocol: if this is a signal query, force all devices to read one canonical response first.
+  if (signalMode && extractedSymbol) {
+    const mirroredHtml = await readMirroredSignal(extractedSymbol, interval);
+    if (mirroredHtml) {
+      console.log(`✅ Mirror cache hit for ${extractedSymbol} (${interval})`);
+      return mirroredHtml;
+    }
+  }
+
   // 1. Detect if the query is about a specific asset (e.g. BTC, ETH, ONDO)
-  const symbolMatch = userQuery.match(/\b([A-Z]{2,10})\b/i);
   let candleData = null;
 
-  if (symbolMatch) {
-    const symbol = symbolMatch[1].toUpperCase();
-    // Skip if it's a common English word, not a crypto symbol
-    const skipWords = ['THE', 'FOR', 'AND', 'BUT', 'NOT', 'CAN', 'ARE', 'YOU', 'HIS', 'HER', 'GET', 'SET', 'USE', 'HOW', 'WHY', 'WHAT', 'GIVE', 'LONG', 'SHORT', 'SELL', 'BUY'];
-    if (!skipWords.includes(symbol)) {
-      candleData = await fetchCandlePatterns(symbol, '4h');
-    }
+  if (extractedSymbol) {
+    candleData = await fetchCandlePatterns(extractedSymbol, interval);
   }
 
   // 2. Build enhanced context with candle patterns and market structure
@@ -867,7 +988,7 @@ export async function fetchDualAI(userQuery, assetContext = '') {
     }
   }
 
-  const result = await fetchAIAnalysis(enhancedContext, candleData);
+  const result = await fetchAIAnalysis(enhancedContext, candleData, { useMemory: !signalMode });
 
   if (!result) return null;
 
@@ -939,7 +1060,7 @@ export async function fetchDualAI(userQuery, assetContext = '') {
       </div>`
     : '';
 
-  return `
+  const finalHtml = `
     <div style="width:100%;">
       <div style="font-size:0.65rem;font-weight:800;letter-spacing:0.1em;color:var(--primary);margin-bottom:0.4rem;text-transform:uppercase;opacity:0.8;">
         🧠 Nexus Dual-Engine (GPT-4o + Hermes)
@@ -949,4 +1070,14 @@ export async function fetchDualAI(userQuery, assetContext = '') {
       ${signalText ? signalHtml : ''}
       ${rationalesText ? `<div style="color:#BAC2DE;line-height:1.6;">${renderMarkdown(rationalesText)}</div>` : ''}
     </div>`;
+
+  // Save canonical mirrored signal so every device receives identical output.
+  if (signalMode && extractedSymbol && signalText) {
+    await writeMirroredSignal(extractedSymbol, interval, finalHtml, {
+      userQuery,
+      generatedAt: new Date().toISOString()
+    });
+  }
+
+  return finalHtml;
 }
