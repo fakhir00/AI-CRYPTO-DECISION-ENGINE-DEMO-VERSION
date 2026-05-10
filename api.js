@@ -544,9 +544,25 @@ export async function fetchChartData(symbol = 'BTC', interval = '1h', limit = 48
   }
 }
 
-// ─── 5. OpenAI: Dual Engine Fusion (Contextual + Quantitative) ───────────────
+// ─── 5. Candlestick Pattern Fetcher ─────────────────────────────────────────
+export async function fetchCandlePatterns(symbol, interval = '4h') {
+  try {
+    const ticker = symbol.replace('/', '').replace('-', '').toUpperCase();
+    const cleanTicker = ticker.endsWith('USDT') ? ticker : `${ticker}USDT`;
+    const res = await fetch(`/api/candles?symbol=${cleanTicker}&interval=${interval}`);
+    if (!res.ok) throw new Error(`Candle API HTTP ${res.status}`);
+    const data = await res.json();
+    console.log(`✅ Candle patterns fetched for ${cleanTicker} (${interval}):`, data.patterns?.length, 'patterns');
+    return data;
+  } catch (e) {
+    console.warn('⚠️ Candle pattern fetch failed:', e.message);
+    return null;
+  }
+}
+
+// ─── 6. OpenAI: Dual Engine Fusion (Contextual + Quantitative) ───────────────
 // Now uses AI_MEMORY for full conversation context.
-export async function fetchAIAnalysis(promptText) {
+export async function fetchAIAnalysis(promptText, candleContext = null) {
   // Store the user message in memory
   AI_MEMORY.add('user', promptText);
   
@@ -564,9 +580,15 @@ Your core decision-making is based on the NEXUS High-Probability Framework.
 
 CRITICAL: You are a DUAL-DIRECTIONAL agent. If the Alpha Score is low and the price change is negative, you MUST prefer SHORT setups. If the market is chopping sideways, stay NEUTRAL and advise against trading. Do not force Longs in a Bearish market. Never "guess" a direction—if the data is bearish, the signal MUST be SHORT.
 
-CRITICAL: Every trade signal MUST include 5 "Institutional Trade Rationales" that justify the setup based on technical and on-chain data. 
+CANDLESTICK PATTERN INTELLIGENCE: You have access to real-time candlestick pattern data from Binance. When pattern data is provided in the context (e.g. "Bearish Engulfing detected on 4H"), you MUST:
+- Reference the specific pattern name in your rationales (e.g. "Bearish Engulfing on 4H confirms institutional selling pressure")
+- Use the pattern direction (bullish/bearish) to CONFIRM or REJECT the signal direction
+- If the pattern contradicts the alpha score direction, flag it as a conflict and lean toward the pattern (price action > indicators)
+- Never ignore candlestick pattern data when it is present
 
-MANDATORY SIGNAL FORMAT (FOLLOW STICTLY):
+CRITICAL: Every trade signal MUST include 5 "Institutional Trade Rationales" that justify the setup based on technical and on-chain data. At least 1 rationale MUST reference a detected candlestick pattern if pattern data is available.
+
+MANDATORY SIGNAL FORMAT (FOLLOW STRICTLY):
 ⚡⚡ #[COIN]/USDT ⚡⚡
 
 Exchanges: Binance Futures
@@ -606,7 +628,16 @@ For all other queries, provide a single, highly optimized, data-driven response.
     };
 
     // Build messages array: system + full conversation history
+    // If we have candle context, prepend it to the last user message
     const messages = [systemMessage, ...AI_MEMORY.getMessages()];
+    if (candleContext && candleContext.patterns && candleContext.patterns.length > 0) {
+      const patternBlock = `\n\n📊 CANDLESTICK PATTERN FEED (${candleContext.interval} — ${candleContext.symbol}):\n${candleContext.summary}`;
+      // Append to the last user message
+      const lastMsg = messages[messages.length - 1];
+      if (lastMsg && lastMsg.role === 'user') {
+        lastMsg.content += patternBlock;
+      }
+    }
 
     const res = await fetch('/api/chat', {
       method: 'POST',
@@ -614,8 +645,8 @@ For all other queries, provide a single, highly optimized, data-driven response.
       body: JSON.stringify({
         model: 'gpt-4o-mini',
         messages,
-        max_tokens: 800,
-        temperature: 0.5
+        max_tokens: 900,
+        temperature: 0.45
       })
     });
 
@@ -760,59 +791,54 @@ For analysis queries, provide structured output with: Price targets, Probability
   }
 }
 
-// ─── 8-2. Nexus RL Agent — Deep Memory Oracle Prediction ──────────────────────
-export async function fetchRLPrediction(symbol = 'BTC/USDT') {
-  try {
-    const formattedSymbol = symbol.includes('/') ? symbol : `${symbol}/USDT`;
-    // Dynamic Backend Discovery: Use VITE_BACKEND_URL if set (for production), else fallback to localhost
-    const backendUrl = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000';
-    const res = await fetch(`${backendUrl}/predict`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ symbol: formattedSymbol, timeframe: '1h' })
-    });
-    if (!res.ok) throw new Error(`RL Engine offline`);
-    const data = await res.json();
-    console.log(`✅ RL Prediction for ${formattedSymbol}:`, data.action_label);
-    return data;
-  } catch (e) {
-    console.warn('⚠️ RL Agent fetch failed:', e.message);
-    return null;
-  }
-}
-
-// ─── 9. Dual AI Fusion — Optimized Unified Response ───────────
+// ─── 9. Dual AI Fusion — Candle Pattern Enhanced ───────────────────────────
 export async function fetchDualAI(userQuery, assetContext = '') {
   const context = assetContext
     ? `Current context: ${assetContext}. User query: ${userQuery}`
     : userQuery;
 
-  // 1. Detect if the query is about a specific asset
-  const symbolMatch = userQuery.match(/\b([A-Z0-9]{2,10})\b/i);
-  let rlData = null;
+  // 1. Detect if the query is about a specific asset (e.g. BTC, ETH, ONDO)
+  const symbolMatch = userQuery.match(/\b([A-Z]{2,10})\b/i);
+  let candleData = null;
+
   if (symbolMatch) {
-    rlData = await fetchRLPrediction(symbolMatch[1].toUpperCase());
+    const symbol = symbolMatch[1].toUpperCase();
+    // Skip if it's a common English word, not a crypto symbol
+    const skipWords = ['THE','FOR','AND','BUT','NOT','CAN','ARE','YOU','HIS','HER','GET','SET','USE','HOW','WHY','WHAT','GIVE','LONG','SHORT','SELL','BUY'];
+    if (!skipWords.includes(symbol)) {
+      candleData = await fetchCandlePatterns(symbol, '4h');
+    }
   }
 
-  // 2. Add RL prediction to context if available
+  // 2. Build enhanced context with candle patterns
   let enhancedContext = context;
-  if (rlData) {
-    const componentsText = rlData.components
-      ? Object.entries(rlData.components).map(([k, v]) => `${k}:${v}`).join(', ')
-      : 'n/a';
-    const reasonsText = Array.isArray(rlData.reasons) ? rlData.reasons.join(' || ') : 'n/a';
-    enhancedContext += ` | [NEXUS QUANT SIGNAL]: Action: ${rlData.action_label}, Confidence: ${(rlData.confidence * 100).toFixed(1)}%, Score: ${rlData.signal_score}, Regime: ${rlData.regime}, Pattern: ${rlData.pattern}, Setup: ${rlData.setup}, Price: $${rlData.price}, Stop: $${rlData.stop_loss}, TP1: $${rlData.take_profit_1}, TP2: $${rlData.take_profit_2}, R:R ${rlData.risk_reward}, Confluence: ${rlData.timeframe_confluence}, Higher TF: ${rlData.higher_timeframe || 'N/A'} (${rlData.higher_timeframe_score || 0}). Components => ${componentsText}. Reasons => ${reasonsText}. Use this structured quant signal as your primary bias.`;
+  if (candleData && candleData.patterns && candleData.patterns.length > 0) {
+    enhancedContext += `\n\n📊 LIVE CANDLESTICK PATTERNS (${candleData.symbol} ${candleData.interval}): ${candleData.summary}`;
   }
 
-  const result = await fetchAIAnalysis(enhancedContext);
+  const result = await fetchAIAnalysis(enhancedContext, candleData);
 
   if (!result) return null;
+
+  // Build pattern badge if patterns were detected
+  const patternBadge = (candleData && candleData.patterns && candleData.patterns.length > 0)
+    ? `<div style="display:flex;flex-wrap:wrap;gap:0.3rem;margin-bottom:0.5rem;">
+        ${candleData.patterns.map(p => `
+          <span style="font-size:0.6rem;font-weight:700;padding:0.2rem 0.5rem;border-radius:4px;letter-spacing:0.05em;
+            background:${p.type === 'bullish' ? 'rgba(52,199,89,0.15)' : p.type === 'bearish' ? 'rgba(255,69,58,0.15)' : 'rgba(255,255,255,0.08)'};
+            color:${p.type === 'bullish' ? '#34C759' : p.type === 'bearish' ? '#FF453A' : '#aaa'};
+            border:1px solid ${p.type === 'bullish' ? 'rgba(52,199,89,0.3)' : p.type === 'bearish' ? 'rgba(255,69,58,0.3)' : 'rgba(255,255,255,0.1)'};">
+            ${p.type === 'bullish' ? '▲' : p.type === 'bearish' ? '▼' : '◆'} ${p.name}
+          </span>`).join('')}
+      </div>`
+    : '';
 
   return `
     <div style="width:100%;">
       <div style="font-size:0.65rem;font-weight:800;letter-spacing:0.1em;color:var(--primary);margin-bottom:0.4rem;text-transform:uppercase;opacity:0.8;">
-        🧠 Nexus Dual-Engine (Quant + Context)
+        🧠 Nexus Dual-Engine (GPT-4o + Hermes)
       </div>
+      ${patternBadge}
       <div style="color:#BAC2DE;line-height:1.6;">${renderMarkdown(result)}</div>
     </div>`;
 }
