@@ -16,6 +16,12 @@ function range(h, l) { return h - l; }
 function isBull(o, c) { return c > o; }
 function isBear(o, c) { return c < o; }
 
+import { createClient } from '@supabase/supabase-js';
+
+const supabaseUrl = process.env.VITE_SUPABASE_URL;
+const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+const supabase = createClient(supabaseUrl, supabaseKey);
+
 // ── Market Structure & Volatility ──────────────────────────────
 function calculateATR(candles, period = 14) {
   if (candles.length < period + 1) return 0;
@@ -241,13 +247,21 @@ export default async function handler(req, res) {
 
   const symbol   = (req.query.symbol   || 'BTCUSDT').toUpperCase();
   const interval = (req.query.interval || '4h');
-
-  const cacheKey = `${symbol}_${interval}`;
-  if (cache[cacheKey] && Date.now() - cache[cacheKey].ts < CACHE_TTL) {
-    return res.status(200).json({ source: 'cache', ...cache[cacheKey].data });
-  }
+  const cacheKey = `candles_${symbol}_${interval}`;
 
   try {
+    // 1. Check Supabase Global Cache first
+    const { data: cachedData, error: cacheError } = await supabase
+      .from('global_market_cache')
+      .select('data, updated_at')
+      .eq('id', cacheKey)
+      .single();
+
+    if (cachedData && (Date.now() - new Date(cachedData.updated_at).getTime() < 5 * 60 * 1000)) {
+      return res.status(200).json({ source: 'global_cache', ...cachedData.data });
+    }
+
+    // 2. Not in cache or expired — Fetch from Binance
     const url = `https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=${interval}&limit=100`;
     const response = await fetch(url);
     if (!response.ok) throw new Error(`Binance HTTP ${response.status}`);
@@ -284,14 +298,16 @@ export default async function handler(req, res) {
         : 'No significant candlestick pattern detected on this timeframe.'
     };
 
-    cache[cacheKey] = { ts: Date.now(), data: result };
+    // 3. Update Supabase Global Cache for all devices
+    await supabase.from('global_market_cache').upsert({
+      id: cacheKey,
+      data: result,
+      updated_at: new Date().toISOString()
+    });
 
-    return res.status(200).json({ source: 'fresh', ...result });
+    return res.status(200).json({ source: 'fresh_global', ...result });
   } catch (err) {
-    console.error('Candle API Error:', err.message);
-    if (cache[cacheKey]) {
-      return res.status(200).json({ source: 'stale-cache', ...cache[cacheKey].data });
-    }
+    console.error('❌ Global Candle API Error:', err.message);
     return res.status(500).json({ error: 'Failed to fetch candle data', details: err.message });
   }
 }
