@@ -189,11 +189,23 @@ document.addEventListener('DOMContentLoaded', () => {
   const loadingBar = document.querySelector('.loading-bar');
 
   // Initialize Clerk Auth
-  setupAuth((isAuthenticated, user) => {
+  setupAuth(async (isAuthenticated, user) => {
     if (isAuthenticated) {
       loginGate.classList.add('hidden');
       updateUserProfileUI(user);
       
+      // 🛡️ Ensure user exists in Supabase
+      try {
+        await supabase.from('user_profiles').upsert({
+          clerk_id: user.id,
+          email: user.primaryEmailAddress?.emailAddress,
+          full_name: user.fullName,
+          updated_at: new Date().toISOString()
+        }, { onConflict: 'clerk_id' });
+      } catch (e) {
+        console.warn('⚠️ Profile sync failed:', e.message);
+      }
+
       // Start loading sequence only once
       if (mainApp.classList.contains('hidden')) {
         startLoadingSequence(loadingScreen, mainApp, loadingBar);
