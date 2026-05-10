@@ -580,6 +580,15 @@ Your core decision-making is based on the NEXUS High-Probability Framework.
 
 CRITICAL: You are a DUAL-DIRECTIONAL agent. If the Alpha Score is low and the price change is negative, you MUST prefer SHORT setups. If the market is chopping sideways, stay NEUTRAL and advise against trading. Do not force Longs in a Bearish market. Never "guess" a direction—if the data is bearish, the signal MUST be SHORT.
 
+MATHEMATICAL TARGET GENERATION (STRICT): You will be provided with real-time Market Structure data including Current Price, Volatility (ATR), Resistance (Swing High), and Support (Swing Low). You MUST calculate targets mathematically:
+1. ENTRY: Set the entry near the Current Price or at a logical pullback/retest level.
+2. STOP LOSS (SL): Set the SL precisely at Entry +/- (1.5 * ATR). For LONGs, place SL 1.5 ATR below entry (or below Support if closer). For SHORTs, place SL 1.5 ATR above entry (or above Resistance if closer).
+3. TAKE PROFITS (TP): Calculate TPs strictly based on Risk-Reward (R:R). The risk is the distance from Entry to SL.
+   - TP1: Entry +/- (Risk * 1) -> 1:1 R:R
+   - TP2: Entry +/- (Risk * 2) -> 1:2 R:R
+   - TP3: Entry +/- (Risk * 3) -> 1:3 R:R
+   - TP4: Entry +/- (Risk * 4) -> 1:4 R:R (Moonbag)
+
 CANDLESTICK PATTERN INTELLIGENCE: You have access to real-time candlestick pattern data from Binance. When pattern data is provided in the context (e.g. "Bearish Engulfing detected on 4H"), you MUST:
 - Reference the specific pattern name in your rationales (e.g. "Bearish Engulfing on 4H confirms institutional selling pressure")
 - Use the pattern direction (bullish/bearish) to CONFIRM or REJECT the signal direction
@@ -601,13 +610,13 @@ Entry Zone:
 [Price] - [Price]
 
 Take-Profit Targets:
-1) [Price]
-2) [Price]
-3) [Price]
-4) [Price]
+1) [Price] (1:1 R:R)
+2) [Price] (1:2 R:R)
+3) [Price] (1:3 R:R)
+4) [Price] (1:4 R:R)
 
 Stop Targets:
-1) [Price]
+1) [Price] (1.5 ATR)
 
 Trailing Configuration:
 Stop: Percent Below Highest (4%)
@@ -810,10 +819,15 @@ export async function fetchDualAI(userQuery, assetContext = '') {
     }
   }
 
-  // 2. Build enhanced context with candle patterns
+  // 2. Build enhanced context with candle patterns and market structure
   let enhancedContext = context;
-  if (candleData && candleData.patterns && candleData.patterns.length > 0) {
-    enhancedContext += `\n\n📊 LIVE CANDLESTICK PATTERNS (${candleData.symbol} ${candleData.interval}): ${candleData.summary}`;
+  if (candleData) {
+    if (candleData.atr) {
+      enhancedContext += `\n\n📈 MARKET STRUCTURE (${candleData.symbol} ${candleData.interval}):\n- Current Price: $${candleData.currentPrice}\n- Volatility (ATR): $${candleData.atr.toFixed(4)}\n- Resistance (Swing High): $${candleData.swingHigh}\n- Support (Swing Low): $${candleData.swingLow}`;
+    }
+    if (candleData.patterns && candleData.patterns.length > 0) {
+      enhancedContext += `\n\n📊 LIVE CANDLESTICK PATTERNS:\n${candleData.summary}`;
+    }
   }
 
   const result = await fetchAIAnalysis(enhancedContext, candleData);

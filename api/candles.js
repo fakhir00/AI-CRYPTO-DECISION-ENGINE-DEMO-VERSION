@@ -16,6 +16,35 @@ function range(h, l) { return h - l; }
 function isBull(o, c) { return c > o; }
 function isBear(o, c) { return c < o; }
 
+// ── Market Structure & Volatility ──────────────────────────────
+function calculateATR(candles, period = 14) {
+  if (candles.length < period + 1) return 0;
+  
+  let trueRanges = [];
+  for (let i = 1; i < candles.length; i++) {
+    const cur = candles[i];
+    const prev = candles[i-1];
+    const tr1 = cur.high - cur.low;
+    const tr2 = Math.abs(cur.high - prev.close);
+    const tr3 = Math.abs(cur.low - prev.close);
+    trueRanges.push(Math.max(tr1, tr2, tr3));
+  }
+  
+  const recentTRs = trueRanges.slice(-period);
+  return recentTRs.reduce((a, b) => a + b, 0) / period;
+}
+
+function getMarketStructure(candles) {
+  if (candles.length === 0) return { swingHigh: 0, swingLow: 0 };
+  let maxHigh = candles[0].high;
+  let minLow = candles[0].low;
+  for (let i = 1; i < candles.length; i++) {
+    if (candles[i].high > maxHigh) maxHigh = candles[i].high;
+    if (candles[i].low < minLow) minLow = candles[i].low;
+  }
+  return { swingHigh: maxHigh, swingLow: minLow };
+}
+
 function detectPatterns(candles) {
   const patterns = [];
 
@@ -236,11 +265,18 @@ export default async function handler(req, res) {
     }));
 
     const patterns = detectPatterns(candles);
+    const atr = calculateATR(candles, 14);
+    const structure = getMarketStructure(candles);
+    const currentPrice = candles[candles.length - 1].close;
 
     const result = {
       symbol,
       interval,
       candleCount: candles.length,
+      currentPrice,
+      atr,
+      swingHigh: structure.swingHigh,
+      swingLow: structure.swingLow,
       patterns,
       // Summary for easy AI injection
       summary: patterns.length > 0
