@@ -550,6 +550,7 @@ async function syncLiveApis() {
     // Fetch pre-computed, server-cached market data from /api/market
     // This endpoint returns identical data to every device worldwide.
     let serverAssets = null;
+    let binancePatterns = {};
     try {
       const serverRes = await fetch('/api/market');
       if (serverRes.ok) {
