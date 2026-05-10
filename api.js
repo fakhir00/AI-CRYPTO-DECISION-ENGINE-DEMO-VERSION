@@ -627,14 +627,20 @@ For all other queries, provide a single, highly optimized, data-driven response.
       }
     }
 
-    const res = await fetch('/api/chat', {
+    const res = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${KEYS.openai}`
+      },
       body: JSON.stringify({
-        model: 'gpt-4o-mini',
-        messages,
-        max_tokens: 900,
-        temperature: 0.45
+        model: 'gpt-4o',
+        messages: [systemMessage, ...AI_MEMORY.getMessages()],
+        temperature: 0.0,
+        seed: 42,
+        top_p: 1,
+        frequency_penalty: 0,
+        presence_penalty: 0
       })
     });
 
