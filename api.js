@@ -861,6 +861,41 @@ export async function fetchDualAI(userQuery, assetContext = '') {
 
   if (!result) return null;
 
+  // Split the response into Signal and Rationales
+  let signalText = result;
+  let rationalesText = "";
+  
+  const splitIndex = result.indexOf('5 Institutional Trade Rationales');
+  if (splitIndex !== -1) {
+    const strongSplit = result.lastIndexOf('<strong>', splitIndex);
+    if (strongSplit !== -1 && (splitIndex - strongSplit) < 20) {
+       signalText = result.substring(0, strongSplit).trim();
+       rationalesText = result.substring(strongSplit).trim();
+    } else {
+       const newlineSplit = result.lastIndexOf('\n', splitIndex);
+       if (newlineSplit !== -1) {
+         signalText = result.substring(0, newlineSplit).trim();
+         rationalesText = result.substring(newlineSplit).trim();
+       } else {
+         signalText = result.substring(0, splitIndex).trim();
+         rationalesText = result.substring(splitIndex).trim();
+       }
+    }
+  }
+
+  // Escape the signal text for the clipboard copy command
+  const escapedSignal = signalText.replace(/"/g, '&quot;').replace(/'/g, '&#39;').replace(/\n/g, '\\n');
+
+  const signalHtml = `
+    <div style="background: rgba(14, 19, 32, 0.6); border: 1px solid rgba(255,255,255,0.05); border-radius: 8px; padding: 2.5rem 1rem 1rem 1rem; margin-top: 0.5rem; margin-bottom: 1rem; position: relative;">
+      <button onclick="navigator.clipboard.writeText('${escapedSignal}').then(() => { this.innerText = 'Copied!'; setTimeout(() => this.innerText = 'Copy Signal', 2000); })" 
+              style="position: absolute; top: 0.5rem; right: 0.5rem; background: var(--primary); color: #fff; border: none; padding: 0.4rem 0.8rem; border-radius: 4px; font-size: 0.75rem; font-weight: bold; cursor: pointer; transition: 0.2s; z-index: 10;">
+        📋 Copy Signal
+      </button>
+      <div style="font-family: monospace; white-space: pre-wrap; font-size: 0.9rem; color: #E2E8F0; line-height: 1.6;">${signalText}</div>
+    </div>
+  `;
+
   // Build pattern badge if patterns were detected
   const patternBadge = (candleData && candleData.patterns && candleData.patterns.length > 0)
     ? `<div style="display:flex;flex-wrap:wrap;gap:0.3rem;margin-bottom:0.5rem;">
@@ -880,6 +915,7 @@ export async function fetchDualAI(userQuery, assetContext = '') {
         🧠 Nexus Dual-Engine (GPT-4o + Hermes)
       </div>
       ${patternBadge}
-      <div style="color:#BAC2DE;line-height:1.6;">${renderMarkdown(result)}</div>
+      ${splitIndex !== -1 ? signalHtml : ''}
+      <div style="color:#BAC2DE;line-height:1.6;">${renderMarkdown(rationalesText || result)}</div>
     </div>`;
 }
