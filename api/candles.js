@@ -248,7 +248,7 @@ export default async function handler(req, res) {
   }
 
   try {
-    const url = `https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=${interval}&limit=50`;
+    const url = `https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=${interval}&limit=100`;
     const response = await fetch(url);
     if (!response.ok) throw new Error(`Binance HTTP ${response.status}`);
 
