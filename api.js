@@ -866,7 +866,10 @@ export async function fetchDualAI(userQuery, assetContext = '') {
   let signalText = "";
   let rationalesText = "";
   
-  const signalStart = result.indexOf('⚡⚡ #');
+  let signalStart = result.indexOf('⚡⚡ #');
+  if (signalStart === -1) {
+    signalStart = result.indexOf('📪 #');
+  }
   if (signalStart !== -1) {
     preamble = result.substring(0, signalStart).trim();
     
