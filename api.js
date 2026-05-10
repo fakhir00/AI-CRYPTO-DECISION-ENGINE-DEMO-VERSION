@@ -15,16 +15,27 @@ const KEYS = {
 // Maintains a rolling history of the last 10 user+assistant message pairs.
 // This gives the AI full conversational context so users don't have to repeat coin names.
 const AI_MEMORY = {
-  history: [],   // Array of { role: 'user'|'assistant', content: string }
-  maxPairs: 10,  // Keep last 10 exchanges (20 messages total)
+  history: [],   
+  maxPairs: 10,  
 
-  add(role, content) {
+  async add(role, content, userId = 'anonymous') {
     this.history.push({ role, content });
-    // Trim to max capacity (maxPairs * 2 messages)
     while (this.history.length > this.maxPairs * 2) {
       this.history.shift();
     }
-    // Persist to localStorage for cross-refresh consistency
+    
+    // ☁️ Sync to Supabase for cross-device consistency
+    try {
+      const { supabase } = await import('./lib/supabase.js');
+      await supabase.from('user_profiles').upsert({
+        clerk_id: userId,
+        ai_memory: this.history,
+        updated_at: new Date().toISOString()
+      }, { onConflict: 'clerk_id' });
+    } catch (e) {
+      console.warn('⚠️ Memory cloud sync failed:', e.message);
+    }
+    
     try { localStorage.setItem('nexus_ai_memory', JSON.stringify(this.history)); } catch (e) { }
   },
 
@@ -32,12 +43,18 @@ const AI_MEMORY = {
     return [...this.history];
   },
 
-  clear() {
-    this.history = [];
-    try { localStorage.removeItem('nexus_ai_memory'); } catch (e) { }
-  },
+  async load(userId = 'anonymous') {
+    // 1. Try cloud first
+    try {
+      const { supabase } = await import('./lib/supabase.js');
+      const { data } = await supabase.from('user_profiles').select('ai_memory').eq('clerk_id', userId).single();
+      if (data?.ai_memory) {
+        this.history = data.ai_memory;
+        return;
+      }
+    } catch (e) { }
 
-  load() {
+    // 2. Fallback to local
     try {
       const saved = localStorage.getItem('nexus_ai_memory');
       if (saved) this.history = JSON.parse(saved);
