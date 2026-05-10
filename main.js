@@ -1,5 +1,6 @@
 import './style.css';
 import { fetchMarketData, fetchCandlePatterns, fetchGlobalMarketData, fetchWhaleActivity, fetchSentiment, fetchFearAndGreed, fetchAIAnalysis, fetchHermesAnalysis, fetchDualAI, calculateAlphaScore, fetchDefiPools, fetchNews, fetchTechnicalSignals, fetchTrendingNarratives, fetchChartData, fetchFundingRates, fetchOpenInterest, fetchOrderBookDepth, fetchBtcOnChain, addToAIMemory, clearAIMemory, getAIMemory } from './api.js';
+import { setupAuth, openSignIn, logout, openUserProfile } from './lib/auth.js';
 
 
 // --- Navigation & Setup ---
@@ -148,7 +149,52 @@ document.addEventListener('DOMContentLoaded', () => {
   
   const loadingScreen = document.getElementById('loading-screen');
   const mainApp = document.getElementById('main-app');
+  const loginGate = document.getElementById('login-gate');
   const loadingBar = document.querySelector('.loading-bar');
+
+  // Initialize Clerk Auth
+  setupAuth((isAuthenticated, user) => {
+    if (isAuthenticated) {
+      loginGate.classList.add('hidden');
+      updateUserProfileUI(user);
+      
+      // Start loading sequence only once
+      if (mainApp.classList.contains('hidden')) {
+        startLoadingSequence(loadingScreen, mainApp, loadingBar);
+      }
+    } else {
+      loadingScreen.classList.add('hidden');
+      mainApp.classList.add('hidden');
+      loginGate.classList.remove('hidden');
+    }
+  });
+
+  // Attach login/logout listeners
+  document.getElementById('sign-in-btn')?.addEventListener('click', openSignIn);
+  document.getElementById('logout-btn')?.addEventListener('click', logout);
+  document.getElementById('user-profile-btn')?.addEventListener('click', openUserProfile);
+});
+
+function updateUserProfileUI(user) {
+  const nameEl = document.getElementById('user-name');
+  const avatarEl = document.getElementById('user-avatar');
+  
+  if (nameEl) nameEl.textContent = user.fullName || user.username || 'NEXUS User';
+  if (avatarEl) {
+    const initials = (user.firstName?.[0] || '') + (user.lastName?.[0] || '');
+    avatarEl.textContent = initials || user.username?.[0]?.toUpperCase() || 'N';
+    if (user.imageUrl) {
+      avatarEl.style.backgroundImage = `url(${user.imageUrl})`;
+      avatarEl.style.backgroundSize = 'cover';
+      avatarEl.textContent = '';
+    }
+  }
+}
+
+function startLoadingSequence(loadingScreen, mainApp, loadingBar) {
+  loadingScreen.classList.remove('hidden');
+  loadingScreen.style.opacity = '1';
+
   const statuses = [
     "Establishing secure WebSocket connection...", 
     "Syncing on-chain data providers...", 
@@ -180,7 +226,7 @@ document.addEventListener('DOMContentLoaded', () => {
       }, 500);
     }
   }, 500);
-});
+}
 
 function initApp() {
   setupSidebar();
@@ -209,11 +255,24 @@ function initApp() {
   setupAllButtons();
   setupTradingEvents();
   
+  // Verify Supabase Connectivity
+  testSupabase();
+
   // Real-time market data polling (every 20 seconds for high-precision accuracy)
   setInterval(syncLiveApis, 20000);
   
   // UI Visual Heartbeat (flashes text)
   setInterval(simulateMarketTick, 3000);
+}
+
+async function testSupabase() {
+  const { supabase } = await import('./lib/supabase.js');
+  const { data, error } = await supabase.from('user_profiles').select('count', { count: 'exact', head: true });
+  if (error) {
+    console.warn('⚠️ Supabase connection test failed (expected if table not created):', error.message);
+  } else {
+    console.log('✅ Supabase connected successfully');
+  }
 }
 
 // --- Charts Setup (Chart.js) ---

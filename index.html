@@ -56,6 +56,25 @@
       </div>
     </div>
 
+    <!-- Login Gate -->
+    <div id="login-gate" class="loading-screen hidden">
+      <div class="loading-content">
+        <div class="loading-logo">
+          <svg viewBox="0 0 60 60" width="60" height="60">
+            <polygon points="30,2 54,16 54,44 30,58 6,44 6,16" fill="none" stroke="#8B78FF" stroke-width="2"/>
+            <text x="30" y="35" text-anchor="middle" fill="#8B78FF" font-size="16" font-weight="700" font-family="Inter">N</text>
+          </svg>
+          <h1 class="loading-title">NEXUS</h1>
+          <p class="loading-subtitle">SECURE AUTHENTICATION REQUIRED</p>
+        </div>
+        <div style="margin-top: 2rem;">
+          <button id="sign-in-btn" class="btn-primary" style="padding: 1rem 2rem; font-size: 1rem; border-radius: 8px;">
+            Access Quantitative Core
+          </button>
+        </div>
+      </div>
+    </div>
+
     <!-- Main App -->
     <div id="main-app" class="main-app hidden">
       
@@ -74,13 +93,16 @@
           <!-- Populated by JS -->
         </nav>
         <div class="sidebar-footer">
-          <div class="user-profile">
-            <div class="user-avatar">FB</div>
+          <div class="user-profile" id="user-profile-btn" style="cursor: pointer;">
+            <div class="user-avatar" id="user-avatar">FB</div>
             <div class="user-info">
-              <div class="user-name">Fakhir Baig</div>
-              <div class="user-plan">Pro Plan • Live</div>
+              <div class="user-name" id="user-name">Fakhir Baig</div>
+              <div class="user-plan" id="user-plan">Pro Plan • Live</div>
             </div>
           </div>
+          <button id="logout-btn" style="background: transparent; border: none; color: #ff4d4d; font-size: 0.7rem; margin-top: 0.5rem; cursor: pointer; opacity: 0.7;">
+            Sign Out
+          </button>
         </div>
       </aside>
       <div class="sidebar-overlay" id="sidebar-overlay"></div>
