@@ -1,5 +1,5 @@
 import './style.css';
-import { fetchMarketData, fetchCandlePatterns, fetchGlobalMarketData, fetchWhaleActivity, fetchSentiment, fetchFearAndGreed, fetchAIAnalysis, fetchHermesAnalysis, fetchDualAI, calculateAlphaScore, fetchDefiPools, fetchNews, fetchTechnicalSignals, fetchTrendingNarratives, fetchChartData, fetchFundingRates, fetchOpenInterest, fetchOrderBookDepth, fetchBtcOnChain, addToAIMemory, clearAIMemory, getAIMemory } from './api.js';
+import { fetchMarketData, fetchBinancePatterns, fetchCandlePatterns, fetchGlobalMarketData, fetchWhaleActivity, fetchSentiment, fetchFearAndGreed, fetchAIAnalysis, fetchHermesAnalysis, fetchDualAI, calculateAlphaScore, fetchDefiPools, fetchNews, fetchTechnicalSignals, fetchTrendingNarratives, fetchChartData, fetchFundingRates, fetchOpenInterest, fetchOrderBookDepth, fetchBtcOnChain, addToAIMemory, clearAIMemory, getAIMemory } from './api.js';
 
 
 // --- Navigation & Setup ---
@@ -369,7 +369,8 @@ async function syncLiveApis() {
     const derivativeSymbols = topSymbols.slice(0, 15); // Top 15 for heavy OI/Funding data
 
     // 2. Fetch all other data using discovered symbols
-    const [whales, narrativesData, chartPrices, fundingData, oiData, depthData, btcChainData, sentimentData] = await Promise.all([
+    const [binancePatterns, whales, narrativesData, chartPrices, fundingData, oiData, depthData, btcChainData, sentimentData] = await Promise.all([
+      fetchBinancePatterns(),
       fetchWhaleActivity(),
       fetchTrendingNarratives(),
       fetchChartData('BTC'),
