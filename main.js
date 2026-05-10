@@ -6,7 +6,6 @@ import { supabase } from './lib/supabase.js';
 
 // --- Navigation & Setup ---
 const NAV_ITEMS = [
-  { id: 'home', label: 'Home Command Center', icon: 'home' },
   { id: 'dashboard', label: 'Dashboard Overview', icon: 'grid' },
   { id: 'opportunities', label: 'Top Opportunities', icon: 'trending-up' },
   { id: 'trading', label: 'Nexus Trading View', icon: 'monitor' },
@@ -295,7 +294,6 @@ async function initApp() {
   initCharts();
 
   // Initial renders (will use cached data if available)
-  renderHomePage();
   renderDashboard();
   renderOpportunitiesPage();
   renderTradingPage();
@@ -612,7 +610,6 @@ async function syncLiveApis() {
 
     if (assets.length > 0) {
       
-      renderHomePage();
       renderDashboard();
       renderOpportunitiesPage();
       renderProSignals();
@@ -743,7 +740,7 @@ function renderDashboard() {
         <i data-feather="activity" class="card-icon ${sentClass}"></i>
       </div>
       <div class="card-value ${sentClass}">${sentLabel}</div>
-      <div class="card-change text-muted">Sentiment Engine: ${LIVE_SENTIMENT.score}/100</div>
+      <div class="card-change text-muted">${LIVE_SENTIMENT.source || 'Reddit NLP'}: ${LIVE_SENTIMENT.score}/100</div>
     </div>
   `;
   if (typeof feather !== 'undefined') feather.replace();
@@ -898,7 +895,7 @@ function renderNarrativeMomentum() {
   const container = document.getElementById('narrative-momentum-list');
   if (!container) return;
   if (NARRATIVES.length === 0) {
-    container.innerHTML = `<div style="padding:1rem;color:var(--text-muted);font-size:0.85rem;text-align:center;">Syncing sector momentum from market intelligence feed...</div>`;
+    container.innerHTML = `<div style="padding:1rem;color:var(--text-muted);font-size:0.85rem;text-align:center;">Syncing sector momentum from CoinGecko...</div>`;
     return;
   }
   container.innerHTML = NARRATIVES.map((n, i) => `
@@ -915,59 +912,6 @@ function renderNarrativeMomentum() {
       </div>
     </div>
   `).join('');
-}
-
-function renderHomePage() {
-  const stats = {
-    assets: document.getElementById('home-stat-assets'),
-    alpha: document.getElementById('home-stat-alpha'),
-    sentiment: document.getElementById('home-stat-sentiment'),
-    flow: document.getElementById('home-stat-flow')
-  };
-  const tableBody = document.getElementById('home-conviction-body');
-  const chatBox = document.getElementById('home-chat-preview');
-
-  if (!stats.assets || !stats.alpha || !stats.sentiment || !stats.flow || !tableBody || !chatBox) return;
-
-  const sorted = [...assets].sort((a, b) => (b.score - a.score) || a.symbol.localeCompare(b.symbol));
-  const topAsset = sorted[0];
-  const nextAsset = sorted[1];
-
-  stats.assets.textContent = `${assets.length || 0}`;
-  stats.alpha.textContent = topAsset ? `${topAsset.symbol} ${topAsset.score}` : 'N/A';
-  stats.sentiment.textContent = `${LIVE_SENTIMENT.score}/100`;
-  stats.flow.textContent = `${WHALE_ACTIONS.length} active`;
-
-  if (sorted.length === 0) {
-    tableBody.innerHTML = `
-      <tr>
-        <td colspan="5" class="text-muted" style="padding:1rem;text-align:center;">Live ranking table will populate after market sync.</td>
-      </tr>
-    `;
-    chatBox.innerHTML = `
-      <div class="home-chat-line ai">AI: Calibrating models and waiting for first market sync.</div>
-      <div class="home-chat-line user">You: Build me a high-conviction plan when data is ready.</div>
-      <div class="home-chat-line ai">AI: Acknowledged. I will prioritize clean risk and execution precision.</div>
-    `;
-    return;
-  }
-
-  tableBody.innerHTML = sorted.slice(0, 6).map((asset, idx) => `
-    <tr>
-      <td>${idx + 1}</td>
-      <td><strong>${asset.symbol}</strong></td>
-      <td class="${asset.change >= 0 ? 'text-green' : 'text-red'}">${asset.change > 0 ? '+' : ''}${asset.change.toFixed(2)}%</td>
-      <td>${asset.score}</td>
-      <td>${asset.reason || 'Momentum Structure'}</td>
-    </tr>
-  `).join('');
-
-  chatBox.innerHTML = `
-    <div class="home-chat-line user">You: Give me the strongest trade thesis right now.</div>
-    <div class="home-chat-line ai">AI: ${topAsset.symbol} leads with score ${topAsset.score}. Structure: ${topAsset.reason || 'Trend continuation'}.</div>
-    <div class="home-chat-line user">You: What is the backup if momentum weakens?</div>
-    <div class="home-chat-line ai">AI: Rotate focus to ${nextAsset ? nextAsset.symbol : topAsset.symbol}, keep entries staged, and protect downside with adaptive stop logic.</div>
-  `;
 }
 
 window.triggerMcp = async function(type) {
@@ -1103,7 +1047,7 @@ function setupAllButtons() {
       e.target.classList.add('active');
       
       const titleEl = document.getElementById('market-cap-title');
-      if (titleEl) titleEl.innerHTML = `<i data-feather="activity"></i> Total Market Cap of BTC (${tf})`;
+      if (titleEl) titleEl.innerHTML = `<i data-feather="activity"></i> Total Market Cap Trend (${tf})`;
       if (typeof feather !== 'undefined') feather.replace();
       
       showToast(`Market chart updated to ${tf} timeframe`);
