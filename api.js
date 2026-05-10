@@ -18,12 +18,28 @@ const AI_MEMORY = {
   history: [],   // Array of { role: 'user'|'assistant', content: string }
   maxPairs: 10,  // Keep last 10 exchanges (20 messages total)
 
-  add(role, content) {
+  async add(role, content) {
     this.history.push({ role, content });
     // Trim to max capacity (maxPairs * 2 messages)
     while (this.history.length > this.maxPairs * 2) {
       this.history.shift();
     }
+    
+    // 🌐 Sync to Supabase for cross-device context
+    try {
+      const { supabase } = await import('./lib/supabase.js');
+      const user = JSON.parse(localStorage.getItem('clerk-db-user') || '{}');
+      if (user.clerk_id) {
+        await supabase.from('user_profiles').upsert({
+          clerk_id: user.clerk_id,
+          ai_memory: this.history,
+          updated_at: new Date().toISOString()
+        });
+      }
+    } catch (e) {
+      console.warn('⚠️ AI Memory sync failed:', e.message);
+    }
+    
     // Persist to localStorage for cross-refresh consistency
     try { localStorage.setItem('nexus_ai_memory', JSON.stringify(this.history)); } catch (e) { }
   },
@@ -32,16 +48,28 @@ const AI_MEMORY = {
     return [...this.history];
   },
 
+  async load() {
+    try {
+      // 1. Try local first for speed
+      const saved = localStorage.getItem('nexus_ai_memory');
+      if (saved) this.history = JSON.parse(saved);
+
+      // 2. Hydrate from Supabase for cross-device consistency
+      const { supabase } = await import('./lib/supabase.js');
+      const user = JSON.parse(localStorage.getItem('clerk-db-user') || '{}');
+      if (user.clerk_id) {
+        const { data } = await supabase.from('user_profiles').select('ai_memory').eq('clerk_id', user.clerk_id).single();
+        if (data && data.ai_memory) {
+          this.history = data.ai_memory;
+          localStorage.setItem('nexus_ai_memory', JSON.stringify(this.history));
+        }
+      }
+    } catch (e) { console.warn('⚠️ AI Memory hydration failed'); }
+  },
+
   clear() {
     this.history = [];
     try { localStorage.removeItem('nexus_ai_memory'); } catch (e) { }
-  },
-
-  load() {
-    try {
-      const saved = localStorage.getItem('nexus_ai_memory');
-      if (saved) this.history = JSON.parse(saved);
-    } catch (e) { this.history = []; }
   }
 };
 
@@ -52,6 +80,7 @@ AI_MEMORY.load();
 export function addToAIMemory(role, content) { AI_MEMORY.add(role, content); }
 export function clearAIMemory() { AI_MEMORY.clear(); }
 export function getAIMemory() { return AI_MEMORY.getMessages(); }
+export async function loadAIMemory() { await AI_MEMORY.load(); }
 
 // ─── 1. CoinGecko: Real-time price, market cap, volume ───────────────────────
 export async function fetchMarketData() {

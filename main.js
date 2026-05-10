@@ -196,12 +196,17 @@ document.addEventListener('DOMContentLoaded', () => {
       
       // 🛡️ Ensure user exists in Supabase
       try {
+        localStorage.setItem('clerk-db-user', JSON.stringify({ clerk_id: user.id }));
         await supabase.from('user_profiles').upsert({
           clerk_id: user.id,
           email: user.primaryEmailAddress?.emailAddress,
           full_name: user.fullName,
           updated_at: new Date().toISOString()
         }, { onConflict: 'clerk_id' });
+        
+        // 🧠 Hydrate AI Memory from Supabase
+        const { loadAIMemory } = await import('./api.js');
+        await loadAIMemory();
       } catch (e) {
         console.warn('⚠️ Profile sync failed:', e.message);
       }
