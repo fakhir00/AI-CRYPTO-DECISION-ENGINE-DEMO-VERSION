@@ -115,7 +115,7 @@
             <button class="mobile-toggle" id="mobile-toggle" title="Menu">
               <i data-feather="menu"></i>
             </button>
-            <h1 class="page-title" id="page-title">Dashboard Overview</h1>
+            <h1 class="page-title" id="page-title">Home Command Center</h1>
           </div>
           <div class="header-center">
             <div class="market-status">
@@ -139,14 +139,168 @@
         <!-- Dynamic Pages Container -->
         <main class="page-container" id="page-container">
           
+          <!-- 0. Home Command Center -->
+          <div class="page active" id="page-home">
+            <div class="panel home-hero mb-4">
+              <div class="panel-body home-hero-body">
+                <div class="home-kicker">NEXUS QUANT INTELLIGENCE</div>
+                <h2 class="home-title">A modern decision engine built for speed, clarity, and execution confidence.</h2>
+                <p class="home-subtitle">
+                  NEXUS combines live market structure, signal automation, institutional flow mapping, and AI-driven strategy chat in one surface so execution decisions happen faster and cleaner.
+                </p>
+                <div class="home-cta-row">
+                  <button class="btn-primary" data-target="dashboard">Open Dashboard</button>
+                  <button class="btn-secondary" data-target="dashboard">View Live Market Engine</button>
+                </div>
+              </div>
+            </div>
+
+            <section class="home-stat-grid mb-4">
+              <div class="home-stat-card">
+                <span class="home-stat-label">Tracked Assets</span>
+                <span class="home-stat-value" id="home-stat-assets">0</span>
+              </div>
+              <div class="home-stat-card">
+                <span class="home-stat-label">Top Alpha Pair</span>
+                <span class="home-stat-value" id="home-stat-alpha">N/A</span>
+              </div>
+              <div class="home-stat-card">
+                <span class="home-stat-label">Sentiment Score</span>
+                <span class="home-stat-value" id="home-stat-sentiment">50/100</span>
+              </div>
+              <div class="home-stat-card">
+                <span class="home-stat-label">Smart Flow Activity</span>
+                <span class="home-stat-value" id="home-stat-flow">0 active</span>
+              </div>
+            </section>
+
+            <section class="home-main-grid mb-4">
+              <div class="panel">
+                <div class="panel-header">
+                  <h2 class="panel-title"><i data-feather="award"></i> Why NEXUS Is Better</h2>
+                </div>
+                <div class="panel-body">
+                  <div class="home-point">
+                    <h4>Unified Execution Surface</h4>
+                    <p>Signals, chat intelligence, ranking models, and tactical alerts run in one workflow instead of fragmented tabs.</p>
+                  </div>
+                  <div class="home-point">
+                    <h4>Adaptive Risk Logic</h4>
+                    <p>Trailing behavior, stop structure, and setup geometry adapt to volatility and structure in real time.</p>
+                  </div>
+                  <div class="home-point">
+                    <h4>Institutional-Style Clarity</h4>
+                    <p>Each setup includes explicit trade rationale, structured entries, and execution-ready formatting for direct deployment.</p>
+                  </div>
+                  <button class="btn-primary mt-2" data-target="dashboard">Go to Dashboard</button>
+                </div>
+              </div>
+
+              <div class="panel">
+                <div class="panel-header">
+                  <h2 class="panel-title"><i data-feather="table"></i> Live Conviction Table</h2>
+                </div>
+                <div class="panel-body table-responsive">
+                  <table class="data-table home-table">
+                    <thead>
+                      <tr>
+                        <th>#</th>
+                        <th>Pair</th>
+                        <th>24h Change</th>
+                        <th>Alpha Score</th>
+                        <th>Primary Edge</th>
+                      </tr>
+                    </thead>
+                    <tbody id="home-conviction-body">
+                      <tr>
+                        <td colspan="5" class="text-muted" style="padding:1rem;text-align:center;">Waiting for live data sync...</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </section>
+
+            <section class="home-main-grid mb-4">
+              <div class="panel">
+                <div class="panel-header">
+                  <h2 class="panel-title"><i data-feather="message-circle"></i> Strategy Chat Preview</h2>
+                </div>
+                <div class="panel-body home-chat-preview" id="home-chat-preview">
+                  <div class="home-chat-line ai">AI: Initializing market intelligence stream...</div>
+                </div>
+                <div class="panel-body" style="padding-top:0;">
+                  <button class="btn-secondary" data-target="dashboard">Review Dashboard Before Execution</button>
+                </div>
+              </div>
+
+              <div class="panel">
+                <div class="panel-header">
+                  <h2 class="panel-title"><i data-feather="layers"></i> How NEXUS Works</h2>
+                </div>
+                <div class="panel-body">
+                  <div class="home-step">
+                    <span>01</span>
+                    <div>
+                      <h4>Scan</h4>
+                      <p>Aggregates live market structure, liquidity behavior, and alpha confluence.</p>
+                    </div>
+                  </div>
+                  <div class="home-step">
+                    <span>02</span>
+                    <div>
+                      <h4>Rank</h4>
+                      <p>Prioritizes assets by conviction and momentum quality with deterministic scoring logic.</p>
+                    </div>
+                  </div>
+                  <div class="home-step">
+                    <span>03</span>
+                    <div>
+                      <h4>Execute</h4>
+                      <p>Generates deployment-ready trade structures with adaptive risk controls.</p>
+                    </div>
+                  </div>
+                  <div class="home-step">
+                    <span>04</span>
+                    <div>
+                      <h4>Refine</h4>
+                      <p>Continuously updates setup quality from fresh flow and volatility conditions.</p>
+                    </div>
+                  </div>
+                  <button class="btn-primary mt-2" data-target="dashboard">Enter Dashboard</button>
+                </div>
+              </div>
+            </section>
+
+            <div class="panel">
+              <div class="panel-header">
+                <h2 class="panel-title"><i data-feather="help-circle"></i> Frequently Asked Questions</h2>
+              </div>
+              <div class="panel-body home-faq">
+                <details open>
+                  <summary>Why use NEXUS instead of generic signal feeds?</summary>
+                  <p>NEXUS is structured around execution quality, adaptive risk, and context-rich rationale, not static one-size-fits-all calls.</p>
+                </details>
+                <details>
+                  <summary>Can I use NEXUS for both fast trades and swing plans?</summary>
+                  <p>Yes. Ranking, signal blocks, and AI assistance are tuned for both tactical and higher-timeframe execution.</p>
+                </details>
+                <details>
+                  <summary>How do I start from this page?</summary>
+                  <p>Use any CTA above to jump straight to Dashboard Overview where all live modules are connected.</p>
+                </details>
+              </div>
+            </div>
+          </div>
+
           <!-- 1. Dashboard Overview -->
-          <div class="page active" id="page-dashboard">
+          <div class="page" id="page-dashboard">
             <section class="summary-row" id="dashboard-summary"></section>
             
             <!-- Main Chart Area -->
             <div class="panel mb-4">
                <div class="panel-header">
-                  <h2 class="panel-title" id="market-cap-title"><i data-feather="activity"></i> Total Market Cap Trend (24h)</h2>
+                  <h2 class="panel-title" id="market-cap-title"><i data-feather="activity"></i> Total Market Cap of BTC (24h)</h2>
                   <div class="panel-actions">
                      <button class="panel-action-btn">1H</button>
                      <button class="panel-action-btn active">24H</button>
@@ -197,7 +351,6 @@
               <div class="panel">
                 <div class="panel-header">
                   <h2 class="panel-title"><i data-feather="cpu"></i> AI Research Stream</h2>
-                  <span class="panel-badge ai-badge">GPT-4 TURBO</span>
                 </div>
                 <div class="panel-body ai-body">
                   <div class="ai-research-content" id="dash-ai-research-content"></div>
