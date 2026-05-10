@@ -1,6 +1,7 @@
 import './style.css';
 import { fetchMarketData, fetchCandlePatterns, fetchGlobalMarketData, fetchWhaleActivity, fetchSentiment, fetchFearAndGreed, fetchAIAnalysis, fetchHermesAnalysis, fetchDualAI, calculateAlphaScore, fetchDefiPools, fetchNews, fetchTechnicalSignals, fetchTrendingNarratives, fetchChartData, fetchFundingRates, fetchOpenInterest, fetchOrderBookDepth, fetchBtcOnChain, addToAIMemory, clearAIMemory, getAIMemory } from './api.js';
-import { setupAuth, openSignIn, logout, openUserProfile } from './lib/auth.js';
+import { setupAuth, openSignIn, logout, openUserProfile, clerk } from './lib/auth.js';
+import { supabase } from './lib/supabase.js';
 
 
 // --- Navigation & Setup ---
@@ -257,6 +258,7 @@ function initApp() {
   setupModals();
   setupAllButtons();
   setupTradingEvents();
+  setupSettingsPage();
   
   // Verify Supabase Connectivity
   testSupabase();
