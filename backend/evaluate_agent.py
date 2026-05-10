@@ -1,6 +1,7 @@
 import os
 import pandas as pd
 import numpy as np
+import torch as th
 from sb3_contrib import RecurrentPPO
 from trading_env import CryptoTradingEnv
 
@@ -68,28 +69,31 @@ def evaluate():
     lstm_states = None
     episode_start = np.ones((1,), dtype=bool)
     
+    max_confidence_seen = 0
     while not done:
-        # Pass states for LSTM memory tracking
+        # 1. Predict Action
         action, lstm_states = model.predict(obs, state=lstm_states, episode_start=episode_start, deterministic=True)
-        episode_start = np.zeros((1,), dtype=bool) # Turn off after first step
+        episode_start = np.zeros((1,), dtype=bool) 
+
+        # 2. Sniper Gate Logic (Confidence Filter)
+        obs_tensor, _ = model.policy.obs_to_tensor(obs)
+        with th.no_grad():
+            h_state = th.tensor(lstm_states[0]).to(model.policy.device)
+            c_state = th.tensor(lstm_states[1]).to(model.policy.device)
+            distribution, _ = model.policy.get_distribution(obs_tensor, (h_state, c_state), th.tensor(episode_start).to(model.policy.device))
+            probs = th.softmax(distribution.distribution.logits, dim=-1)
+            confidence = probs[0][action].item()
+            
+            if action != 0:
+                max_confidence_seen = max(max_confidence_seen, confidence)
+
+        # Sniper Gate: Diagnosing at 50%
+        effective_action = action
+        if action != 0 and confidence < 0.50:
+            effective_action = 0 
         
-        # Track state before step
-        prev_held = env.crypto_held
-        row = env.df.iloc[env.current_step]
-        next_row = env.df.iloc[env.current_step + 1] if env.current_step + 1 < len(env.df) else None
-        
-        if next_row is not None:
-            total_steps += 1
-            price_up = next_row['close'] > row['close']
-            if (action == 1 and price_up) or (action == 2 and not price_up):
-                correct_directions += 1
-            elif action == 0 and abs(next_row['close'] - row['close']) / row['close'] < 0.001:
-                correct_directions += 1 # Correct hold on flat market
-        
-        if prev_held == 0 and action != 0:
-            entry_net_worth = env.net_worth
-        
-        obs, reward, terminated, truncated, info = env.step(action)
+        # 3. Step Environment
+        obs, reward, terminated, truncated, info = env.step(effective_action)
         
         # Detect a CLOSED trade
         if info.get('trade_closed', False):
@@ -128,6 +132,7 @@ def evaluate():
     print(f"Successful Wins:     {wins} (Avg: {avg_win:+.2f}%)")
     print(f"Losses:              {losses} (Avg: {avg_loss:+.2f}%)")
     print(f"Break-evens:         {breakevens}")
+    print(f"MAX SIGNAL CONFIDENCE: {max_confidence_seen:.2%}")
     print("-" * 40)
     print("="*40)
 

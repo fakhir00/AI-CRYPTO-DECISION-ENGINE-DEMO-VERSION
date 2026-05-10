@@ -44,12 +44,12 @@ def run_training_cycle():
     env = DummyVecEnv([lambda: CryptoTradingEnv(features_df)])
     
     # 4. Load or Initialize Model
-    model_name = "nexus_v16_sniper"
+    model_name = "nexus_v17_conviction"
     model_path = f"backend/{model_name}"
     
-    # Initialize FRESH to enforce the new 'God-Mode' rules
-    print("Launching v16 'SNIPER' brain...")
-    model = RecurrentPPO("MlpLstmPolicy", env, verbose=1, learning_rate=5e-5)
+    # Increase ent_coef to force the AI to make a choice (reduce uncertainty)
+    print("Launching v17 'CONVICTION' brain...")
+    model = RecurrentPPO("MlpLstmPolicy", env, verbose=1, learning_rate=1e-4, ent_coef=0.05)
     
     # 5. Train with Checkpoints
     from stable_baselines3.common.callbacks import CheckpointCallback
