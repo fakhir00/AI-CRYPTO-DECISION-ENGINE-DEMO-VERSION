@@ -170,7 +170,10 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   // Attach login/logout listeners
-  document.getElementById('sign-in-btn')?.addEventListener('click', openSignIn);
+  document.getElementById('sign-in-btn')?.addEventListener('click', () => {
+    console.log('🖱️ Sign-in button clicked');
+    openSignIn();
+  });
   document.getElementById('logout-btn')?.addEventListener('click', logout);
   document.getElementById('user-profile-btn')?.addEventListener('click', openUserProfile);
 });
