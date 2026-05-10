@@ -45,43 +45,42 @@ export default async function handler(req, res) {
   }
 
   try {
-    const url = `https://api.coingecko.com/api/v3/coins/markets`
-      + `?vs_currency=usd&order=market_cap_desc&per_page=50&page=1`
-      + `&x_cg_demo_api_key=${COINGECKO_KEY}&sparkline=false`;
+    const binanceRes = await fetch('https://api.binance.com/api/v3/ticker/24hr');
+    if (!binanceRes.ok) throw new Error(`Binance HTTP ${binanceRes.status}`);
+    const binanceData = await binanceRes.json();
 
-    const [cgRes, binanceRes] = await Promise.all([
-      fetch(url, { cache: 'no-store' }),
-      fetch('https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT')
-    ]);
-
-    if (!cgRes.ok) throw new Error(`CoinGecko HTTP ${cgRes.status}`);
-    const coins = await cgRes.json();
+    // Filter for USDT pairs and sort by volume to simulate Top 50 Market Cap
+    const STABLECOINS = ['USDCUSDT', 'DAIUSDT', 'BUSDUSDT', 'FDUSDUSDT', 'TUSDUSDT', 'PYUSDUSDT', 'USDEUSDT', 'EURUSDT'];
+    const filtered = binanceData.filter(c => 
+      c.symbol.endsWith('USDT') && 
+      !STABLECOINS.includes(c.symbol) &&
+      !c.symbol.endsWith('UPUSDT') &&
+      !c.symbol.endsWith('DOWNUSDT') &&
+      parseFloat(c.lastPrice) > 0
+    );
+    filtered.sort((a, b) => parseFloat(b.quoteVolume) - parseFloat(a.quoteVolume));
     
-    let binanceBtcPrice = null;
-    if (binanceRes.ok) {
-      const bData = await binanceRes.json();
-      binanceBtcPrice = parseFloat(bData.price);
-    }
+    const coins = filtered.slice(0, 50).map((c, index) => ({
+      symbol: c.symbol.replace('USDT', ''),
+      name: c.symbol.replace('USDT', ''),
+      current_price: parseFloat(c.lastPrice),
+      market_cap_rank: index + 1,
+      market_cap: parseFloat(c.quoteVolume) * 100,
+      total_volume: parseFloat(c.quoteVolume),
+      price_change_percentage_24h: parseFloat(c.priceChangePercent)
+    }));
 
     // Compute scores server-side (deterministic, same for every client)
-    const STABLECOINS = ['USDT', 'USDC', 'DAI', 'BUSD', 'FDUSD', 'TUSD', 'PYUSD', 'USDE'];
-    const assets = coins
-      .filter(coin => !STABLECOINS.includes(coin.symbol.toUpperCase()))
-      .map(coin => {
+    const assets = coins.map(coin => {
       const symbol = coin.symbol.toUpperCase();
-      let price = coin.current_price;
-
-      // Overwrite BTC with real-time Binance price for absolute accuracy
-      if (symbol === 'BTC' && binanceBtcPrice) {
-        price = binanceBtcPrice;
-      }
+      const price = coin.current_price;
       const alpha = computeAlphaScore(coin);
       const change = coin.price_change_percentage_24h || 0;
       
       return {
         symbol,
         name: coin.name,
-        price: coin.current_price,
+        price,
         change,
         score: alpha,
         bias: alpha >= 65 ? 'bullish' : (alpha <= 45 ? 'bearish' : 'neutral'),
