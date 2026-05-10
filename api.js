@@ -55,62 +55,24 @@ export function getAIMemory() { return AI_MEMORY.getMessages(); }
 // ─── 1. CoinGecko: Real-time price, market cap, volume ───────────────────────
 export async function fetchMarketData() {
   try {
-    // We use Binance 24hr ticker instead of CoinGecko to guarantee real data without API limits
-    const res = await fetch('https://api.binance.com/api/v3/ticker/24hr');
-    if (!res.ok) throw new Error(`Binance HTTP ${res.status}`);
+    // Dynamically fetch top 50 coins by market cap from CoinGecko
+    const url = `https://api.coingecko.com/api/v3/coins/markets`
+      + `?vs_currency=usd&order=market_cap_desc&per_page=50&page=1`
+      + `&x_cg_demo_api_key=${KEYS.coingecko}&sparkline=false`;
+
+    const res = await fetch(url, { cache: 'no-store' });
+    if (!res.ok) throw new Error(`CoinGecko HTTP ${res.status}`);
     const data = await res.json();
     
-    // Filter for USDT pairs, excluding stablecoins and leveraged tokens
-    const STABLECOINS = ['USDCUSDT', 'DAIUSDT', 'BUSDUSDT', 'FDUSDUSDT', 'TUSDUSDT', 'PYUSDUSDT', 'USDEUSDT', 'EURUSDT'];
-    const filtered = data.filter(c => 
-      c.symbol.endsWith('USDT') && 
-      !STABLECOINS.includes(c.symbol) &&
-      !c.symbol.endsWith('UPUSDT') &&
-      !c.symbol.endsWith('DOWNUSDT') &&
-      parseFloat(c.lastPrice) > 0 &&
-      parseFloat(c.quoteVolume) > 5000000 // Only highly liquid pairs
-    );
+    // Filter out stablecoins
+    const STABLECOINS = ['USDT', 'USDC', 'DAI', 'BUSD', 'FDUSD', 'TUSD', 'PYUSD', 'USDE'];
+    const filteredData = data.filter(c => !STABLECOINS.includes(c.symbol.toUpperCase()));
     
-    // Sort by Quote Volume (USD Traded) to simulate Top Market Cap ranking
-    filtered.sort((a, b) => parseFloat(b.quoteVolume) - parseFloat(a.quoteVolume));
-    
-    // Map to the format the UI expects
-    const top50 = filtered.slice(0, 50).map((coin, index) => {
-      const symbol = coin.symbol.replace('USDT', '');
-      return {
-        id: symbol.toLowerCase(),
-        symbol: symbol.toLowerCase(),
-        name: symbol, // In a pro interface, the ticker is the name
-        current_price: parseFloat(coin.lastPrice),
-        market_cap_rank: index + 1,
-        market_cap: parseFloat(coin.quoteVolume) * 100, // Synthesized mcap for UI scale calculations
-        total_volume: parseFloat(coin.quoteVolume),
-        price_change_percentage_24h: parseFloat(coin.priceChangePercent)
-      };
-    });
-    
-    console.log('✅ Real Binance market data fetched:', top50.length, 'coins');
-    return top50;
+    console.log('✅ CoinGecko data fetched:', filteredData.length, 'coins');
+    return filteredData;
   } catch (e) {
-    console.warn('⚠️ Market data fetch failed. Using fallback institutional data:', e.message);
-    // Institutional fallback array to ensure UI NEVER breaks
-    return [
-      { id: "bitcoin", symbol: "btc", name: "Bitcoin", current_price: 64120.50, market_cap: 1200000000000, total_volume: 35000000000, price_change_percentage_24h: 1.2 },
-      { id: "ethereum", symbol: "eth", name: "Ethereum", current_price: 3450.10, market_cap: 400000000000, total_volume: 15000000000, price_change_percentage_24h: 2.1 },
-      { id: "solana", symbol: "sol", name: "Solana", current_price: 145.20, market_cap: 65000000000, total_volume: 4000000000, price_change_percentage_24h: 5.4 },
-      { id: "sui", symbol: "sui", name: "Sui", current_price: 1.14, market_cap: 1500000000, total_volume: 400000000, price_change_percentage_24h: 8.1 },
-      { id: "ondo", symbol: "ondo", name: "Ondo", current_price: 0.85, market_cap: 1200000000, total_volume: 300000000, price_change_percentage_24h: -1.2 },
-      { id: "chainlink", symbol: "link", name: "Chainlink", current_price: 18.50, market_cap: 10000000000, total_volume: 800000000, price_change_percentage_24h: 0.5 },
-      { id: "avalanche-2", symbol: "avax", name: "Avalanche", current_price: 35.10, market_cap: 14000000000, total_volume: 500000000, price_change_percentage_24h: -2.3 },
-      { id: "render-token", symbol: "rndr", name: "Render", current_price: 9.80, market_cap: 4000000000, total_volume: 300000000, price_change_percentage_24h: 12.5 },
-      { id: "injective-protocol", symbol: "inj", name: "Injective", current_price: 25.40, market_cap: 2500000000, total_volume: 200000000, price_change_percentage_24h: 4.1 },
-      { id: "near", symbol: "near", name: "NEAR Protocol", current_price: 7.20, market_cap: 7500000000, total_volume: 600000000, price_change_percentage_24h: 3.2 },
-      { id: "fetch-ai", symbol: "fet", name: "Fetch.ai", current_price: 2.10, market_cap: 1700000000, total_volume: 150000000, price_change_percentage_24h: 14.5 },
-      { id: "polygon", symbol: "matic", name: "Polygon", current_price: 0.72, market_cap: 7000000000, total_volume: 350000000, price_change_percentage_24h: -0.8 },
-      { id: "arbitrum", symbol: "arb", name: "Arbitrum", current_price: 1.15, market_cap: 3000000000, total_volume: 450000000, price_change_percentage_24h: 2.4 },
-      { id: "optimism", symbol: "op", name: "Optimism", current_price: 2.45, market_cap: 2500000000, total_volume: 200000000, price_change_percentage_24h: 5.7 },
-      { id: "aptos", symbol: "apt", name: "Aptos", current_price: 8.90, market_cap: 3500000000, total_volume: 300000000, price_change_percentage_24h: -1.5 }
-    ];
+    console.warn('⚠️ CoinGecko failed:', e.message);
+    return null;
   }
 }
 
