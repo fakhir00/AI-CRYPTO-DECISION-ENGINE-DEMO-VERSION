@@ -573,7 +573,7 @@ Exchanges: Binance Futures
 
 Signal Type: Regular ([LONG] or [SHORT])
 
-Leverage: Cross ([Value]X - Calculate based on confidence: 90%+ = 20X, 75%+ = 10X, below 75% = 5X)
+Leverage: Cross ([Value]X) — (Select one based on conviction: 20X if confidence > 90%, 10X if > 75%, 5X otherwise)
 
 Entry Zone:
 [Price] - [Price]

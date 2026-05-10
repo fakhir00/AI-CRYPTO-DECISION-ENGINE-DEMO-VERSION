@@ -44,12 +44,12 @@ def run_training_cycle():
     env = DummyVecEnv([lambda: CryptoTradingEnv(features_df)])
     
     # 4. Load or Initialize Model
-    model_name = "nexus_v15_predator"
+    model_name = "nexus_v16_sniper"
     model_path = f"backend/{model_name}"
     
-    # Initialize FRESH to force a complete behavioral shift to 'Predator'
-    print("Launching v15 'PREDATOR' brain...")
-    model = RecurrentPPO("MlpLstmPolicy", env, verbose=1, learning_rate=3e-4)
+    # Initialize FRESH to enforce the new 'God-Mode' rules
+    print("Launching v16 'SNIPER' brain...")
+    model = RecurrentPPO("MlpLstmPolicy", env, verbose=1, learning_rate=5e-5)
     
     # 5. Train with Checkpoints
     from stable_baselines3.common.callbacks import CheckpointCallback
