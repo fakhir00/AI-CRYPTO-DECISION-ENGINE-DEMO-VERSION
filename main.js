@@ -892,12 +892,10 @@ function renderOpportunitiesPage() {
     btn.addEventListener('click', (e) => {
       const row = e.target.closest('tr');
       const symbol = row.querySelector('.live-price').dataset.symbol;
-      const asset = assets.find(a => a.symbol === symbol);
-      const reason = asset ? asset.reason : 'Technical Analysis';
       
       navigateToPage('ai-research'); // Switch to AI Research Analyst Page
       setTimeout(() => {
-         triggerMcp(`Give me a quantitative algorithmic trade setup for ${symbol}. The current detected pattern is "${reason}". MANDATORY: Provide exactly 5 Institutional Trade Rationales and place them at the ABSOLUTE BOTTOM of your response.`);
+         triggerMcp(`Analyze ${symbol}`);
       }, 100);
     });
   });
