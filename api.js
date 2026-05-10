@@ -693,6 +693,17 @@ function extractPriceTokens(text = '') {
     .filter(Boolean);
 }
 
+function toNumber(value) {
+  const n = parseFloat(String(value ?? '').replace(/,/g, '').trim());
+  return Number.isFinite(n) ? n : null;
+}
+
+function formatPercentValue(value) {
+  if (!Number.isFinite(value)) return '0';
+  const rounded = Math.round(value * 10) / 10;
+  return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(1);
+}
+
 function extractFirstPrice(text = '') {
   const cleaned = String(text).replace(/^\s*\d+\)\s*/, '').replace(/^\s*Target\s*\d+\s*:\s*/i, '').trim();
   const prices = extractPriceTokens(cleaned);
@@ -719,7 +730,49 @@ function parseSignalDirection(text = '') {
   return 'LONG';
 }
 
-function buildCanonicalSignalText(rawSignalText = '', fallbackSymbol = 'BTC') {
+function getDynamicTrailingConfig(direction = 'LONG', entryPrice = null, stopPrice = null, candleData = null) {
+  const currentPrice = toNumber(entryPrice) ?? toNumber(candleData?.currentPrice);
+  const stop = toNumber(stopPrice);
+  const atr = toNumber(candleData?.atr);
+
+  const atrPct = (currentPrice && atr) ? (atr / currentPrice) * 100 : null;
+  const riskPct = (currentPrice && stop) ? (Math.abs(currentPrice - stop) / currentPrice) * 100 : null;
+
+  let trailPct = 4.0;
+  let breakevenPct = 2.0;
+  let startRule = 'Trail starts immediately.';
+
+  if ((atrPct !== null && atrPct >= 6) || (riskPct !== null && riskPct >= 8)) {
+    trailPct = 6.0;
+    breakevenPct = 3.0;
+    startRule = 'Trail starts after +1% profit cushion.';
+  } else if ((atrPct !== null && atrPct >= 4) || (riskPct !== null && riskPct >= 6)) {
+    trailPct = 5.0;
+    breakevenPct = 2.5;
+    startRule = 'Trail starts after +0.5% profit cushion.';
+  } else if ((atrPct !== null && atrPct <= 2) && (riskPct !== null && riskPct <= 3)) {
+    trailPct = 3.0;
+    breakevenPct = 1.5;
+    startRule = 'Trail starts immediately.';
+  }
+
+  return {
+    stopMode: String(direction).toUpperCase() === 'SHORT' ? 'Percent Above Lowest' : 'Percent Below Highest',
+    trailPct: formatPercentValue(trailPct),
+    breakevenPct: formatPercentValue(breakevenPct),
+    startRule
+  };
+}
+
+function buildTrailingConfigurationBlock(config) {
+  return `Trailing Configuration:
+Stop: ${config.stopMode} (${config.trailPct}%)
+  - ${config.startRule}
+Breakeven: Trigger at +${config.breakevenPct}% profit
+  - Stop moves to entry after +${config.breakevenPct}%.`;
+}
+
+function buildCanonicalSignalText(rawSignalText = '', fallbackSymbol = 'BTC', options = {}) {
   const cleaned = stripForbiddenSignalAnnotations(rawSignalText);
   if (!cleaned) return '';
 
@@ -792,10 +845,22 @@ function buildCanonicalSignalText(rawSignalText = '', fallbackSymbol = 'BTC') {
   targets = [...new Set(targets)].slice(0, 4);
   stops = [...new Set(stops)];
   const stop = stops[0] || null;
+  const entryNums = entries.map(toNumber).filter(n => n !== null);
+  const avgEntry = entryNums.length ? (entryNums.reduce((sum, n) => sum + n, 0) / entryNums.length) : null;
+  const stopNum = toNumber(stop);
+  const trailingConfig = getDynamicTrailingConfig(direction, avgEntry, stopNum, options.candleData);
+  const trailingBlock = buildTrailingConfigurationBlock(trailingConfig);
 
   // If parsing fails, still return a cleaned copy-ready signal without forbidden annotations.
   if (entries.length < 3 || targets.length < 4 || !stop) {
-    return cleaned;
+    let fallbackSignal = cleaned;
+    const trailingSectionRe = /Trailing Configuration:\s*[\s\S]*?(?=\n(?:#{1,6}\s*)?(?:[A-Z0-9]{2,10}\s+)?Trade Rationales|\s*$)/i;
+    if (trailingSectionRe.test(fallbackSignal)) {
+      fallbackSignal = fallbackSignal.replace(trailingSectionRe, `${trailingBlock}\n\n`);
+    } else {
+      fallbackSignal = `${fallbackSignal}\n\n${trailingBlock}`;
+    }
+    return fallbackSignal.trim();
   }
 
   return `#${symbol}/USDT
@@ -818,11 +883,7 @@ Take-Profit Targets:
 Stop Targets:
 1) ${stop}
 
-Trailing Configuration:
-Stop: Percent Below Highest (4%)
-  - Trail starts immediately.
-Breakeven: Trigger at +2% profit
-  - Stop moves to entry after +2%.`;
+${trailingBlock}`;
 }
 
 function extractTradeRationales(text = '', symbol = 'COIN') {
@@ -909,10 +970,10 @@ Stop Targets:
 1) [Price]
 
 Trailing Configuration:
-Stop: Percent Below Highest (4%)
-  - Trail starts immediately.
-Breakeven: Trigger at +2% profit
-  - Stop moves to entry after +2%.
+Stop: Percent Below Highest ([X]%)
+  - [Trail behavior based on conditions]
+Breakeven: Trigger at +[Y]% profit
+  - Stop moves to entry after +[Y]%.
 
 [SYMBOL] Trade Rationales
 1. [Rationale 1]
@@ -922,6 +983,7 @@ Breakeven: Trigger at +2% profit
 5. [Rationale 5]
 
 CRITICAL: NEVER add "(1:1 R:R)", "(1:2 R:R)", "(1:3 R:R)", "(1:4 R:R)" or "(1.5 ATR)" anywhere in the signal. 
+CRITICAL: Trailing Configuration must adapt to market conditions (volatility/risk) and direction (LONG/SHORT); do not keep it fixed.
 
 For all other queries, provide a single, highly optimized, data-driven response. Use markdown headers, bold text, and bullet points for readability.`
     };
@@ -1197,7 +1259,7 @@ export async function fetchDualAI(userQuery, assetContext = '') {
   }
 
   const fallbackSymbol = extractedSymbol || (candleData?.symbol ? candleData.symbol.replace('USDT', '') : 'COIN');
-  signalText = buildCanonicalSignalText(signalText, fallbackSymbol);
+  signalText = buildCanonicalSignalText(signalText, fallbackSymbol, { candleData });
   const extractedRationales = extractTradeRationales(`${preamble}\n${rationalesText}\n${result}`, fallbackSymbol);
 
   // Escape the signal text for the clipboard copy command
