@@ -37,10 +37,33 @@ let LIVE_FUNDING = [];   // Binance funding rates
 let LIVE_OI = [];        // Binance open interest
 let LIVE_DEPTH = null;   // BTC order book depth
 let LIVE_BTC_CHAIN = null; // BTC on-chain health
-const STABLE_SYMBOLS = new Set(['USDT', 'USDC', 'DAI', 'BUSD', 'FDUSD', 'TUSD', 'PYUSD', 'USDE', 'USDD', 'GUSD', 'LUSD', 'EURC', 'FRAX']);
+const STABLE_SYMBOLS = new Set([
+  'USDT', 'USDC', 'DAI', 'BUSD', 'FDUSD', 'TUSD', 'PYUSD', 'USDE', 'USDD',
+  'GUSD', 'LUSD', 'EURC', 'FRAX', 'USD1', 'USDS', 'USDP', 'USDB', 'RLUSD',
+  'SUSD', 'MUSD', 'USD0', 'USDL', 'EURS', 'XAUT'
+]);
 
-function isStablecoinSymbol(symbol = '') {
-  return STABLE_SYMBOLS.has(String(symbol || '').toUpperCase());
+function isStablecoinSymbol(symbol = '', name = '', price = null) {
+  const sym = String(symbol || '').toUpperCase().trim();
+  if (!sym) return false;
+  if (STABLE_SYMBOLS.has(sym)) return true;
+
+  // Catch variants like USD1, EUR1, GBP1 and similar fiat-pegged ticker formats.
+  if (/^(USD|EUR|GBP|JPY|AUD|CAD|CHF|SGD|HKD|KRW)\d*$/i.test(sym)) return true;
+
+  const nm = String(name || '').toUpperCase();
+  const p = Number(price);
+  if (
+    nm &&
+    /\b(STABLE|USD|DOLLAR|EURO|EUR|GBP|YEN|PEGGED)\b/.test(nm) &&
+    Number.isFinite(p) &&
+    p > 0.85 &&
+    p < 1.15
+  ) {
+    return true;
+  }
+
+  return false;
 }
 
 // ─── Data Persistence Layer (localStorage) ───────────────────────────────────
@@ -482,8 +505,8 @@ async function syncLiveApis() {
     if (!marketData) throw new Error('Failed to fetch market leaderboard');
 
     const topSymbols = marketData
-      .map(c => c.symbol.toUpperCase())
-      .filter(sym => !isStablecoinSymbol(sym));
+      .filter(c => !isStablecoinSymbol(c.symbol, c.name, c.current_price))
+      .map(c => c.symbol.toUpperCase());
     const derivativeSymbols = topSymbols.slice(0, 15); // Top 15 for heavy OI/Funding data
 
     // 2. Fetch all other data using discovered symbols
@@ -632,7 +655,7 @@ async function syncLiveApis() {
                a.reason = generateReason(a, a.score);
             }
             return a;
-          }).filter(a => !isStablecoinSymbol(a.symbol));
+          }).filter(a => !isStablecoinSymbol(a.symbol, a.name, a.price));
           console.log(`✅ Server market data loaded (source: ${serverData.source}, age: ${serverData.age}s)`);
         }
       }
@@ -662,7 +685,7 @@ async function syncLiveApis() {
            score: alpha, bias: alpha > 75 ? 'bullish' : (alpha < 50 ? 'bearish' : 'neutral'),
            reason: actualReason, vol: '$' + (coin.total_volume / 1e9).toFixed(1) + 'B'
          };
-      }).filter(a => !isStablecoinSymbol(a.symbol));
+      }).filter(a => !isStablecoinSymbol(a.symbol, a.name, a.price));
     }
 
     if (assets.length > 0) {
@@ -760,9 +783,10 @@ function updateTime() {
 
 function renderDashboard() {
   // Compute live summary values from assets
-  const topAsset = [...assets].sort((a, b) => (b.score - a.score) || a.symbol.localeCompare(b.symbol))[0];
-  const totalVol = assets.reduce((sum, a) => sum + parseFloat(a.vol.replace('$','').replace('B','')) , 0);
-  const avgChange = assets.length ? (assets.reduce((s, a) => s + a.change, 0) / assets.length) : 0;
+  const tradeableAssets = assets.filter(a => !isStablecoinSymbol(a.symbol, a.name, a.price));
+  const topAsset = [...tradeableAssets].sort((a, b) => (b.score - a.score) || a.symbol.localeCompare(b.symbol))[0];
+  const totalVol = tradeableAssets.reduce((sum, a) => sum + parseFloat(a.vol.replace('$','').replace('B','')) , 0);
+  const avgChange = tradeableAssets.length ? (tradeableAssets.reduce((s, a) => s + a.change, 0) / tradeableAssets.length) : 0;
   const sentLabel = LIVE_SENTIMENT.score > 60 ? 'Bullish' : (LIVE_SENTIMENT.score < 40 ? 'Bearish' : 'Neutral');
   const sentClass = LIVE_SENTIMENT.score > 60 ? 'text-green' : (LIVE_SENTIMENT.score < 40 ? 'text-red' : 'text-warning');
 
@@ -804,7 +828,7 @@ function renderDashboard() {
 
   // Dash Opportunities Mini — Show top 15 for comprehensive overview
   const dashOpps = document.getElementById('dash-opportunities-list');
-  const sortedForDash = [...assets].sort((a, b) => (b.score - a.score) || a.symbol.localeCompare(b.symbol));
+  const sortedForDash = [...tradeableAssets].sort((a, b) => (b.score - a.score) || a.symbol.localeCompare(b.symbol));
   dashOpps.innerHTML = sortedForDash.slice(0, 15).map(asset => `
     <div class="asset-row">
       <div class="asset-info">
@@ -1017,7 +1041,7 @@ function typeWriterEffect(element, lines, speed = 20) {
 function renderOpportunitiesPage() {
   const tbody = document.getElementById('opportunities-table-body');
   const sorted = [...assets]
-    .filter(asset => !isStablecoinSymbol(asset.symbol))
+    .filter(asset => !isStablecoinSymbol(asset.symbol, asset.name, asset.price))
     .sort((a,b) => (b.score - a.score) || a.symbol.localeCompare(b.symbol));
   
   tbody.innerHTML = sorted.map((asset, i) => {
@@ -1360,7 +1384,7 @@ function setupAiResearchChat() {
 
     // Fetch from AI with full platform context
     const assetCtx = assets
-      .filter(a => !isStablecoinSymbol(a.symbol))
+      .filter(a => !isStablecoinSymbol(a.symbol, a.name, a.price))
       .map(a => `${a.symbol}: CURRENT_PRICE=$${a.price} (${a.change >= 0 ? '+' : ''}${a.change.toFixed(2)}%) - Rationale: ${a.reason}`)
       .join(' | ');
     const apiHealthCtx = window._apiHealthPrompt ? `API HEALTH: ${window._apiHealthPrompt}` : 'API HEALTH: pending first sync';

@@ -128,8 +128,29 @@ export async function fetchMarketData() {
     const data = await res.json();
 
     // Filter out stablecoins
-    const STABLECOINS = ['USDT', 'USDC', 'DAI', 'BUSD', 'FDUSD', 'TUSD', 'PYUSD', 'USDE'];
-    const filteredData = data.filter(c => !STABLECOINS.includes(c.symbol.toUpperCase()));
+    const STABLECOINS = new Set([
+      'USDT', 'USDC', 'DAI', 'BUSD', 'FDUSD', 'TUSD', 'PYUSD', 'USDE', 'USDD',
+      'GUSD', 'LUSD', 'EURC', 'FRAX', 'USD1', 'USDS', 'USDP', 'USDB', 'RLUSD',
+      'SUSD', 'MUSD', 'USD0', 'USDL', 'EURS', 'XAUT'
+    ]);
+    const filteredData = data.filter(c => {
+      const sym = String(c.symbol || '').toUpperCase();
+      if (STABLECOINS.has(sym)) return false;
+      if (/^(USD|EUR|GBP|JPY|AUD|CAD|CHF|SGD|HKD|KRW)\d*$/i.test(sym)) return false;
+
+      const name = String(c.name || '').toUpperCase();
+      const price = Number(c.current_price);
+      if (
+        name &&
+        /\b(STABLE|USD|DOLLAR|EURO|EUR|GBP|YEN|PEGGED)\b/.test(name) &&
+        Number.isFinite(price) &&
+        price > 0.85 &&
+        price < 1.15
+      ) {
+        return false;
+      }
+      return true;
+    });
 
     console.log('✅ CoinGecko data fetched:', filteredData.length, 'coins');
     markApiOk('CoinGecko Markets', `${filteredData.length} assets`);

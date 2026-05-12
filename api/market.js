@@ -11,6 +11,32 @@ let cacheTimestamp = 0;
 const CACHE_TTL = 15 * 1000; // 15 seconds (High-Precision Snapshot)
 
 const COINGECKO_KEY = 'CG-7gTv8kk2qS7r8kj515m2rVQJ';
+const STABLECOINS = new Set([
+  'USDT', 'USDC', 'DAI', 'BUSD', 'FDUSD', 'TUSD', 'PYUSD', 'USDE', 'USDD',
+  'GUSD', 'LUSD', 'EURC', 'FRAX', 'USD1', 'USDS', 'USDP', 'USDB', 'RLUSD',
+  'SUSD', 'MUSD', 'USD0', 'USDL', 'EURS', 'XAUT'
+]);
+
+function isStablecoinLike(symbol = '', name = '', price = null) {
+  const sym = String(symbol || '').toUpperCase().trim();
+  if (!sym) return false;
+  if (STABLECOINS.has(sym)) return true;
+  if (/^(USD|EUR|GBP|JPY|AUD|CAD|CHF|SGD|HKD|KRW)\d*$/i.test(sym)) return true;
+
+  const nm = String(name || '').toUpperCase();
+  const p = Number(price);
+  if (
+    nm &&
+    /\b(STABLE|USD|DOLLAR|EURO|EUR|GBP|YEN|PEGGED)\b/.test(nm) &&
+    Number.isFinite(p) &&
+    p > 0.85 &&
+    p < 1.15
+  ) {
+    return true;
+  }
+
+  return false;
+}
 
 function computeAlphaScore(coin) {
   const change24h = coin.price_change_percentage_24h || 0;
@@ -64,9 +90,8 @@ export default async function handler(req, res) {
     }
 
     // Compute scores server-side (deterministic, same for every client)
-    const STABLECOINS = ['USDT', 'USDC', 'DAI', 'BUSD', 'FDUSD', 'TUSD', 'PYUSD', 'USDE', 'USDD', 'GUSD', 'LUSD', 'EURC', 'FRAX'];
     const assets = coins
-      .filter(coin => !STABLECOINS.includes(coin.symbol.toUpperCase()))
+      .filter(coin => !isStablecoinLike(coin.symbol, coin.name, coin.current_price))
       .map(coin => {
       const symbol = coin.symbol.toUpperCase();
       let price = coin.current_price;
