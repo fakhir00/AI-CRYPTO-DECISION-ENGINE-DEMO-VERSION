@@ -958,14 +958,55 @@ function buildDirectionalEntryLadder(direction = 'LONG', rawEntries = [], candle
 
 function buildCanonicalSignalText(rawSignalText = '', fallbackSymbol = 'BTC', options = {}) {
   const cleaned = stripForbiddenSignalAnnotations(rawSignalText);
-  if (!cleaned) return '';
+  if (!cleaned && !options.forcedPlan) return '';
 
   let symbol = String(fallbackSymbol || 'BTC').toUpperCase();
-  const pairMatch = cleaned.match(/#\s*([A-Z0-9]{2,10})\s*\/\s*USDT/i);
+  const pairMatch = cleaned ? cleaned.match(/#\s*([A-Z0-9]{2,10})\s*\/\s*USDT/i) : null;
   if (pairMatch) symbol = pairMatch[1].toUpperCase();
 
-  const direction = parseSignalDirection(cleaned);
+  const forcedPlan = options.forcedPlan || null;
+  const direction = forcedPlan?.direction || parseSignalDirection(cleaned);
   const directionLabel = direction === 'SHORT' ? 'Short' : 'Long';
+
+  if (forcedPlan && Array.isArray(forcedPlan.entries) && Array.isArray(forcedPlan.targets) && forcedPlan.targets.length >= 4) {
+    const formattedEntries = forcedPlan.entries
+      .slice(0, 3)
+      .map(v => formatSignalPrice(v, options.candleData?.currentPrice || v));
+    const formattedTargets = forcedPlan.targets
+      .slice(0, 4)
+      .map(v => formatSignalPrice(v, options.candleData?.currentPrice || v));
+    const formattedStop = formatSignalPrice(forcedPlan.stop, options.candleData?.currentPrice || forcedPlan.stop);
+
+    if (formattedEntries.length >= 3) {
+      const entryNums = forcedPlan.entries.map(toNumber).filter(n => n !== null);
+      const avgEntry = entryNums.length ? (entryNums.reduce((sum, n) => sum + n, 0) / entryNums.length) : null;
+      const stopNum = toNumber(forcedPlan.stop);
+      const trailingConfig = getDynamicTrailingConfig(direction, avgEntry, stopNum, options.candleData);
+      const trailingBlock = buildTrailingConfigurationBlock(trailingConfig);
+
+      return `#${symbol}/USDT
+
+Exchanges: Binance Futures
+
+Signal Type: Regular (${directionLabel})
+
+Leverage: Cross (20X)
+
+Entry :
+(${formattedEntries[0]}, ${formattedEntries[1]}, ${formattedEntries[2]})
+
+Take-Profit Targets:
+1) ${formattedTargets[0]}
+2) ${formattedTargets[1]}
+3) ${formattedTargets[2]}
+4) ${formattedTargets[3]}
+
+Stop Targets:
+1) ${formattedStop}
+
+${trailingBlock}`;
+    }
+  }
 
   const lines = cleaned.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
   let entries = [];
@@ -1546,6 +1587,15 @@ export async function fetchDualAI(userQuery, assetContext = '') {
     candleData = await fetchCandlePatterns(extractedSymbol, interval);
   }
 
+  const apiTradePlan = (signalMode && candleData)
+    ? buildApiDrivenTradePlan({
+      symbol: extractedSymbol || candleData.symbol?.replace('USDT', '') || 'BTC',
+      userQuery,
+      assetContext,
+      candleData
+    })
+    : null;
+
   // 2. Build enhanced context with candle patterns and market structure
   let enhancedContext = `${context}\n\n🛰 API HEALTH SNAPSHOT:\n${getApiHealthPromptSummary()}`;
   if (candleData) {
@@ -1597,18 +1647,30 @@ export async function fetchDualAI(userQuery, assetContext = '') {
     }
   }
 
+  if (apiTradePlan && Array.isArray(apiTradePlan.entries) && Array.isArray(apiTradePlan.targets)) {
+    const cp = toNumber(candleData?.currentPrice) ?? apiTradePlan.entries[0];
+    const fmtPlan = (n) => formatSignalPrice(n, cp);
+    enhancedContext += `\n\n🧮 API-DERIVED EXECUTION PLAN (HIGHEST PRIORITY):
+- Direction: ${apiTradePlan.direction}
+- Entry Ladder: (${fmtPlan(apiTradePlan.entries[0])}, ${fmtPlan(apiTradePlan.entries[1])}, ${fmtPlan(apiTradePlan.entries[2])})
+- TP1-TP4: (${fmtPlan(apiTradePlan.targets[0])}, ${fmtPlan(apiTradePlan.targets[1])}, ${fmtPlan(apiTradePlan.targets[2])}, ${fmtPlan(apiTradePlan.targets[3])})
+- Stop: ${fmtPlan(apiTradePlan.stop)}
+- Confidence: ${formatPercentValue(apiTradePlan.confidence || 0)}
+CRITICAL: Use this plan exactly in the final signal format.`;
+  }
+
   const result = await fetchAIAnalysis(enhancedContext, candleData, { useMemory: !signalMode });
 
-  if (!result) return null;
+  if (!result && !apiTradePlan) return null;
 
   // Split the response into Preamble, Signal, and Rationales
   let preamble = "";
   let signalText = "";
   let rationalesText = "";
 
-  let signalStart = result.search(/#\s*[A-Z0-9]{2,10}\s*\/\s*USDT/i);
+  let signalStart = result ? result.search(/#\s*[A-Z0-9]{2,10}\s*\/\s*USDT/i) : -1;
   if (signalStart === -1) {
-    signalStart = result.indexOf('📪 #');
+    signalStart = result ? result.indexOf('📪 #') : -1;
   }
   if (signalStart !== -1) {
     preamble = result.substring(0, signalStart).trim();
@@ -1625,8 +1687,19 @@ export async function fetchDualAI(userQuery, assetContext = '') {
   }
 
   const fallbackSymbol = extractedSymbol || (candleData?.symbol ? candleData.symbol.replace('USDT', '') : 'COIN');
-  signalText = buildCanonicalSignalText(signalText, fallbackSymbol, { candleData });
-  const extractedRationales = extractTradeRationales(`${preamble}\n${rationalesText}\n${result}`, fallbackSymbol);
+  signalText = buildCanonicalSignalText(signalText, fallbackSymbol, {
+    candleData,
+    forcedPlan: signalMode ? apiTradePlan : null
+  });
+  const extractedRationales = extractTradeRationales(`${preamble}\n${rationalesText}\n${result || ''}`, fallbackSymbol);
+  const apiRationaleFallback = (!extractedRationales && apiTradePlan?.rationaleHints?.length)
+    ? `### ${String(fallbackSymbol || 'COIN').toUpperCase()} Trade Rationales
+1. ${apiTradePlan.rationaleHints[0] || 'Price action and volatility support the selected direction.'}
+${apiTradePlan.rationaleHints[1] ? `2. ${apiTradePlan.rationaleHints[1]}` : ''}
+${apiTradePlan.rationaleHints[2] ? `3. ${apiTradePlan.rationaleHints[2]}` : ''}
+4. Entry ladder is volatility-adjusted to improve fill quality.
+5. Targets and stop are risk-calibrated using live ATR and structure.`
+    : '';
 
   // Escape the signal text for the clipboard copy command
   const escapedSignal = signalText.replace(/"/g, '&quot;').replace(/'/g, '&#39;').replace(/\n/g, '\\n');
@@ -1658,7 +1731,7 @@ export async function fetchDualAI(userQuery, assetContext = '') {
     <div style="width:100%;">
       ${patternBadge}
       ${preamble ? `<div style="color:#BAC2DE;line-height:1.6;margin-bottom:0.5rem;">${renderMarkdown(preamble)}</div>` : ''}
-      ${extractedRationales ? `<div style="color:#BAC2DE;line-height:1.6;margin-bottom:0.75rem;">${renderMarkdown(extractedRationales)}</div>` : ''}
+      ${(extractedRationales || apiRationaleFallback) ? `<div style="color:#BAC2DE;line-height:1.6;margin-bottom:0.75rem;">${renderMarkdown(extractedRationales || apiRationaleFallback)}</div>` : ''}
       ${signalText ? signalHtml : ''}
     </div>`;
 
