@@ -1,5 +1,5 @@
 import './style.css';
-import { fetchMarketData, fetchCandlePatterns, fetchGlobalMarketData, fetchWhaleActivity, fetchSentiment, fetchFearAndGreed, fetchAIAnalysis, fetchHermesAnalysis, fetchDualAI, calculateAlphaScore, fetchDefiPools, fetchNews, fetchTechnicalSignals, fetchTrendingNarratives, fetchChartData, fetchFundingRates, fetchOpenInterest, fetchOrderBookDepth, fetchBtcOnChain, addToAIMemory, clearAIMemory, getAIMemory } from './api.js';
+import { fetchMarketData, fetchCandlePatterns, fetchGlobalMarketData, fetchWhaleActivity, fetchSentiment, fetchFearAndGreed, fetchAIAnalysis, fetchHermesAnalysis, fetchDualAI, calculateAlphaScore, fetchDefiPools, fetchNews, fetchTechnicalSignals, fetchTrendingNarratives, fetchChartData, fetchFundingRates, fetchOpenInterest, fetchOrderBookDepth, fetchBtcOnChain, addToAIMemory, clearAIMemory, getAIMemory, getApiHealthSummary, getApiHealthPromptSummary } from './api.js';
 import { setupAuth, openSignIn, logout, openUserProfile, clerk } from './lib/auth.js';
 import { supabase } from './lib/supabase.js';
 
@@ -37,6 +37,11 @@ let LIVE_FUNDING = [];   // Binance funding rates
 let LIVE_OI = [];        // Binance open interest
 let LIVE_DEPTH = null;   // BTC order book depth
 let LIVE_BTC_CHAIN = null; // BTC on-chain health
+const STABLE_SYMBOLS = new Set(['USDT', 'USDC', 'DAI', 'BUSD', 'FDUSD', 'TUSD', 'PYUSD', 'USDE', 'USDD', 'GUSD', 'LUSD', 'EURC', 'FRAX']);
+
+function isStablecoinSymbol(symbol = '') {
+  return STABLE_SYMBOLS.has(String(symbol || '').toUpperCase());
+}
 
 // ─── Data Persistence Layer (localStorage) ───────────────────────────────────
 // Ensures identical data across refreshes and devices using the same browser.
@@ -476,11 +481,27 @@ async function syncLiveApis() {
     const marketData = await fetchMarketData();
     if (!marketData) throw new Error('Failed to fetch market leaderboard');
 
-    const topSymbols = marketData.map(c => c.symbol.toUpperCase());
+    const topSymbols = marketData
+      .map(c => c.symbol.toUpperCase())
+      .filter(sym => !isStablecoinSymbol(sym));
     const derivativeSymbols = topSymbols.slice(0, 15); // Top 15 for heavy OI/Funding data
 
     // 2. Fetch all other data using discovered symbols
-    const [whales, narrativesData, chartPrices, fundingData, oiData, depthData, btcChainData, sentimentData] = await Promise.all([
+    const [
+      whales,
+      narrativesData,
+      chartPrices,
+      fundingData,
+      oiData,
+      depthData,
+      btcChainData,
+      sentimentData,
+      fearGreedData,
+      globalMarketData,
+      defiPoolsData,
+      newsData,
+      technicalData
+    ] = await Promise.all([
       fetchWhaleActivity(),
       fetchTrendingNarratives(),
       fetchChartData('BTC'),
@@ -488,7 +509,12 @@ async function syncLiveApis() {
       fetchOpenInterest(derivativeSymbols),
       fetchOrderBookDepth('BTC'),
       fetchBtcOnChain(),
-      fetchSentiment()
+      fetchSentiment(),
+      fetchFearAndGreed(),
+      fetchGlobalMarketData(),
+      fetchDefiPools(),
+      fetchNews(),
+      fetchTechnicalSignals(derivativeSymbols)
     ]);
 
     // Update Global Narratives & Sentiment
@@ -511,6 +537,25 @@ async function syncLiveApis() {
         LIVE_SENTIMENT.source = 'Momentum Engine';
       }
     }
+    if (fearGreedData && Number.isFinite(fearGreedData.value)) LIVE_FNG = fearGreedData;
+
+    if (defiPoolsData && defiPoolsData.length > 0) {
+      DEFI_POOLS.length = 0;
+      defiPoolsData.forEach(pool => DEFI_POOLS.push(pool));
+    }
+
+    if (newsData && newsData.length > 0) {
+      NEWS.length = 0;
+      newsData.forEach(item => NEWS.push(item));
+    }
+
+    if (technicalData?.ema && Object.keys(technicalData.ema).length > 0) {
+      window._liveEmaData = technicalData.ema;
+    }
+
+    if (globalMarketData?.data) {
+      window._liveGlobalMarketData = globalMarketData.data;
+    }
 
     // Store derivatives data globally
     if (fundingData && fundingData.length > 0) LIVE_FUNDING = fundingData;
@@ -520,6 +565,18 @@ async function syncLiveApis() {
     window._liveFundingData = LIVE_FUNDING;
     window._liveOiData = LIVE_OI;
     window._liveDepthData = LIVE_DEPTH;
+
+    // Surface API status for debugging + AI context injection
+    const apiHealth = getApiHealthSummary();
+    window._apiHealthSummary = apiHealth;
+    window._apiHealthPrompt = getApiHealthPromptSummary();
+    if (apiHealth.degraded > 0 || apiHealth.failed > 0) {
+      const failingApis = apiHealth.services
+        .filter(s => s.status !== 'ok')
+        .map(s => `${s.name}: ${s.status} (${s.detail || 'no detail'})`)
+        .join(' | ');
+      console.warn('⚠️ API health issues detected:', failingApis);
+    }
 
     // Update Whale & Smart Money Flows
     if (whales && whales.length > 0) {
@@ -575,7 +632,7 @@ async function syncLiveApis() {
                a.reason = generateReason(a, a.score);
             }
             return a;
-          });
+          }).filter(a => !isStablecoinSymbol(a.symbol));
           console.log(`✅ Server market data loaded (source: ${serverData.source}, age: ${serverData.age}s)`);
         }
       }
@@ -605,7 +662,7 @@ async function syncLiveApis() {
            score: alpha, bias: alpha > 75 ? 'bullish' : (alpha < 50 ? 'bearish' : 'neutral'),
            reason: actualReason, vol: '$' + (coin.total_volume / 1e9).toFixed(1) + 'B'
          };
-      });
+      }).filter(a => !isStablecoinSymbol(a.symbol));
     }
 
     if (assets.length > 0) {
@@ -959,7 +1016,9 @@ function typeWriterEffect(element, lines, speed = 20) {
 
 function renderOpportunitiesPage() {
   const tbody = document.getElementById('opportunities-table-body');
-  const sorted = [...assets].sort((a,b) => (b.score - a.score) || a.symbol.localeCompare(b.symbol));
+  const sorted = [...assets]
+    .filter(asset => !isStablecoinSymbol(asset.symbol))
+    .sort((a,b) => (b.score - a.score) || a.symbol.localeCompare(b.symbol));
   
   tbody.innerHTML = sorted.map((asset, i) => {
     const sig = generateSignalForAsset(asset);
@@ -1300,8 +1359,12 @@ function setupAiResearchChat() {
     history.scrollTop = history.scrollHeight;
 
     // Fetch from AI with full platform context
-    const assetCtx = assets.map(a => `${a.symbol}: $${a.price} (${a.change >= 0 ? '+' : ''}${a.change.toFixed(2)}%) - Rationale: ${a.reason}`).join(' | ');
-    const dualRes = await fetchDualAI(val, `LATEST LIVE DATA: ${assetCtx}`);
+    const assetCtx = assets
+      .filter(a => !isStablecoinSymbol(a.symbol))
+      .map(a => `${a.symbol}: CURRENT_PRICE=$${a.price} (${a.change >= 0 ? '+' : ''}${a.change.toFixed(2)}%) - Rationale: ${a.reason}`)
+      .join(' | ');
+    const apiHealthCtx = window._apiHealthPrompt ? `API HEALTH: ${window._apiHealthPrompt}` : 'API HEALTH: pending first sync';
+    const dualRes = await fetchDualAI(val, `LATEST LIVE DATA: ${assetCtx}. ${apiHealthCtx}`);
 
     history.removeChild(loadingMsg);
 
@@ -1406,14 +1469,32 @@ function generateSignalForAsset(asset) {
   // v4.0 GEOMETRY (SCALING OUT) — Backtested: 78%+ WR & High Profitability
   // T1 (50% TP): 1.5 ATR | T2 (50% TP): 4.0 ATR | SL: 1.0 ATR
   let entry1, entry2, entry3;
+  const momentum = Number.isFinite(asset.change) ? asset.change : 0;
+  const conviction = Number.isFinite(score) ? score : 50;
   if (isBull) {
-    entry1 = p * (1 - atrPct * 0.1);
-    entry2 = p * (1 - atrPct * 0.5);
-    entry3 = p * (1 - atrPct * 1.0);
+    let startOffsetAtr = -0.15;
+    if (momentum >= 4 && conviction >= 80) startOffsetAtr = -0.08;
+    else if (momentum <= -1) startOffsetAtr = -0.30;
+    else if (conviction < 70) startOffsetAtr = -0.22;
+
+    entry1 = Math.max(0, p + (startOffsetAtr * atr));
+    entry2 = Math.max(0, entry1 - (0.45 * atr));
+    entry3 = Math.max(0, entry1 - (0.90 * atr));
+
+    if (entry2 >= entry1) entry2 = Math.max(0, entry1 * 0.995);
+    if (entry3 >= entry2) entry3 = Math.max(0, entry2 * 0.995);
   } else {
-    entry1 = p * (1 + atrPct * 0.1);
-    entry2 = p * (1 + atrPct * 0.5);
-    entry3 = p * (1 + atrPct * 1.0);
+    let startOffsetAtr = 0.15;
+    if (momentum <= -4 && conviction >= 80) startOffsetAtr = 0.08;
+    else if (momentum >= 1) startOffsetAtr = 0.30;
+    else if (conviction < 70) startOffsetAtr = 0.22;
+
+    entry1 = p + (startOffsetAtr * atr);
+    entry2 = entry1 + (0.45 * atr);
+    entry3 = entry1 + (0.90 * atr);
+
+    if (entry2 <= entry1) entry2 = entry1 * 1.005;
+    if (entry3 <= entry2) entry3 = entry2 * 1.005;
   }
   
   // Dynamic targets: Scaling out logic
@@ -1536,7 +1617,7 @@ function renderProSignals() {
             <div class="signal-row">
               <span class="signal-label">Entry Zone</span>
               <span class="signal-value signal-mono">
-                ${formatPrice(sig.entry1)} – ${formatPrice(sig.entry2)} – ${formatPrice(sig.entry3)}
+                (${formatPrice(sig.entry1)}, ${formatPrice(sig.entry2)}, ${formatPrice(sig.entry3)})
               </span>
             </div>
 

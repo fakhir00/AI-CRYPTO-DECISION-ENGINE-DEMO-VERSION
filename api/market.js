@@ -64,7 +64,7 @@ export default async function handler(req, res) {
     }
 
     // Compute scores server-side (deterministic, same for every client)
-    const STABLECOINS = ['USDT', 'USDC', 'DAI', 'BUSD', 'FDUSD', 'TUSD', 'PYUSD', 'USDE'];
+    const STABLECOINS = ['USDT', 'USDC', 'DAI', 'BUSD', 'FDUSD', 'TUSD', 'PYUSD', 'USDE', 'USDD', 'GUSD', 'LUSD', 'EURC', 'FRAX'];
     const assets = coins
       .filter(coin => !STABLECOINS.includes(coin.symbol.toUpperCase()))
       .map(coin => {
@@ -81,7 +81,7 @@ export default async function handler(req, res) {
       return {
         symbol,
         name: coin.name,
-        price: coin.current_price,
+        price,
         change,
         score: alpha,
         bias: alpha >= 65 ? 'bullish' : (alpha <= 45 ? 'bearish' : 'neutral'),

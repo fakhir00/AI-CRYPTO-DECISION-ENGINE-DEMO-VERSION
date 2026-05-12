@@ -92,7 +92,7 @@ body {
   font-size: 3rem; font-weight: 900; letter-spacing: 0.25em;
   margin: 1rem 0 0.5rem;
   background: linear-gradient(135deg, #fff 0%, #8B94A5 100%);
-  -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+  -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent;
 }
 .loading-subtitle { color: var(--primary); font-family: var(--font-mono); font-size: 0.9rem; letter-spacing: 0.15em; margin-bottom: 2.5rem; text-shadow: 0 0 15px var(--primary-glow);}
 .loading-bar-container {
@@ -831,7 +831,7 @@ body {
   font-size: 1.1rem; font-weight: 900;
   letter-spacing: 0.04em;
   background: linear-gradient(135deg, #fff 0%, #BAC2DE 100%);
-  -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+  -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent;
   overflow-wrap: anywhere;
 }
 

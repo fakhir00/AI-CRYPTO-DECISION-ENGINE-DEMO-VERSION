@@ -11,6 +11,51 @@ const KEYS = {
   openai: import.meta.env.VITE_OPENAI_API_KEY
 };
 
+const API_HEALTH = {};
+
+function setApiHealth(name, status = 'unknown', detail = '') {
+  API_HEALTH[name] = {
+    status,
+    detail,
+    checkedAt: new Date().toISOString()
+  };
+}
+
+function markApiOk(name, detail = 'Live data received') {
+  setApiHealth(name, 'ok', detail);
+}
+
+function markApiDegraded(name, detail = 'Fallback data in use') {
+  setApiHealth(name, 'degraded', detail);
+}
+
+function markApiFailed(name, detail = 'No data') {
+  setApiHealth(name, 'failed', detail);
+}
+
+export function getApiHealthSnapshot() {
+  return JSON.parse(JSON.stringify(API_HEALTH));
+}
+
+export function getApiHealthSummary() {
+  const rows = Object.entries(API_HEALTH).map(([name, info]) => ({ name, ...info }));
+  const ok = rows.filter(r => r.status === 'ok').length;
+  const degraded = rows.filter(r => r.status === 'degraded').length;
+  const failed = rows.filter(r => r.status === 'failed').length;
+  return {
+    total: rows.length,
+    ok,
+    degraded,
+    failed,
+    services: rows
+  };
+}
+
+export function getApiHealthPromptSummary() {
+  const rows = Object.entries(API_HEALTH).map(([name, info]) => `${name}: ${info.status}${info.detail ? ` (${info.detail})` : ''}`);
+  return rows.length > 0 ? rows.join(' | ') : 'No API health checks have run yet.';
+}
+
 // ─── 0. AI Conversation Memory Buffer ────────────────────────────────────────
 // Maintains a rolling history of the last 10 user+assistant message pairs.
 // This gives the AI full conversational context so users don't have to repeat coin names.
@@ -87,9 +132,11 @@ export async function fetchMarketData() {
     const filteredData = data.filter(c => !STABLECOINS.includes(c.symbol.toUpperCase()));
 
     console.log('✅ CoinGecko data fetched:', filteredData.length, 'coins');
+    markApiOk('CoinGecko Markets', `${filteredData.length} assets`);
     return filteredData;
   } catch (e) {
     console.warn('⚠️ CoinGecko failed:', e.message);
+    markApiFailed('CoinGecko Markets', e.message);
     return null;
   }
 }
@@ -131,9 +178,11 @@ export async function fetchBinancePatterns() {
       }
     });
     console.log('✅ Binance patterns calculated');
+    markApiOk('Binance Patterns', `${Object.keys(patterns).length} symbols`);
     return patterns;
   } catch (e) {
     console.warn('⚠️ Binance pattern detection failed:', e.message);
+    markApiFailed('Binance Patterns', e.message);
     return null;
   }
 }
@@ -150,9 +199,11 @@ export async function fetchGlobalMarketData() {
     if (!res.ok) throw new Error(`CMC HTTP ${res.status}`);
     const data = await res.json();
     console.log('✅ CMC global data fetched');
+    markApiOk('CMC Global Metrics');
     return data;
   } catch (e) {
     console.warn('⚠️ CoinMarketCap failed:', e.message);
+    markApiFailed('CMC Global Metrics', e.message);
     return null;
   }
 }
@@ -176,6 +227,7 @@ export async function fetchWhaleActivity() {
       const whales = data.result.filter(tx => (parseInt(tx.value) / 1e18) > 250);
       if (whales.length > 0) {
         console.log('✅ Etherscan ETH whale txs found:', whales.length);
+        markApiOk('Etherscan Whale Flow', `${whales.length} live txs`);
         return whales.map(tx => ({
           hash: tx.hash,
           value: (parseInt(tx.value) / 1e18) * 3000, // Approximate USD value
@@ -188,6 +240,7 @@ export async function fetchWhaleActivity() {
     throw new Error('No valid crypto whale data found');
   } catch (e) {
     console.warn('⚠️ Etherscan failed, deploying institutional crypto fallback:', e.message);
+    markApiDegraded('Etherscan Whale Flow', `Fallback feed: ${e.message}`);
     // Institutional Crypto-Native Fallback (BTC, ETH, SOL, INJ)
     return [
       { hash: "0x123...abc", value: 45.2, token: "BTC", from: "Unknown Whale", to: "Binance Cold Wallet" },
@@ -213,11 +266,13 @@ export async function fetchSentiment() {
         // Normalize LunarCrush Galaxy Score (usually 1-100) or Social Score
         const score = lcData.data.galaxy_score || lcData.data.alt_rank_score || 75;
         console.log('✅ LunarCrush sentiment fetched:', { score });
+        markApiOk('LunarCrush Sentiment', `Score ${score}`);
         return { bullish: 85, bearish: 15, score: score, source: 'LunarCrush AI' };
       }
     }
   } catch (e) {
     console.warn('⚠️ LunarCrush failed or requires plan upgrade:', e.message);
+    markApiDegraded('LunarCrush Sentiment', `Switching to Reddit: ${e.message}`);
   }
 
   // Attempt 2: Fallback to Reddit NLP
@@ -238,9 +293,11 @@ export async function fetchSentiment() {
     const total = bullish + bearish || 1;
     const score = Math.round((bullish / total) * 100);
     console.log('✅ Reddit sentiment:', { bullish, bearish, score });
+    markApiOk('Reddit Sentiment', `Score ${score}`);
     return { bullish, bearish, score, source: 'Reddit NLP' };
   } catch (e) {
     console.warn('⚠️ Reddit failed:', e.message);
+    markApiFailed('Reddit Sentiment', e.message);
     return { bullish: 5, bearish: 5, score: 50, source: 'Data Unavailable' };
   }
 }
@@ -258,23 +315,28 @@ export async function fetchFearAndGreed() {
     const data = await res.json();
     if (data.data && data.data.value !== undefined) {
       console.log('✅ CMC Fear & Greed Index fetched:', data.data.value);
+      markApiOk('CMC Fear & Greed', `Value ${data.data.value}`);
       return {
         value: parseInt(data.data.value),
         label: data.data.value_classification
       };
     }
+    markApiDegraded('CMC Fear & Greed', 'Missing value in CMC payload');
     return { value: 50, label: 'Neutral' };
   } catch (e) {
     console.warn('⚠️ CMC Fear & Greed failed, falling back to alternative.me:', e.message);
+    markApiDegraded('CMC Fear & Greed', `Fallback to alternative.me: ${e.message}`);
     // Fallback to alternative.me if CMC key doesn't have access or fails
     try {
       const fallback = await fetch('https://api.alternative.me/fng/');
       const fData = await fallback.json();
+      markApiOk('Alternative.me Fear & Greed', `Value ${fData.data?.[0]?.value ?? 'N/A'}`);
       return {
         value: parseInt(fData.data[0].value),
         label: fData.data[0].value_classification
       };
     } catch (err) {
+      markApiFailed('Alternative.me Fear & Greed', err.message);
       return { value: 50, label: 'Neutral' };
     }
   }
@@ -290,9 +352,11 @@ export async function fetchDefiPools() {
       .filter(p => p.tvlUsd > 10000000) // minimum 10M TVL to filter junk
       .sort((a, b) => b.tvlUsd - a.tvlUsd)
       .slice(0, 10);
+    markApiOk('DefiLlama Pools', `${topPools.length} pools`);
     return topPools;
   } catch (e) {
     console.warn('⚠️ DefiLlama failed:', e.message);
+    markApiFailed('DefiLlama Pools', e.message);
     return null;
   }
 }
@@ -308,9 +372,11 @@ export async function fetchNews() {
     if (!data.items || data.items.length === 0) throw new Error('No items in RSS');
 
     console.log(`✅ Fetched ${data.items.length} live news items`);
+    markApiOk('RSS2JSON News', `${data.items.length} items`);
     return data.items.slice(0, 15);
   } catch (e) {
     console.warn('⚠️ Live News fetch failed, using realistic fallback:', e.message);
+    markApiDegraded('RSS2JSON News', `Fallback headlines: ${e.message}`);
     // Fallback to prevent blank UI on proxy failure
     return [
       { title: "Institutional Inflows Increase Across Top Layer-1 Protocols", pubDate: new Date().toISOString() },
@@ -342,9 +408,11 @@ export async function fetchTrendingNarratives() {
     }));
 
     console.log('✅ Trending Narratives fetched');
+    markApiOk('CoinGecko Trending', `${narratives.length} narratives`);
     return { narratives, trendingCoins };
   } catch (e) {
     console.warn('⚠️ Trending Narratives failed, deploying fallback data:', e.message);
+    markApiDegraded('CoinGecko Trending', `Fallback narrative set: ${e.message}`);
     // Bulletproof Fallback to prevent blank Sentiment UI
     return {
       narratives: [
@@ -362,7 +430,10 @@ export async function fetchTrendingNarratives() {
 
 // ─── 4C. Binance & TAAPI: Technical Signals ──────────────────────────────────
 export async function fetchTechnicalSignals(symbols = []) {
-  if (symbols.length === 0) return null;
+  if (symbols.length === 0) {
+    markApiDegraded('Technical Signals', 'No symbols provided');
+    return null;
+  }
   try {
     // 1. Fetch 24h ticker data from Binance for volume/price action
     const binancePromises = symbols.map(sym =>
@@ -417,22 +488,31 @@ export async function fetchTechnicalSignals(symbols = []) {
         const taapiJson = await taapiRes.json();
         btcRsi = taapiJson.value;
         console.log('✅ TAAPI RSI fetched:', btcRsi);
+        markApiOk('TAAPI RSI', `BTC RSI ${btcRsi}`);
+      } else {
+        markApiDegraded('TAAPI RSI', `HTTP ${taapiRes.status}`);
       }
     } catch (err) {
       console.warn('⚠️ TAAPI rate limit or error:', err.message);
+      markApiDegraded('TAAPI RSI', err.message);
     }
 
     console.log('✅ Multi-indicator technical data fetched for', symbols.length, 'assets');
+    markApiOk('Technical Signals', `${Object.keys(emaData).length}/${symbols.length} EMA sets`);
     return { binance: binanceData, rsi: btcRsi, ema: emaData };
   } catch (e) {
     console.warn('⚠️ Binance/TAAPI failed:', e.message);
+    markApiFailed('Technical Signals', e.message);
     return null;
   }
 }
 
 // ─── 4C-2. Binance Futures: Funding Rates (FREE, NO KEY) ─────────────────────
 export async function fetchFundingRates(symbols = []) {
-  if (symbols.length === 0) return [];
+  if (symbols.length === 0) {
+    markApiDegraded('Binance Funding Rates', 'No symbols provided');
+    return [];
+  }
   try {
     const promises = symbols.map(sym =>
       fetch(`https://fapi.binance.com/fapi/v1/fundingRate?symbol=${sym}USDT&limit=1`)
@@ -442,16 +522,21 @@ export async function fetchFundingRates(symbols = []) {
     );
     const results = await Promise.all(promises);
     console.log('✅ Binance Funding Rates fetched for', results.length, 'assets');
+    markApiOk('Binance Funding Rates', `${results.length} symbols`);
     return results;
   } catch (e) {
     console.warn('⚠️ Funding Rates failed:', e.message);
+    markApiFailed('Binance Funding Rates', e.message);
     return [];
   }
 }
 
 // ─── 4C-3. Binance Futures: Open Interest (FREE, NO KEY) ─────────────────────
 export async function fetchOpenInterest(symbols = []) {
-  if (symbols.length === 0) return [];
+  if (symbols.length === 0) {
+    markApiDegraded('Binance Open Interest', 'No symbols provided');
+    return [];
+  }
   try {
     const promises = symbols.map(sym =>
       fetch(`https://fapi.binance.com/fapi/v1/openInterest?symbol=${sym}USDT`)
@@ -461,9 +546,11 @@ export async function fetchOpenInterest(symbols = []) {
     );
     const results = await Promise.all(promises);
     console.log('✅ Binance Open Interest fetched for', results.length, 'assets');
+    markApiOk('Binance Open Interest', `${results.length} symbols`);
     return results;
   } catch (e) {
     console.warn('⚠️ Open Interest failed:', e.message);
+    markApiFailed('Binance Open Interest', e.message);
     return [];
   }
 }
@@ -485,6 +572,7 @@ export async function fetchOrderBookDepth(symbol = 'BTC') {
     const buyPressure = bidTotal / (bidTotal + askTotal) * 100;
 
     console.log(`✅ Order book depth fetched for ${symbol}: Buy pressure ${buyPressure.toFixed(1)}%`);
+    markApiOk('Binance Order Book', `${symbol} buy pressure ${buyPressure.toFixed(1)}%`);
     return {
       symbol,
       bidTotal,
@@ -495,6 +583,7 @@ export async function fetchOrderBookDepth(symbol = 'BTC') {
     };
   } catch (e) {
     console.warn('⚠️ Order Book failed:', e.message);
+    markApiFailed('Binance Order Book', e.message);
     return null;
   }
 }
@@ -509,6 +598,7 @@ export async function fetchBtcOnChain() {
     ]);
 
     console.log('✅ BTC on-chain stats fetched');
+    markApiOk('Blockchain.info BTC', `Hashrate ${hashRate}`);
     return {
       hashRate: (parseFloat(hashRate) / 1e9).toFixed(2), // GH/s → EH/s
       unconfirmedTx: parseInt(unconfirmed),
@@ -516,6 +606,7 @@ export async function fetchBtcOnChain() {
     };
   } catch (e) {
     console.warn('⚠️ Blockchain.com failed:', e.message);
+    markApiFailed('Blockchain.info BTC', e.message);
     return null;
   }
 }
@@ -539,9 +630,11 @@ export async function fetchNarratives() {
     console.log('✅ Narratives fetched');
     // Filter out categories with null market cap and sort
     const validData = data.filter(c => c.market_cap !== null && c.volume_24h !== null);
+    markApiOk('CoinGecko Categories', `${validData.length} categories`);
     return validData.slice(0, 10);
   } catch (e) {
     console.warn('⚠️ Narratives fetch failed:', e.message);
+    markApiFailed('CoinGecko Categories', e.message);
     return null;
   }
 }
@@ -555,9 +648,11 @@ export async function fetchChartData(symbol = 'BTC', interval = '1h', limit = 48
     // Binance returns [OpenTime, Open, High, Low, Close, Volume, ...]
     const closePrices = data.map(candle => parseFloat(candle[4]));
     console.log(`✅ ${interval} Chart data fetched for ${symbol}`);
+    markApiOk('Binance Klines', `${symbol} ${interval} (${closePrices.length})`);
     return closePrices;
   } catch (e) {
     console.warn(`⚠️ Chart data fetch failed for ${symbol}:`, e.message);
+    markApiFailed('Binance Klines', `${symbol} ${interval}: ${e.message}`);
     return null;
   }
 }
@@ -571,9 +666,11 @@ export async function fetchCandlePatterns(symbol, interval = '4h') {
     if (!res.ok) throw new Error(`Candle API HTTP ${res.status}`);
     const data = await res.json();
     console.log(`✅ Candle patterns fetched for ${cleanTicker} (${interval}):`, data.patterns?.length, 'patterns');
+    markApiOk('NEXUS Candle API', `${cleanTicker} ${interval} (${data.patterns?.length ?? 0} patterns)`);
     return data;
   } catch (e) {
     console.warn('⚠️ Candle pattern fetch failed:', e.message);
+    markApiFailed('NEXUS Candle API', e.message);
     return null;
   }
 }
@@ -772,6 +869,72 @@ Breakeven: Trigger at +${config.breakevenPct}% profit
   - Stop moves to entry after +${config.breakevenPct}%.`;
 }
 
+function formatSignalPrice(value, reference = 1) {
+  const n = toNumber(value);
+  if (n === null) return '0';
+  const ref = Math.abs(toNumber(reference) ?? Math.abs(n));
+
+  let decimals = 2;
+  if (ref < 1) decimals = 5;
+  else if (ref < 10) decimals = 4;
+  else if (ref < 1000) decimals = 2;
+  else decimals = 1;
+
+  return n.toFixed(decimals).replace(/\.0+$/, '').replace(/(\.\d*?)0+$/, '$1');
+}
+
+function deriveAdaptiveStartFromCandle(direction = 'LONG', currentPrice = null, atr = null, candleData = null) {
+  const current = toNumber(currentPrice);
+  if (current === null) return null;
+
+  const side = String(direction).toUpperCase() === 'SHORT' ? 'SHORT' : 'LONG';
+  const atrNum = toNumber(atr);
+  const swingHigh = toNumber(candleData?.swingHigh);
+  const swingLow = toNumber(candleData?.swingLow);
+  const range = (swingHigh !== null && swingLow !== null) ? Math.max(0, swingHigh - swingLow) : 0;
+  const position = range > 0 ? (current - swingLow) / range : 0.5;
+
+  let offsetAtr = side === 'SHORT' ? 0.15 : -0.15;
+  if (side === 'LONG') {
+    if (position > 0.7) offsetAtr = -0.28;
+    else if (position < 0.35) offsetAtr = -0.08;
+  } else {
+    if (position < 0.3) offsetAtr = 0.28;
+    else if (position > 0.65) offsetAtr = 0.08;
+  }
+
+  if (!(atrNum > 0)) return current;
+  return current + (offsetAtr * atrNum);
+}
+
+function buildDirectionalEntryLadder(direction = 'LONG', rawEntries = [], candleData = null) {
+  const side = String(direction).toUpperCase() === 'SHORT' ? 'SHORT' : 'LONG';
+  const current = toNumber(candleData?.currentPrice);
+  const atr = toNumber(candleData?.atr);
+  const parsed = (rawEntries || []).map(toNumber).filter(n => n !== null);
+  const unique = [...new Set(parsed)];
+  const baseFromEntries = unique.length > 0 ? unique[0] : null;
+  const adaptiveBase = deriveAdaptiveStartFromCandle(side, current, atr, candleData);
+  const base = baseFromEntries ?? adaptiveBase ?? current ?? null;
+
+  if (base === null) return [];
+
+  const step1 = atr && atr > 0 ? atr * 0.5 : Math.max(base * 0.01, 0.0000001);
+  const step2 = atr && atr > 0 ? atr * 1.0 : Math.max(base * 0.02, 0.0000002);
+
+  if (side === 'SHORT') {
+    const higher = unique.filter(v => v > base).sort((a, b) => a - b);
+    const entry2 = higher[0] ?? (base + step1);
+    const entry3 = higher[1] ?? Math.max(entry2 + Math.abs(step1), base + step2);
+    return [base, entry2, entry3];
+  }
+
+  const lower = unique.filter(v => v < base).sort((a, b) => b - a);
+  const entry2 = lower[0] ?? (base - step1);
+  const entry3 = lower[1] ?? Math.min(entry2 - Math.abs(step1), base - step2);
+  return [base, entry2, entry3];
+}
+
 function buildCanonicalSignalText(rawSignalText = '', fallbackSymbol = 'BTC', options = {}) {
   const cleaned = stripForbiddenSignalAnnotations(rawSignalText);
   if (!cleaned) return '';
@@ -845,14 +1008,15 @@ function buildCanonicalSignalText(rawSignalText = '', fallbackSymbol = 'BTC', op
   targets = [...new Set(targets)].slice(0, 4);
   stops = [...new Set(stops)];
   const stop = stops[0] || null;
-  const entryNums = entries.map(toNumber).filter(n => n !== null);
-  const avgEntry = entryNums.length ? (entryNums.reduce((sum, n) => sum + n, 0) / entryNums.length) : null;
+  const entryLadderNums = buildDirectionalEntryLadder(direction, entries, options.candleData);
+  const entryLadder = entryLadderNums.map(v => formatSignalPrice(v, options.candleData?.currentPrice || v));
+  const avgEntry = entryLadderNums.length ? (entryLadderNums.reduce((sum, n) => sum + n, 0) / entryLadderNums.length) : null;
   const stopNum = toNumber(stop);
   const trailingConfig = getDynamicTrailingConfig(direction, avgEntry, stopNum, options.candleData);
   const trailingBlock = buildTrailingConfigurationBlock(trailingConfig);
 
   // If parsing fails, still return a cleaned copy-ready signal without forbidden annotations.
-  if (entries.length < 3 || targets.length < 4 || !stop) {
+  if (entryLadder.length < 3 || targets.length < 4 || !stop) {
     let fallbackSignal = cleaned;
     const trailingSectionRe = /Trailing Configuration:\s*[\s\S]*?(?=\n(?:#{1,6}\s*)?(?:[A-Z0-9]{2,10}\s+)?Trade Rationales|\s*$)/i;
     if (trailingSectionRe.test(fallbackSignal)) {
@@ -872,7 +1036,7 @@ Signal Type: Regular (${directionLabel})
 Leverage: Cross (20X)
 
 Entry :
-${entries[0]} - ${entries[1]} - ${entries[2]}
+(${entryLadder[0]}, ${entryLadder[1]}, ${entryLadder[2]})
 
 Take-Profit Targets:
 1) ${targets[0]}
@@ -958,7 +1122,7 @@ Signal Type: Regular ([Long/Short])
 Leverage: Cross (20X)
 
 Entry :
-[Price 1] - [Price 2] - [Price 3]
+([Price 1], [Price 2], [Price 3])
 
 Take-Profit Targets:
 1) [Price]
@@ -984,6 +1148,10 @@ Breakeven: Trigger at +[Y]% profit
 
 CRITICAL: NEVER add "(1:1 R:R)", "(1:2 R:R)", "(1:3 R:R)", "(1:4 R:R)" or "(1.5 ATR)" anywhere in the signal. 
 CRITICAL: Trailing Configuration must adapt to market conditions (volatility/risk) and direction (LONG/SHORT); do not keep it fixed.
+CRITICAL ENTRY ORDER RULE:
+- LONG entries must be: ([Start Price], [Lower Entry], [Lower Entry]).
+- SHORT entries must be: ([Start Price], [Higher Entry], [Higher Entry]).
+- Start Price should be chosen intelligently from market structure and volatility (do NOT hard-lock it to current price).
 
 For all other queries, provide a single, highly optimized, data-driven response. Use markdown headers, bold text, and bullet points for readability.`
     };
@@ -1032,11 +1200,14 @@ For all other queries, provide a single, highly optimized, data-driven response.
       // Store the AI response in memory
       if (useMemory) AI_MEMORY.add('assistant', reply);
       console.log('✅ OpenAI response received (memory depth:', useMemory ? AI_MEMORY.history.length : 0, 'messages)');
+      markApiOk('OpenAI Chat Completions', 'Signal agent response received');
       return reply;
     }
+    markApiFailed('OpenAI Chat Completions', 'No content returned');
     return `[OpenAI Error: No valid content returned]`;
   } catch (e) {
     console.error('❌ OpenAI failed:', e.message);
+    markApiFailed('OpenAI Chat Completions', e.message);
     return `[OpenAI API Error: ${e.message}]`;
   }
 }
@@ -1132,7 +1303,7 @@ Your specialization:
 CRITICAL: You must ALWAYS provide 5 "Quantitative Rationales" explaining the data-driven basis for the trade. Ensure Risk:Reward ratio is emphasized.
 
 When the user asks for a signal or trade setup, output in this exact HTML format:
-📪 #[COIN]/USDT<br><br>Direction: <strong style="color:var(--green)">[LONG]</strong> or <strong style="color:var(--red)">[SHORT]</strong><br>Leverage: Cross (2X-5X)<br><br>Entry: [Price] - [Price] - [Price]<br><br>Target 1: [Price]<br>Target 2: [Price]<br>Target 3: [Price]<br>Target 4: [Price]<br><br>Stop loss: [Price]<br><br>Risk:Reward Ratio: 1:[Value]<br><br>⚡ NEXUS Pro Autotrade Signals<br><br><strong>5 Quantitative Rationales:</strong><br>1. [Rationale 1]<br>2. [Rationale 2]<br>3. [Rationale 3]<br>4. [Rationale 4]<br>5. [Rationale 5]
+📪 #[COIN]/USDT<br><br>Direction: <strong style="color:var(--green)">[LONG]</strong> or <strong style="color:var(--red)">[SHORT]</strong><br>Leverage: Cross (2X-5X)<br><br>Entry: ([Price], [Price], [Price])<br><br>Target 1: [Price]<br>Target 2: [Price]<br>Target 3: [Price]<br>Target 4: [Price]<br><br>Stop loss: [Price]<br><br>Risk:Reward Ratio: 1:[Value]<br><br>⚡ NEXUS Pro Autotrade Signals<br><br><strong>5 Quantitative Rationales:</strong><br>1. [Rationale 1]<br>2. [Rationale 2]<br>3. [Rationale 3]<br>4. [Rationale 4]<br>5. [Rationale 5]
 
 For analysis queries, provide structured output with: Price targets, Probability scores, Key risk factors, and a clear BUY/SELL/HOLD recommendation. Use markdown formatting.`
           },
@@ -1152,11 +1323,14 @@ For analysis queries, provide structured output with: Price targets, Probability
     const data = await res.json();
     if (data.choices?.[0]?.message?.content) {
       console.log('✅ Hermes AI prediction received');
+      markApiOk('Hermes Quant Engine', 'Hermes response received');
       return data.choices[0].message.content;
     }
+    markApiFailed('Hermes Quant Engine', 'No content returned');
     return null;
   } catch (e) {
     console.error('❌ Hermes AI failed:', e.message);
+    markApiFailed('Hermes Quant Engine', e.message);
     return null;
   }
 }
@@ -1188,11 +1362,18 @@ export async function fetchDualAI(userQuery, assetContext = '') {
   }
 
   // 2. Build enhanced context with candle patterns and market structure
-  let enhancedContext = context;
+  let enhancedContext = `${context}\n\n🛰 API HEALTH SNAPSHOT:\n${getApiHealthPromptSummary()}`;
   if (candleData) {
     if (candleData.atr) {
       const p = candleData.currentPrice;
       const atr = candleData.atr;
+
+      const longStart = deriveAdaptiveStartFromCandle('LONG', p, atr, candleData) ?? p;
+      const shortStart = deriveAdaptiveStartFromCandle('SHORT', p, atr, candleData) ?? p;
+      const longEntry2 = longStart - (0.45 * atr);
+      const longEntry3 = longStart - (0.90 * atr);
+      const shortEntry2 = shortStart + (0.45 * atr);
+      const shortEntry3 = shortStart + (0.90 * atr);
 
       const longSl = p - (1.5 * atr);
       const shortSl = p + (1.5 * atr);
@@ -1210,7 +1391,7 @@ export async function fetchDualAI(userQuery, assetContext = '') {
 - Support (Swing Low): $${candleData.swingLow}
 
 🚨 [CRITICAL: IF SIGNAL IS LONG, YOU MUST USE THESE EXACT VALUES IN THE OUTPUT]
-- Entry: $${fmt(p)}
+- Entry Ladder (MUST be Start, Lower, Lower): ($${fmt(longStart)}, $${fmt(longEntry2)}, $${fmt(longEntry3)})
 - Stop Loss: $${fmt(longSl)}
 - TP1 (1:1): $${fmt(p + riskLong * 1)}
 - TP2 (1:2): $${fmt(p + riskLong * 2)}
@@ -1218,7 +1399,7 @@ export async function fetchDualAI(userQuery, assetContext = '') {
 - TP4 (1:4): $${fmt(p + riskLong * 4)}
 
 🚨 [CRITICAL: IF SIGNAL IS SHORT, YOU MUST USE THESE EXACT VALUES IN THE OUTPUT]
-- Entry: $${fmt(p)}
+- Entry Ladder (MUST be Start, Higher, Higher): ($${fmt(shortStart)}, $${fmt(shortEntry2)}, $${fmt(shortEntry3)})
 - Stop Loss: $${fmt(shortSl)}
 - TP1 (1:1): $${fmt(p - riskShort * 1)}
 - TP2 (1:2): $${fmt(p - riskShort * 2)}
