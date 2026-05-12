@@ -39,21 +39,29 @@ function isStablecoinLike(symbol = '', name = '', price = null) {
 }
 
 function computeAlphaScore(coin) {
-  const change24h = coin.price_change_percentage_24h || 0;
+  const change24h = Number(coin.price_change_percentage_24h) || 0;
   const volRatio = coin.market_cap > 0 ? (coin.total_volume / coin.market_cap) : 0;
-  const mcapRank = coin.market_cap_rank || 50;
-  
-  // Primary Trend Direction (50% Weight)
-  const momentumRaw = Math.min(50, Math.max(0, 25 + (change24h * 4.0))); 
-  
-  // Volume & Tier (Supporting Context)
-  const volConviction = Math.min(20, volRatio * 200);
-  const mcapTier = Math.min(15, Math.max(5, 15 - (mcapRank * 0.2)));
+  const mcapRank = Number(coin.market_cap_rank) || 50;
   const absChange = Math.abs(change24h);
-  const stability = absChange < 1 ? 15 : (absChange < 5 ? 10 : 5);
-  
-  const score = Math.round(Math.min(100, Math.max(0, momentumRaw + volConviction + mcapTier + stability)));
-  return score;
+
+  // Direction-neutral conversion score:
+  // strong bearish and bullish trends can both rank highly.
+  const moveQuality = absChange < 0.5
+    ? 8 + (absChange * 6)
+    : absChange < 2
+      ? 11 + ((absChange - 0.5) * 8)
+      : absChange < 8
+        ? 23 + ((absChange - 2) * 3.2)
+        : absChange < 15
+          ? 42 - ((absChange - 8) * 1.7)
+          : 30 - Math.min(14, (absChange - 15) * 1.5);
+
+  const volumeConviction = Math.min(24, Math.max(0, volRatio * 240));
+  const mcapTier = Math.min(16, Math.max(5, 16 - (mcapRank * 0.2)));
+  const stability = absChange < 1 ? 6 : absChange < 4 ? 12 : absChange < 10 ? 16 : absChange < 18 ? 11 : 7;
+  const overextensionPenalty = absChange > 18 ? Math.min(10, (absChange - 18) * 0.9) : 0;
+
+  return Math.round(Math.min(100, Math.max(0, moveQuality + volumeConviction + mcapTier + stability - overextensionPenalty)));
 }
 
 export default async function handler(req, res) {
@@ -109,7 +117,7 @@ export default async function handler(req, res) {
         price,
         change,
         score: alpha,
-        bias: alpha >= 65 ? 'bullish' : (alpha <= 45 ? 'bearish' : 'neutral'),
+        bias: change >= 1 ? 'bullish' : (change <= -1 ? 'bearish' : 'neutral'),
         confidence: Math.min(99, alpha),
         vol: '$' + (coin.total_volume / 1e9).toFixed(1) + 'B',
         market_cap_rank: coin.market_cap_rank,

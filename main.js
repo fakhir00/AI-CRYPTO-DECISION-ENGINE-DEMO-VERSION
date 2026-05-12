@@ -187,11 +187,14 @@ function generateReason(coin, score) {
   
   if (score > 85) {
     if (change > 5) return "Bull Flag Breakout";
+    if (change < -5) return "Bear Flag Breakdown";
+    if (change < -2) return "High-Volume Distribution";
     if (volRatio > 0.15) return "SMC Structure Flip";
     return "Trending Pullback";
   }
   if (score > 75) {
     if (change > 2) return "Cup & Handle Pattern";
+    if (change < -2) return "Descending Channel Breakdown";
     if (volRatio > 0.1) return "Volatility Squeeze";
     return "Momentum Reversal";
   }
@@ -201,6 +204,28 @@ function generateReason(coin, score) {
   }
   if (Math.abs(change) < 1) return "Absorption & Exhaustion";
   return "Ascending Triangle";
+}
+
+function computeDirectionalNeutralAlpha(change24h = 0, volRatio = 0, mcapRank = 50) {
+  const absChange = Math.abs(Number(change24h) || 0);
+
+  const moveQuality = absChange < 0.5
+    ? 8 + (absChange * 6)
+    : absChange < 2
+      ? 11 + ((absChange - 0.5) * 8)
+      : absChange < 8
+        ? 23 + ((absChange - 2) * 3.2)
+        : absChange < 15
+          ? 42 - ((absChange - 8) * 1.7)
+          : 30 - Math.min(14, (absChange - 15) * 1.5);
+
+  const volumeConviction = Math.min(24, Math.max(0, (Number(volRatio) || 0) * 240));
+  const mcapTier = Math.min(16, Math.max(5, 16 - ((Number(mcapRank) || 50) * 0.2)));
+  const stability = absChange < 1 ? 6 : absChange < 4 ? 12 : absChange < 10 ? 16 : absChange < 18 ? 11 : 7;
+  const overextensionPenalty = absChange > 18 ? Math.min(10, (absChange - 18) * 0.9) : 0;
+
+  const raw = moveQuality + volumeConviction + mcapTier + stability - overextensionPenalty;
+  return Math.round(Math.min(100, Math.max(0, raw)));
 }
 
 function classifyDirectionalBias(asset = {}, emaInfo = null) {
@@ -719,17 +744,13 @@ async function syncLiveApis() {
          const change24h = coin.price_change_percentage_24h || 0;
          const volRatio = coin.market_cap > 0 ? (coin.total_volume / coin.market_cap) : 0;
          const mcapRank = coin.market_cap_rank || 50;
-         const momentumRaw = Math.min(35, Math.max(0, 17.5 + (change24h * 2.5)));
-         const volConviction = Math.min(25, volRatio * 250);
-         const mcapTier = Math.min(20, Math.max(5, 20 - (mcapRank * 0.3)));
-         const absChange = Math.abs(change24h);
-         const stability = absChange < 1 ? 10 : (absChange < 5 ? 18 : (absChange < 10 ? 15 : 8));
-         const alpha = Math.round(Math.min(100, Math.max(0, momentumRaw + volConviction + mcapTier + stability)));
+         const alpha = computeDirectionalNeutralAlpha(change24h, volRatio, mcapRank);
          const actualReason = (binancePatterns && binancePatterns[symbol]) ? binancePatterns[symbol] : generateReason(coin, alpha);
          
          return {
            symbol, name: coin.name, price: coin.current_price, change: change24h,
-           score: alpha, bias: alpha > 75 ? 'bullish' : (alpha < 50 ? 'bearish' : 'neutral'),
+           score: alpha,
+           bias: change24h >= 1 ? 'bullish' : (change24h <= -1 ? 'bearish' : 'neutral'),
            reason: actualReason, vol: '$' + (coin.total_volume / 1e9).toFixed(1) + 'B'
          };
       }).filter(a => !isStablecoinSymbol(a.symbol, a.name, a.price));
