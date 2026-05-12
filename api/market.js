@@ -29,6 +29,9 @@ function isStablecoinLike(symbol = '', name = '', price = null) {
 
   const nm = String(name || '').toUpperCase();
   const p = Number(price);
+  if (Number.isFinite(p) && p > 0.85 && p < 1.15 && /(USD|EUR|GBP|JPY|AUD|CAD|CHF|SGD|HKD|KRW)/.test(sym)) {
+    return true;
+  }
   if (
     nm &&
     /\b(STABLE|USD|DOLLAR|EURO|EUR|GBP|YEN|PEGGED)\b/.test(nm) &&

@@ -37,6 +37,7 @@ let LIVE_FUNDING = [];   // Binance funding rates
 let LIVE_OI = [];        // Binance open interest
 let LIVE_DEPTH = null;   // BTC order book depth
 let LIVE_BTC_CHAIN = null; // BTC on-chain health
+let OPPORTUNITY_SORT = 'alpha';
 const STABLE_SYMBOLS = new Set([
   'USDT', 'USDC', 'DAI', 'BUSD', 'FDUSD', 'TUSD', 'PYUSD', 'USDE', 'USDD',
   'GUSD', 'LUSD', 'EURC', 'FRAX', 'USD1', 'USDS', 'USDP', 'USDB', 'RLUSD',
@@ -53,6 +54,9 @@ function isStablecoinSymbol(symbol = '', name = '', price = null) {
 
   const nm = String(name || '').toUpperCase();
   const p = Number(price);
+  if (Number.isFinite(p) && p > 0.85 && p < 1.15 && /(USD|EUR|GBP|JPY|AUD|CAD|CHF|SGD|HKD|KRW)/.test(sym)) {
+    return true;
+  }
   if (
     nm &&
     /\b(STABLE|USD|DOLLAR|EURO|EUR|GBP|YEN|PEGGED)\b/.test(nm) &&
@@ -206,6 +210,17 @@ function generateReason(coin, score) {
   return "Ascending Triangle";
 }
 
+function parseVolumeBillions(vol = '') {
+  const str = String(vol || '').trim().toUpperCase();
+  const n = Number.parseFloat(str.replace(/[^0-9.]/g, ''));
+  if (!Number.isFinite(n)) return 0;
+  if (str.includes('T')) return n * 1000;
+  if (str.includes('B')) return n;
+  if (str.includes('M')) return n / 1000;
+  if (str.includes('K')) return n / 1_000_000;
+  return n / 1_000_000_000;
+}
+
 function computeDirectionalNeutralAlpha(change24h = 0, volRatio = 0, mcapRank = 50) {
   const absChange = Math.abs(Number(change24h) || 0);
 
@@ -229,6 +244,17 @@ function computeDirectionalNeutralAlpha(change24h = 0, volRatio = 0, mcapRank = 
 }
 
 function classifyDirectionalBias(asset = {}, emaInfo = null) {
+  const evalResult = evaluateDirectionalBiasScores(asset, emaInfo);
+  const spread = evalResult.bull - evalResult.bear;
+  const change = Number.isFinite(asset.change) ? asset.change : 0;
+
+  if (Math.abs(change) < 0.6 && Math.abs(spread) < 0.9) return 'neutral';
+  if (spread >= 0.65) return 'bullish';
+  if (spread <= -0.65) return 'bearish';
+  return 'neutral';
+}
+
+function evaluateDirectionalBiasScores(asset = {}, emaInfo = null) {
   const change = Number.isFinite(asset.change) ? asset.change : 0;
   const score = Number.isFinite(asset.score) ? asset.score : 50;
   const reason = String(asset.reason || '');
@@ -236,16 +262,25 @@ function classifyDirectionalBias(asset = {}, emaInfo = null) {
   let bull = 0;
   let bear = 0;
 
-  if (change >= 3) bull += 2.0;
-  else if (change >= 1) bull += 1.0;
-  else if (change <= -3) bear += 2.0;
-  else if (change <= -1) bear += 1.0;
+  if (change >= 4) bull += 3.1;
+  else if (change >= 2) bull += 2.0;
+  else if (change >= 0.6) bull += 1.0;
+  else if (change <= -4) bear += 3.1;
+  else if (change <= -2) bear += 2.0;
+  else if (change <= -0.6) bear += 1.0;
 
-  if (score >= 80) bull += 0.8;
-  else if (score <= 45) bear += 0.8;
+  // High score boosts whichever side momentum already supports (non-directional).
+  if (score >= 80) {
+    if (change > 0.25) bull += 0.9;
+    if (change < -0.25) bear += 0.9;
+  }
+  if (score >= 90) {
+    if (change > 3) bull += 0.5;
+    if (change < -3) bear += 0.5;
+  }
 
-  if (/(bull|breakout|accumulation|ascending|cup|squeeze|pullback|reversal)/i.test(reason)) bull += 0.7;
-  if (/(bear|breakdown|distribution|head\s*&?\s*shoulders|contraction|shooting\s*star|top)/i.test(reason)) bear += 0.7;
+  if (/(bull|breakout|accumulation|ascending|cup|squeeze|pullback|reversal|support)/i.test(reason)) bull += 1.0;
+  if (/(bear|breakdown|distribution|head\s*&?\s*shoulders|contraction|shooting\s*star|top|rejection)/i.test(reason)) bear += 1.0;
 
   if (emaInfo) {
     const last = Number(emaInfo.lastClose);
@@ -253,25 +288,55 @@ function classifyDirectionalBias(asset = {}, emaInfo = null) {
     const ema21 = Number(emaInfo.ema21);
 
     if (Number.isFinite(last) && Number.isFinite(ema9) && Number.isFinite(ema21)) {
-      if (last > ema9 && ema9 > ema21) bull += 2.2;
-      if (last < ema9 && ema9 < ema21) bear += 2.2;
-      if (ema9 > ema21) bull += 0.6;
-      if (ema9 < ema21) bear += 0.6;
+      if (last > ema9 && ema9 > ema21) bull += 2.6;
+      if (last < ema9 && ema9 < ema21) bear += 2.6;
+      if (ema9 > ema21) bull += 0.8;
+      if (ema9 < ema21) bear += 0.8;
     }
   }
 
-  if (Math.abs(change) < 0.7 && Math.abs(bull - bear) < 1.2) return 'neutral';
-  if (bull - bear >= 0.75) return 'bullish';
-  if (bear - bull >= 0.75) return 'bearish';
-  return 'neutral';
+  if (LIVE_SENTIMENT.score >= 60) bull += 0.45;
+  if (LIVE_SENTIMENT.score <= 40) bear += 0.45;
+
+  return { bull, bear };
+}
+
+function computeOpportunityScore(asset = {}, emaInfo = null, spreadOverride = null) {
+  const score = Number.isFinite(asset.score) ? asset.score : 50;
+  const absChange = Math.abs(Number(asset.change) || 0);
+  const evalResult = evaluateDirectionalBiasScores(asset, emaInfo);
+  const spread = Number.isFinite(spreadOverride) ? Math.abs(spreadOverride) : Math.abs(evalResult.bull - evalResult.bear);
+
+  const volBillions = parseVolumeBillions(asset.vol);
+
+  const moveComponent = absChange < 0.5
+    ? 4 + (absChange * 4)
+    : absChange < 2
+      ? 6 + ((absChange - 0.5) * 5)
+      : absChange < 8
+        ? 13.5 + ((absChange - 2) * 2.4)
+        : 28 - Math.min(9, (absChange - 8) * 1.25);
+
+  const liquidityComponent = Math.min(14, Math.max(0, (Math.log10((volBillions * 10) + 1)) * 8));
+  const directionalComponent = Math.min(20, spread * 7.5);
+  const baseComponent = Math.max(0, Math.min(100, score)) * 0.62;
+
+  return Math.round(Math.min(100, Math.max(0, baseComponent + moveComponent + liquidityComponent + directionalComponent)));
 }
 
 function applyDirectionalBiasToAssets(assetList = []) {
   const emaMap = window._liveEmaData || {};
-  return assetList.map(asset => ({
-    ...asset,
-    bias: classifyDirectionalBias(asset, emaMap[asset.symbol])
-  }));
+  return assetList.map(asset => {
+    const emaInfo = emaMap[asset.symbol];
+    const bias = classifyDirectionalBias(asset, emaInfo);
+    const evalResult = evaluateDirectionalBiasScores(asset, emaInfo);
+    return {
+      ...asset,
+      bias,
+      biasConfidence: Math.abs(evalResult.bull - evalResult.bear),
+      opportunityScore: computeOpportunityScore(asset, emaInfo, evalResult.bull - evalResult.bear)
+    };
+  });
 }
 
 
@@ -856,8 +921,8 @@ function updateTime() {
 function renderDashboard() {
   // Compute live summary values from assets
   const tradeableAssets = assets.filter(a => !isStablecoinSymbol(a.symbol, a.name, a.price));
-  const topAsset = [...tradeableAssets].sort((a, b) => (b.score - a.score) || a.symbol.localeCompare(b.symbol))[0];
-  const totalVol = tradeableAssets.reduce((sum, a) => sum + parseFloat(a.vol.replace('$','').replace('B','')) , 0);
+  const topAsset = [...tradeableAssets].sort((a, b) => ((b.opportunityScore ?? b.score) - (a.opportunityScore ?? a.score)) || a.symbol.localeCompare(b.symbol))[0];
+  const totalVol = tradeableAssets.reduce((sum, a) => sum + parseVolumeBillions(a.vol), 0);
   const avgChange = tradeableAssets.length ? (tradeableAssets.reduce((s, a) => s + a.change, 0) / tradeableAssets.length) : 0;
   const sentLabel = LIVE_SENTIMENT.score > 60 ? 'Bullish' : (LIVE_SENTIMENT.score < 40 ? 'Bearish' : 'Neutral');
   const sentClass = LIVE_SENTIMENT.score > 60 ? 'text-green' : (LIVE_SENTIMENT.score < 40 ? 'text-red' : 'text-warning');
@@ -885,7 +950,7 @@ function renderDashboard() {
         <i data-feather="target" class="card-icon text-primary"></i>
       </div>
       <div class="card-value text-primary">${topAsset ? topAsset.symbol : '—'}</div>
-      <div class="card-change">Score: ${topAsset ? topAsset.score : '—'} • ${topAsset && topAsset.score > 75 ? 'High Conviction' : 'Moderate'}</div>
+      <div class="card-change">Score: ${topAsset ? (topAsset.opportunityScore ?? topAsset.score) : '—'} • ${topAsset && (topAsset.opportunityScore ?? topAsset.score) > 75 ? 'High Conviction' : 'Moderate'}</div>
     </div>
     <div class="summary-card">
       <div class="card-header">
@@ -900,14 +965,14 @@ function renderDashboard() {
 
   // Dash Opportunities Mini — Show top 15 for comprehensive overview
   const dashOpps = document.getElementById('dash-opportunities-list');
-  const sortedForDash = [...tradeableAssets].sort((a, b) => (b.score - a.score) || a.symbol.localeCompare(b.symbol));
+  const sortedForDash = [...tradeableAssets].sort((a, b) => ((b.opportunityScore ?? b.score) - (a.opportunityScore ?? a.score)) || a.symbol.localeCompare(b.symbol));
   dashOpps.innerHTML = sortedForDash.slice(0, 15).map(asset => `
     <div class="asset-row">
       <div class="asset-info">
         <div class="asset-icon">${asset.symbol[0]}</div>
         <div class="asset-name-col">
           <span class="asset-name">${asset.symbol}</span>
-          <span class="asset-symbol">Score: ${asset.score}</span>
+          <span class="asset-symbol">Score: ${asset.opportunityScore ?? asset.score}</span>
         </div>
       </div>
       <div class="asset-price">$${formatPrice(asset.price)}</div>
@@ -1112,12 +1177,16 @@ function typeWriterEffect(element, lines, speed = 20) {
 
 function renderOpportunitiesPage() {
   const tbody = document.getElementById('opportunities-table-body');
-  const sorted = [...assets]
-    .filter(asset => !isStablecoinSymbol(asset.symbol, asset.name, asset.price))
-    .sort((a,b) => (b.score - a.score) || a.symbol.localeCompare(b.symbol));
+  const nonStable = [...assets].filter(asset => !isStablecoinSymbol(asset.symbol, asset.name, asset.price));
+  const sorted = [...nonStable].sort((a, b) => {
+    if (OPPORTUNITY_SORT === 'change') return Math.abs(b.change) - Math.abs(a.change);
+    if (OPPORTUNITY_SORT === 'volume') return parseVolumeBillions(b.vol) - parseVolumeBillions(a.vol);
+    return ((b.opportunityScore ?? b.score) - (a.opportunityScore ?? a.score)) || a.symbol.localeCompare(b.symbol);
+  });
   
   tbody.innerHTML = sorted.map((asset, i) => {
     const sig = generateSignalForAsset(asset);
+    const displayScore = asset.opportunityScore ?? asset.score;
     // Calculate profit potential based on max target (t4) at 5x leverage
     let profitPot = 0;
     if (sig.type !== 'WAIT' && asset.price > 0 && sig.t4 > 0) {
@@ -1131,9 +1200,9 @@ function renderOpportunitiesPage() {
       <td class="${asset.change >= 0 ? 'text-green' : 'text-red'} live-change" data-symbol="${asset.symbol}">${asset.change > 0 ? '+' : ''}${asset.change.toFixed(2)}%</td>
       <td>
         <div class="td-score-container">
-          <span class="td-score-val">${asset.score}</span>
+          <span class="td-score-val">${displayScore}</span>
           <div class="td-score-bar-bg">
-            <div class="td-score-bar-fill" style="width: ${asset.score}%"></div>
+            <div class="td-score-bar-fill" style="width: ${displayScore}%"></div>
           </div>
         </div>
       </td>
@@ -1216,11 +1285,8 @@ function setupAllButtons() {
       const sort = e.target.dataset.sort;
       document.querySelectorAll('#page-opportunities .panel-action-btn').forEach(b => b.classList.remove('active'));
       e.target.classList.add('active');
-      
-      if (sort === 'alpha') assets.sort((a,b) => (b.score - a.score) || a.symbol.localeCompare(b.symbol));
-      else if (sort === 'change') assets.sort((a,b) => b.change - a.change);
-      else if (sort === 'volume') assets.sort((a,b) => parseFloat(b.vol) - parseFloat(a.vol));
-      
+
+      OPPORTUNITY_SORT = sort || 'alpha';
       renderOpportunitiesPage();
       showToast(`Sorted by ${sort}`);
     });
@@ -1637,8 +1703,11 @@ function renderProSignals() {
   const grid = document.getElementById('pro-signals-grid');
   if (!grid) return;
 
-  // Use top 15 assets by alpha score for the Pro Signals grid
-  const top = [...assets].sort((a, b) => (b.score - a.score) || a.symbol.localeCompare(b.symbol)).slice(0, 15);
+  // Use top 15 assets by opportunity score for the Pro Signals grid
+  const top = [...assets]
+    .filter(a => !isStablecoinSymbol(a.symbol, a.name, a.price))
+    .sort((a, b) => ((b.opportunityScore ?? b.score) - (a.opportunityScore ?? a.score)) || a.symbol.localeCompare(b.symbol))
+    .slice(0, 15);
 
   if (!top.length) {
     grid.innerHTML = `<div style="text-align:center;color:var(--text-muted);padding:3rem;">No assets loaded yet. Live data syncs on startup.</div>`;
@@ -1760,7 +1829,7 @@ function renderProSignals() {
 
         <!-- Footer -->
         <div class="signal-footer">
-          <span>Alpha: <strong class="text-primary">${asset.score}/100</strong></span>
+          <span>Alpha: <strong class="text-primary">${asset.opportunityScore ?? asset.score}/100</strong></span>
           <span>Risk:Reward <strong class="text-green">${sig.rrRatio}</strong></span>
           <span>Vol: <strong class="text-warning">${(sig.atrPct * 100).toFixed(1)}%</strong></span>
           <span class="signal-brand">⚡ NEXUS Pro</span>

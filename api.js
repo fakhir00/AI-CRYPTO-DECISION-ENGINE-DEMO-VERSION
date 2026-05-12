@@ -138,6 +138,9 @@ export async function fetchMarketData() {
 
       const nm = String(name || '').toUpperCase();
       const p = Number(price);
+      if (Number.isFinite(p) && p > 0.85 && p < 1.15 && /(USD|EUR|GBP|JPY|AUD|CAD|CHF|SGD|HKD|KRW)/.test(sym)) {
+        return true;
+      }
       if (
         nm &&
         /\b(STABLE|USD|DOLLAR|EURO|EUR|GBP|YEN|PEGGED)\b/.test(nm) &&
@@ -172,6 +175,11 @@ export async function fetchMarketData() {
 
     const binanceRes = await fetch('https://api.binance.com/api/v3/ticker/24hr');
     const binanceData = binanceRes.ok ? await binanceRes.json() : [];
+    if (binanceRes.ok) {
+      markApiOk('Binance 24H Markets', `${Array.isArray(binanceData) ? binanceData.length : 0} pairs`);
+    } else {
+      markApiDegraded('Binance 24H Markets', `HTTP ${binanceRes.status}`);
+    }
 
     const bySymbol = new Map();
 
@@ -789,7 +797,7 @@ function escapeRegExp(text = '') {
 function parseSymbolsFromAssetContext(assetContext = '') {
   const symbols = new Set();
   const upper = String(assetContext || '').toUpperCase();
-  const re = /\b([A-Z0-9]{2,10})\s*:\s*\$/g;
+  const re = /\b([A-Z0-9]{2,10})\s*:\s*(?:CURRENT_PRICE=)?\$/g;
   let match;
   while ((match = re.exec(upper)) !== null) {
     symbols.add(match[1]);
@@ -934,37 +942,139 @@ function parseSignalDirection(text = '') {
   return 'LONG';
 }
 
-function getDynamicTrailingConfig(direction = 'LONG', entryPrice = null, stopPrice = null, candleData = null) {
-  const currentPrice = toNumber(entryPrice) ?? toNumber(candleData?.currentPrice);
+function normalizeTradeConfidence(value = null) {
+  const raw = toNumber(value);
+  if (raw === null) return 0.5;
+  if (raw > 20) return Math.max(0, Math.min(1, raw / 100));
+  if (raw > 1) return Math.max(0, Math.min(1, raw / 5));
+  return Math.max(0, Math.min(1, raw));
+}
+
+function getPatternBiasScore(candleData = null) {
+  const patterns = Array.isArray(candleData?.patterns) ? candleData.patterns : [];
+  const weights = [1.0, 0.8, 0.6, 0.45, 0.35];
+  let bull = 0;
+  let bear = 0;
+
+  patterns.slice(0, 5).forEach((p, idx) => {
+    const w = weights[idx] || 0.25;
+    if (p?.type === 'bullish') bull += w;
+    if (p?.type === 'bearish') bear += w;
+  });
+
+  return bull - bear;
+}
+
+function getDynamicTrailingConfig(direction = 'LONG', entryPrice = null, stopPrice = null, candleData = null, options = {}) {
+  const currentPrice = toNumber(candleData?.currentPrice) ?? toNumber(entryPrice);
   const stop = toNumber(stopPrice);
   const atr = toNumber(candleData?.atr);
 
   const atrPct = (currentPrice && atr) ? (atr / currentPrice) * 100 : null;
   const riskPct = (currentPrice && stop) ? (Math.abs(currentPrice - stop) / currentPrice) * 100 : null;
 
-  let trailPct = 4.0;
-  let breakevenPct = 2.0;
-  let startRule = 'Trail starts immediately.';
+  const side = String(direction).toUpperCase() === 'SHORT' ? 'SHORT' : 'LONG';
+  const confidence = normalizeTradeConfidence(options.confidence);
+  const changePct = toNumber(options.changePct) ?? toNumber(candleData?.changePct) ?? 0;
+  const patternBias = toNumber(options.patternBias) ?? getPatternBiasScore(candleData);
 
-  if ((atrPct !== null && atrPct >= 6) || (riskPct !== null && riskPct >= 8)) {
-    trailPct = 6.0;
-    breakevenPct = 3.0;
-    startRule = 'Trail starts after +1% profit cushion.';
-  } else if ((atrPct !== null && atrPct >= 4) || (riskPct !== null && riskPct >= 6)) {
+  const swingHigh = toNumber(candleData?.swingHigh);
+  const swingLow = toNumber(candleData?.swingLow);
+  const range = (swingHigh !== null && swingLow !== null && swingHigh > swingLow) ? (swingHigh - swingLow) : 0;
+  const position = (range > 0 && currentPrice !== null) ? (currentPrice - swingLow) / range : 0.5;
+
+  const volHigh = (atrPct !== null && atrPct >= 5) || (riskPct !== null && riskPct >= 7);
+  const volMedium = !volHigh && (((atrPct !== null && atrPct >= 3.2) || (riskPct !== null && riskPct >= 5)));
+  const volLow = (atrPct !== null && atrPct <= 1.8) && (riskPct !== null && riskPct <= 2.8);
+
+  let trendScore = 0;
+  let counterScore = 0;
+
+  if (side === 'LONG') {
+    if (changePct >= 1) trendScore += 1;
+    if (changePct <= -1) counterScore += 1;
+    if (patternBias >= 0.6) trendScore += 1;
+    if (patternBias <= -0.6) counterScore += 1;
+    if (position <= 0.55) trendScore += 0.5;
+    if (position >= 0.72) counterScore += 0.5;
+  } else {
+    if (changePct <= -1) trendScore += 1;
+    if (changePct >= 1) counterScore += 1;
+    if (patternBias <= -0.6) trendScore += 1;
+    if (patternBias >= 0.6) counterScore += 1;
+    if (position >= 0.45) trendScore += 0.5;
+    if (position <= 0.28) counterScore += 0.5;
+  }
+
+  if (confidence >= 0.65) trendScore += 0.5;
+  if (confidence <= 0.35) counterScore += 0.5;
+
+  const mode = (trendScore - counterScore >= 0.8)
+    ? 'trend'
+    : (counterScore - trendScore >= 0.8 ? 'counter' : 'chop');
+
+  let trailPct = 4.2;
+  let breakevenPct = 2.2;
+
+  if (volHigh) {
+    trailPct = 5.8;
+    breakevenPct = 3.2;
+  } else if (volMedium) {
     trailPct = 5.0;
-    breakevenPct = 2.5;
-    startRule = 'Trail starts after +0.5% profit cushion.';
-  } else if ((atrPct !== null && atrPct <= 2) && (riskPct !== null && riskPct <= 3)) {
-    trailPct = 3.0;
-    breakevenPct = 1.5;
-    startRule = 'Trail starts immediately.';
+    breakevenPct = 2.7;
+  } else if (volLow) {
+    trailPct = 3.2;
+    breakevenPct = 1.6;
+  }
+
+  if (mode === 'trend') {
+    trailPct -= 0.8;
+    breakevenPct -= 0.4;
+  } else if (mode === 'counter') {
+    trailPct += 0.7;
+    breakevenPct += 0.6;
+  } else {
+    trailPct += 0.4;
+    breakevenPct += 0.3;
+  }
+
+  if (confidence >= 0.75) {
+    trailPct -= 0.4;
+    breakevenPct -= 0.2;
+  } else if (confidence <= 0.35) {
+    trailPct += 0.5;
+    breakevenPct += 0.4;
+  }
+
+  trailPct = Math.max(2.4, Math.min(7.5, trailPct));
+  breakevenPct = Math.max(1.0, Math.min(5.0, breakevenPct));
+
+  let startCushion = 0.4;
+  if (mode === 'trend' && confidence >= 0.7 && !volHigh) startCushion = 0;
+  else if (volHigh && mode === 'counter') startCushion = 1.2;
+  else if (volHigh) startCushion = 0.9;
+  else if (mode === 'chop') startCushion = 0.6;
+  else if (volLow) startCushion = 0.2;
+
+  const startRule = startCushion <= 0.05
+    ? 'Trail starts immediately after confirmation.'
+    : `Trail starts after +${formatPercentValue(startCushion)}% profit cushion.`;
+
+  let regimeHint = 'Balanced trailing profile.';
+  if (mode === 'trend') regimeHint = `${side} trend continuation detected; tighter trailing to lock gains earlier.`;
+  else if (mode === 'counter') regimeHint = `${side} counter-trend risk detected; wider leash to avoid shakeouts.`;
+  else if (volHigh) regimeHint = 'High volatility regime; delayed activation to reduce noise stops.';
+
+  if (volLow && mode === 'trend') {
+    regimeHint = `${side} low-volatility trend; aggressive protection is enabled.`;
   }
 
   return {
-    stopMode: String(direction).toUpperCase() === 'SHORT' ? 'Percent Above Lowest' : 'Percent Below Highest',
+    stopMode: side === 'SHORT' ? 'Percent Above Lowest' : 'Percent Below Highest',
     trailPct: formatPercentValue(trailPct),
     breakevenPct: formatPercentValue(breakevenPct),
-    startRule
+    startRule,
+    regimeHint
   };
 }
 
@@ -972,6 +1082,7 @@ function buildTrailingConfigurationBlock(config) {
   return `Trailing Configuration:
 Stop: ${config.stopMode} (${config.trailPct}%)
   - ${config.startRule}
+  - ${config.regimeHint}
 Breakeven: Trigger at +${config.breakevenPct}% profit
   - Stop moves to entry after +${config.breakevenPct}%.`;
 }
@@ -1067,7 +1178,11 @@ function buildCanonicalSignalText(rawSignalText = '', fallbackSymbol = 'BTC', op
       const entryNums = forcedPlan.entries.map(toNumber).filter(n => n !== null);
       const avgEntry = entryNums.length ? (entryNums.reduce((sum, n) => sum + n, 0) / entryNums.length) : null;
       const stopNum = toNumber(forcedPlan.stop);
-      const trailingConfig = getDynamicTrailingConfig(direction, avgEntry, stopNum, options.candleData);
+      const trailingConfig = getDynamicTrailingConfig(direction, avgEntry, stopNum, options.candleData, {
+        confidence: options.tradeMeta?.confidence ?? forcedPlan?.confidence,
+        changePct: options.tradeMeta?.changePct,
+        patternBias: options.tradeMeta?.patternBias
+      });
       const trailingBlock = buildTrailingConfigurationBlock(trailingConfig);
 
       return `#${symbol}/USDT
@@ -1192,7 +1307,11 @@ ${trailingBlock}`;
 
   const avgEntry = entryLadderNums.length ? (entryLadderNums.reduce((sum, n) => sum + n, 0) / entryLadderNums.length) : null;
   const stopNum = toNumber(stop);
-  const trailingConfig = getDynamicTrailingConfig(direction, avgEntry, stopNum, options.candleData);
+  const trailingConfig = getDynamicTrailingConfig(direction, avgEntry, stopNum, options.candleData, {
+    confidence: options.tradeMeta?.confidence ?? forcedPlan?.confidence,
+    changePct: options.tradeMeta?.changePct,
+    patternBias: options.tradeMeta?.patternBias
+  });
   const trailingBlock = buildTrailingConfigurationBlock(trailingConfig);
 
   // If parsing fails, still return a cleaned copy-ready signal without forbidden annotations.
@@ -1460,13 +1579,18 @@ function buildApiDrivenTradePlan({ symbol = 'BTC', userQuery = '', assetContext 
   const targets = direction === 'LONG'
     ? [entry1 + (risk * 1.0), entry1 + (risk * 1.8), entry1 + (risk * 2.7), entry1 + (risk * 3.5)]
     : [entry1 - (risk * 1.0), entry1 - (risk * 1.8), entry1 - (risk * 2.7), entry1 - (risk * 3.5)];
+  const planSymbol = String(symbol || '').toUpperCase();
+  const planChangePct = toNumber(snap?.changePct) ?? toNumber(candleData?.changePct);
 
   return {
+    symbol: planSymbol,
     direction,
     entries: [entry1, entry2, entry3],
     targets,
     stop,
     confidence: bias.confidence,
+    changePct: planChangePct,
+    patternBias: getPatternBiasScore(candleData),
     rationaleHints: bias.reasons
   };
 }
@@ -1753,6 +1877,14 @@ export async function fetchDualAI(userQuery, assetContext = '') {
       candleData
     })
     : null;
+  const contextSnapshots = parseAssetContextSnapshots(assetContext);
+  const planSymbol = String(apiTradePlan?.symbol || extractedSymbol || candleData?.symbol?.replace('USDT', '') || '').toUpperCase();
+  const activeSnapshot = planSymbol ? (contextSnapshots[planSymbol] || null) : null;
+  const tradeMeta = {
+    confidence: apiTradePlan?.confidence ?? null,
+    changePct: apiTradePlan?.changePct ?? toNumber(activeSnapshot?.changePct),
+    patternBias: apiTradePlan?.patternBias ?? getPatternBiasScore(candleData)
+  };
 
   // 2. Build enhanced context with candle patterns and market structure
   let enhancedContext = `${context}\n\n🛰 API HEALTH SNAPSHOT:\n${getApiHealthPromptSummary()}`;
@@ -1847,7 +1979,8 @@ CRITICAL: Use this plan exactly in the final signal format.`;
   const fallbackSymbol = extractedSymbol || (candleData?.symbol ? candleData.symbol.replace('USDT', '') : 'COIN');
   signalText = buildCanonicalSignalText(signalText, fallbackSymbol, {
     candleData,
-    forcedPlan: signalMode ? apiTradePlan : null
+    forcedPlan: signalMode ? apiTradePlan : null,
+    tradeMeta
   });
   const extractedRationales = extractTradeRationales(`${preamble}\n${rationalesText}\n${result || ''}`, fallbackSymbol);
   const apiRationaleFallback = (!extractedRationales && apiTradePlan?.rationaleHints?.length)
@@ -1884,9 +2017,30 @@ ${apiTradePlan.rationaleHints[2] ? `3. ${apiTradePlan.rationaleHints[2]}` : ''}
           </span>`).join('')}
       </div>`
     : '';
+  const apiHealth = getApiHealthSummary();
+  const badApis = (apiHealth.services || []).filter(s => s.status !== 'ok');
+  const healthColor = badApis.length > 0 ? 'rgba(255, 184, 77, 0.18)' : 'rgba(52, 199, 89, 0.14)';
+  const healthBorder = badApis.length > 0 ? 'rgba(255, 184, 77, 0.4)' : 'rgba(52, 199, 89, 0.32)';
+  const sanitizeInline = (v) => String(v ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+  const healthText = badApis.length > 0
+    ? `API status: ${badApis.map(s => {
+      const detail = s.detail ? ` (${sanitizeInline(s.detail).slice(0, 80)})` : '';
+      return `${sanitizeInline(s.name)}=${s.status}${detail}`;
+    }).join(' | ')}`
+    : (apiHealth.total > 0
+      ? `API status: ${apiHealth.ok}/${apiHealth.total} services healthy`
+      : 'API status: health checks pending first sync');
+  const healthBanner = `
+    <div style="margin-bottom:0.6rem;padding:0.45rem 0.65rem;border-radius:6px;border:1px solid ${healthBorder};background:${healthColor};color:#D8DFEE;font-size:0.76rem;line-height:1.4;">
+      ${healthText}
+    </div>`;
 
   const finalHtml = `
     <div style="width:100%;">
+      ${healthBanner}
       ${patternBadge}
       ${preamble ? `<div style="color:#BAC2DE;line-height:1.6;margin-bottom:0.5rem;">${renderMarkdown(preamble)}</div>` : ''}
       ${(extractedRationales || apiRationaleFallback) ? `<div style="color:#BAC2DE;line-height:1.6;margin-bottom:0.75rem;">${renderMarkdown(extractedRationales || apiRationaleFallback)}</div>` : ''}
@@ -1894,8 +2048,9 @@ ${apiTradePlan.rationaleHints[2] ? `3. ${apiTradePlan.rationaleHints[2]}` : ''}
     </div>`;
 
   // Save canonical mirrored signal so every device receives identical output.
-  if (signalMode && extractedSymbol && signalText) {
-    await writeMirroredSignal(extractedSymbol, interval, finalHtml, {
+  const mirrorSymbol = extractedSymbol || apiTradePlan?.symbol || fallbackSymbol;
+  if (signalMode && mirrorSymbol && signalText) {
+    await writeMirroredSignal(mirrorSymbol, interval, finalHtml, {
       userQuery,
       generatedAt: new Date().toISOString()
     });
