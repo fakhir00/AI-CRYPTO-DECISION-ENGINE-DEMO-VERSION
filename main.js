@@ -146,6 +146,7 @@ async function loadDataCache() {
         if (!a.reason) a.reason = generateReason(a, a.score);
         return a;
       });
+      assets = applyDirectionalBiasToAssets(assets);
       WHALE_ACTIONS.length = 0; cache.WHALE_ACTIONS?.forEach(w => WHALE_ACTIONS.push(w));
       SMART_MONEY_FLOWS.length = 0; cache.SMART_MONEY_FLOWS?.forEach(s => SMART_MONEY_FLOWS.push(s));
       NARRATIVES.length = 0; cache.NARRATIVES?.forEach(n => NARRATIVES.push(n));
@@ -200,6 +201,52 @@ function generateReason(coin, score) {
   }
   if (Math.abs(change) < 1) return "Absorption & Exhaustion";
   return "Ascending Triangle";
+}
+
+function classifyDirectionalBias(asset = {}, emaInfo = null) {
+  const change = Number.isFinite(asset.change) ? asset.change : 0;
+  const score = Number.isFinite(asset.score) ? asset.score : 50;
+  const reason = String(asset.reason || '');
+
+  let bull = 0;
+  let bear = 0;
+
+  if (change >= 3) bull += 2.0;
+  else if (change >= 1) bull += 1.0;
+  else if (change <= -3) bear += 2.0;
+  else if (change <= -1) bear += 1.0;
+
+  if (score >= 80) bull += 0.8;
+  else if (score <= 45) bear += 0.8;
+
+  if (/(bull|breakout|accumulation|ascending|cup|squeeze|pullback|reversal)/i.test(reason)) bull += 0.7;
+  if (/(bear|breakdown|distribution|head\s*&?\s*shoulders|contraction|shooting\s*star|top)/i.test(reason)) bear += 0.7;
+
+  if (emaInfo) {
+    const last = Number(emaInfo.lastClose);
+    const ema9 = Number(emaInfo.ema9);
+    const ema21 = Number(emaInfo.ema21);
+
+    if (Number.isFinite(last) && Number.isFinite(ema9) && Number.isFinite(ema21)) {
+      if (last > ema9 && ema9 > ema21) bull += 2.2;
+      if (last < ema9 && ema9 < ema21) bear += 2.2;
+      if (ema9 > ema21) bull += 0.6;
+      if (ema9 < ema21) bear += 0.6;
+    }
+  }
+
+  if (Math.abs(change) < 0.7 && Math.abs(bull - bear) < 1.2) return 'neutral';
+  if (bull - bear >= 0.75) return 'bullish';
+  if (bear - bull >= 0.75) return 'bearish';
+  return 'neutral';
+}
+
+function applyDirectionalBiasToAssets(assetList = []) {
+  const emaMap = window._liveEmaData || {};
+  return assetList.map(asset => ({
+    ...asset,
+    bias: classifyDirectionalBias(asset, emaMap[asset.symbol])
+  }));
 }
 
 
@@ -686,6 +733,10 @@ async function syncLiveApis() {
            reason: actualReason, vol: '$' + (coin.total_volume / 1e9).toFixed(1) + 'B'
          };
       }).filter(a => !isStablecoinSymbol(a.symbol, a.name, a.price));
+    }
+
+    if (assets.length > 0) {
+      assets = applyDirectionalBiasToAssets(assets);
     }
 
     if (assets.length > 0) {
@@ -1451,10 +1502,14 @@ function generateSignalForAsset(asset) {
   const p = asset.price;
   const score = asset.score || 50;
   const sym = asset.symbol;
+  const reasonText = String(asset.reason || '');
+  const bearishSetupHint = (asset.change <= -2.2) || /(bear|breakdown|distribution|top|contraction|rejection)/i.test(reasonText);
+  const bullishSetupHint = (asset.change >= 2.2) || /(bull|breakout|accumulation|ascending|squeeze|reversal)/i.test(reasonText);
   
   // ═══ GATE 1: WAIT PROTOCOL ═══
-  // Only trade when Alpha Score confirms strong conviction
-  if (score < 60) {
+  // Normally wait below threshold, but allow strong directional setups through.
+  const directionalOverride = (asset.bias === 'bearish' && bearishSetupHint) || (asset.bias === 'bullish' && bullishSetupHint);
+  if (score < 60 && !directionalOverride) {
       return {
           type: 'WAIT',
           isBull: null,
@@ -1467,7 +1522,11 @@ function generateSignalForAsset(asset) {
       };
   }
 
-  const bias = asset.bias || 'neutral';
+  let bias = asset.bias || 'neutral';
+  if (bias === 'neutral') {
+    if (bearishSetupHint && !bullishSetupHint) bias = 'bearish';
+    else if (bullishSetupHint && !bearishSetupHint) bias = 'bullish';
+  }
   const isBull = bias === 'bullish';
   const isBear = bias === 'bearish';
   
