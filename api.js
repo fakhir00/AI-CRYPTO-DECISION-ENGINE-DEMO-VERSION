@@ -702,7 +702,8 @@ const SYMBOL_STOP_WORDS = new Set([
   'THE', 'FOR', 'AND', 'BUT', 'NOT', 'CAN', 'ARE', 'YOU', 'HIS', 'HER', 'GET', 'SET', 'USE', 'HOW', 'WHY', 'WHAT',
   'GIVE', 'LONG', 'SHORT', 'SELL', 'BUY', 'TRADE', 'SETUP', 'ANALYSIS', 'PLEASE', 'WITH', 'THIS', 'THAT', 'THEN',
   'TARGET', 'TARGETS', 'STOP', 'LOSS', 'ENTRY', 'ZONE', 'PRICE', 'MARKET', 'NEXUS', 'DUAL', 'ENGINE', 'GPT', 'HERMES',
-  'CURRENT', 'CONTEXT', 'LATEST', 'LIVE', 'DATA', 'USER', 'QUERY', 'USDT'
+  'CURRENT', 'CONTEXT', 'LATEST', 'LIVE', 'DATA', 'USER', 'QUERY', 'USDT',
+  'HIGHEST', 'CONVICTION', 'ASSET', 'ASSETS', 'RIGHT', 'NOW', 'INCLUDE', 'PROFIT', 'RATIO'
 ]);
 
 function isSignalRequest(text = '') {
@@ -753,6 +754,12 @@ function extractPrimarySymbol(userQuery = '', assetContext = '') {
   for (const token of tokens) {
     if (knownSymbols.has(token)) return token;
   }
+
+  // If we have a known live universe from context, prefer it over guessing random words.
+  if (knownSymbols.size > 0) {
+    return [...knownSymbols][0] || null;
+  }
+
   for (const token of tokens) {
     if (!SYMBOL_STOP_WORDS.has(token)) return token;
   }
@@ -778,6 +785,13 @@ async function readMirroredSignal(symbol, interval = '4h') {
     if (error || !data?.data?.html || !data?.updated_at) return null;
     const age = Date.now() - new Date(data.updated_at).getTime();
     if (age > MIRROR_SIGNAL_TTL_MS) return null;
+    const html = String(data.data.html || '');
+    const hasPlaceholderTargets = /Take-?Profit Targets:[\s\S]*?1\)\s*1[\s\S]*?2\)\s*2[\s\S]*?3\)\s*3[\s\S]*?4\)\s*4/i.test(html);
+    const hasPlaceholderStop = /Stop Targets:[\s\S]*?1\)\s*1/i.test(html);
+    if (hasPlaceholderTargets && hasPlaceholderStop) {
+      // Reject low-quality mirrored payloads so they don't persist for the full TTL.
+      return null;
+    }
     return data.data.html;
   } catch (e) {
     console.warn('⚠️ Mirror cache read failed:', e.message);
@@ -1069,9 +1083,41 @@ ${trailingBlock}`;
   entries = [...new Set(entries)].slice(0, 3);
   targets = [...new Set(targets)].slice(0, 4);
   stops = [...new Set(stops)];
-  const stop = stops[0] || null;
+  let stop = stops[0] || null;
   const entryLadderNums = buildDirectionalEntryLadder(direction, entries, options.candleData);
   const entryLadder = entryLadderNums.map(v => formatSignalPrice(v, options.candleData?.currentPrice || v));
+  const refPrice = toNumber(options.candleData?.currentPrice) ?? entryLadderNums[0] ?? toNumber(entries[0]) ?? 1;
+
+  const parsedTargets = targets.map(toNumber).filter(n => n !== null);
+  const parsedStop = toNumber(stop);
+  const hasPlaceholderTargets =
+    parsedTargets.length === 4 &&
+    parsedTargets.every((n, idx) => Math.abs(n - (idx + 1)) < 1e-9);
+  const hasPlaceholderStop = parsedStop !== null && (Math.abs(parsedStop - 1) < 1e-9 || Math.abs(parsedStop) < 1e-9);
+  const hasInvalidTargets = parsedTargets.length === 4 && parsedTargets.some(n => n <= 0);
+
+  if ((hasPlaceholderTargets && hasPlaceholderStop) || hasInvalidTargets) {
+    const entryBase = entryLadderNums[0] ?? refPrice;
+    const atrNum = toNumber(options.candleData?.atr) ?? Math.max(entryBase * 0.03, 0.0001);
+    const repairedStop = direction === 'SHORT'
+      ? entryBase + (1.25 * atrNum)
+      : Math.max(0, entryBase - (1.25 * atrNum));
+    const risk = Math.max(Math.abs(entryBase - repairedStop), atrNum * 0.6);
+    const dirMult = direction === 'SHORT' ? -1 : 1;
+    const repairedTargets = [
+      entryBase + (dirMult * risk * 1.0),
+      entryBase + (dirMult * risk * 1.8),
+      entryBase + (dirMult * risk * 2.7),
+      entryBase + (dirMult * risk * 3.5)
+    ];
+
+    targets = repairedTargets.map(v => formatSignalPrice(v, refPrice));
+    stop = formatSignalPrice(repairedStop, refPrice);
+  } else {
+    targets = targets.map(v => formatSignalPrice(v, refPrice));
+    stop = stop ? formatSignalPrice(stop, refPrice) : stop;
+  }
+
   const avgEntry = entryLadderNums.length ? (entryLadderNums.reduce((sum, n) => sum + n, 0) / entryLadderNums.length) : null;
   const stopNum = toNumber(stop);
   const trailingConfig = getDynamicTrailingConfig(direction, avgEntry, stopNum, options.candleData);
@@ -1079,6 +1125,45 @@ ${trailingBlock}`;
 
   // If parsing fails, still return a cleaned copy-ready signal without forbidden annotations.
   if (entryLadder.length < 3 || targets.length < 4 || !stop) {
+    if (entryLadder.length >= 3) {
+      const entryBase = entryLadderNums[0] ?? refPrice;
+      const atrNum = toNumber(options.candleData?.atr) ?? Math.max(entryBase * 0.03, 0.0001);
+      const autoStopNum = direction === 'SHORT'
+        ? entryBase + (1.25 * atrNum)
+        : Math.max(0, entryBase - (1.25 * atrNum));
+      const autoRisk = Math.max(Math.abs(entryBase - autoStopNum), atrNum * 0.6);
+      const dirMult = direction === 'SHORT' ? -1 : 1;
+      const autoTargets = [
+        entryBase + (dirMult * autoRisk * 1.0),
+        entryBase + (dirMult * autoRisk * 1.8),
+        entryBase + (dirMult * autoRisk * 2.7),
+        entryBase + (dirMult * autoRisk * 3.5)
+      ].map(v => formatSignalPrice(v, refPrice));
+      const autoStop = formatSignalPrice(autoStopNum, refPrice);
+
+      return `#${symbol}/USDT
+
+Exchanges: Binance Futures
+
+Signal Type: Regular (${directionLabel})
+
+Leverage: Cross (20X)
+
+Entry :
+(${entryLadder[0]}, ${entryLadder[1]}, ${entryLadder[2]})
+
+Take-Profit Targets:
+1) ${autoTargets[0]}
+2) ${autoTargets[1]}
+3) ${autoTargets[2]}
+4) ${autoTargets[3]}
+
+Stop Targets:
+1) ${autoStop}
+
+${trailingBlock}`;
+    }
+
     let fallbackSignal = cleaned;
     const trailingSectionRe = /Trailing Configuration:\s*[\s\S]*?(?=\n(?:#{1,6}\s*)?(?:[A-Z0-9]{2,10}\s+)?Trade Rationales|\s*$)/i;
     if (trailingSectionRe.test(fallbackSignal)) {
@@ -1245,11 +1330,12 @@ function evaluateDirectionalBias(snapshot = null, candleData = null, userQuery =
 }
 
 function buildApiDrivenTradePlan({ symbol = 'BTC', userQuery = '', assetContext = '', candleData = null } = {}) {
-  const current = toNumber(candleData?.currentPrice);
-  if (current === null) return null;
-
   const snapshots = parseAssetContextSnapshots(assetContext);
   const snap = snapshots[String(symbol || '').toUpperCase()] || null;
+  let current = toNumber(candleData?.currentPrice);
+  if (current === null) current = toNumber(snap?.price);
+  if (current === null) return null;
+
   const bias = evaluateDirectionalBias(snap, candleData, userQuery);
   const direction = bias.direction;
 
@@ -1587,9 +1673,9 @@ export async function fetchDualAI(userQuery, assetContext = '') {
     candleData = await fetchCandlePatterns(extractedSymbol, interval);
   }
 
-  const apiTradePlan = (signalMode && candleData)
+  const apiTradePlan = signalMode
     ? buildApiDrivenTradePlan({
-      symbol: extractedSymbol || candleData.symbol?.replace('USDT', '') || 'BTC',
+      symbol: extractedSymbol || candleData?.symbol?.replace('USDT', '') || 'BTC',
       userQuery,
       assetContext,
       candleData
