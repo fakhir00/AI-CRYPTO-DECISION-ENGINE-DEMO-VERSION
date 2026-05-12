@@ -115,9 +115,12 @@ export function addToAIMemory(role, content) { AI_MEMORY.add(role, content); }
 export function clearAIMemory() { AI_MEMORY.clear(); }
 export function getAIMemory() { return AI_MEMORY.getMessages(); }
 
-// ─── 1. Binance: Top-100 USDT market universe ────────────────────────────────
+// ─── 1. CoinGecko: Real-time price, market cap, volume ───────────────────────
 export async function fetchMarketData() {
   try {
+    const MIN_MARKET_CAP_USD = 100_000_000;
+    const CG_PER_PAGE = 250;
+    const MAX_CG_PAGES = 5;
     const BINANCE_TOP_N = 100;
 
     // Filter out stablecoins
@@ -150,6 +153,26 @@ export async function fetchMarketData() {
       return false;
     };
 
+    const cgCoins = [];
+    for (let page = 1; page <= MAX_CG_PAGES; page++) {
+      const url = `https://api.coingecko.com/api/v3/coins/markets`
+        + `?vs_currency=usd&order=market_cap_desc&per_page=${CG_PER_PAGE}&page=${page}`
+        + `&x_cg_demo_api_key=${KEYS.coingecko}&sparkline=false`;
+
+      const res = await fetch(url, { cache: 'no-store' });
+      if (!res.ok) {
+        if (page === 1) throw new Error(`CoinGecko HTTP ${res.status}`);
+        break;
+      }
+
+      const batch = await res.json();
+      if (!Array.isArray(batch) || batch.length === 0) break;
+      cgCoins.push(...batch);
+
+      const lastMarketCap = Number(batch[batch.length - 1]?.market_cap) || 0;
+      if (batch.length < CG_PER_PAGE || lastMarketCap < MIN_MARKET_CAP_USD) break;
+    }
+
     const binanceRes = await fetch('https://api.binance.com/api/v3/ticker/24hr');
     const binanceData = binanceRes.ok ? await binanceRes.json() : [];
     if (binanceRes.ok) {
@@ -159,6 +182,15 @@ export async function fetchMarketData() {
     }
 
     const bySymbol = new Map();
+
+    cgCoins
+      .filter(c => Number(c.market_cap) >= MIN_MARKET_CAP_USD)
+      .filter(c => !isStablecoinLike(c.symbol, c.name, c.current_price))
+      .forEach(c => {
+        const symbol = String(c.symbol || '').toUpperCase();
+        if (!symbol) return;
+        bySymbol.set(symbol, c);
+      });
 
     const topBinance = Array.isArray(binanceData)
       ? binanceData
@@ -178,6 +210,14 @@ export async function fetchMarketData() {
       : [];
 
     topBinance.forEach(t => {
+      const existing = bySymbol.get(t.base);
+      if (existing) {
+        existing.current_price = t.lastPrice || existing.current_price;
+        existing.price_change_percentage_24h = Number.isFinite(t.changePct) ? t.changePct : existing.price_change_percentage_24h;
+        existing.total_volume = t.quoteVolume || existing.total_volume;
+        return;
+      }
+
       bySymbol.set(t.base, {
         id: `${t.base.toLowerCase()}-binance`,
         symbol: t.base,
@@ -192,12 +232,12 @@ export async function fetchMarketData() {
 
     const filteredData = [...bySymbol.values()];
 
-    console.log('✅ Binance top-100 market universe fetched:', filteredData.length, 'coins');
-    markApiOk('Binance Top Universe', `${filteredData.length} assets`);
+    console.log('✅ Expanded market universe fetched:', filteredData.length, 'coins');
+    markApiOk('CoinGecko Markets', `${filteredData.length} assets`);
     return filteredData;
   } catch (e) {
-    console.warn('⚠️ Binance market fetch failed:', e.message);
-    markApiFailed('Binance Top Universe', e.message);
+    console.warn('⚠️ CoinGecko failed:', e.message);
+    markApiFailed('CoinGecko Markets', e.message);
     return null;
   }
 }
