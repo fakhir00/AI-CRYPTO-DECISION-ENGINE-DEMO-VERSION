@@ -1108,6 +1108,170 @@ ${points[3] ? `4. ${points[3]}` : ''}
 ${points[4] ? `5. ${points[4]}` : ''}`.replace(/\n{2,}/g, '\n');
 }
 
+function parseAssetContextSnapshots(assetContext = '') {
+  const snapshots = {};
+  const segments = String(assetContext || '')
+    .split('|')
+    .map(seg => seg.trim())
+    .filter(Boolean);
+
+  for (const segment of segments) {
+    const m = segment.match(/\b([A-Z0-9]{2,10})\s*:\s*(?:CURRENT_PRICE=)?\$?\s*([0-9][0-9,]*(?:\.\d+)?)\s*\(\s*([+-]?\d+(?:\.\d+)?)%/i);
+    if (!m) continue;
+
+    const symbol = String(m[1] || '').toUpperCase();
+    const price = toNumber(m[2]);
+    const changePct = toNumber(m[3]);
+    const reasonMatch = segment.match(/Rationale:\s*(.+)$/i);
+    const reason = reasonMatch ? reasonMatch[1].trim() : '';
+
+    snapshots[symbol] = { symbol, price, changePct, reason };
+  }
+
+  return snapshots;
+}
+
+function evaluateDirectionalBias(snapshot = null, candleData = null, userQuery = '') {
+  let longScore = 0;
+  let shortScore = 0;
+
+  const reasons = [];
+  const change = toNumber(snapshot?.changePct);
+  if (change !== null) {
+    if (change >= 2) {
+      longScore += 2;
+      reasons.push('24h momentum is bullish');
+    } else if (change <= -2) {
+      shortScore += 2;
+      reasons.push('24h momentum is bearish');
+    } else if (change > 0.5) {
+      longScore += 1;
+      reasons.push('24h momentum leans bullish');
+    } else if (change < -0.5) {
+      shortScore += 1;
+      reasons.push('24h momentum leans bearish');
+    }
+  }
+
+  const reasonText = String(snapshot?.reason || '');
+  if (reasonText) {
+    if (/(bull|breakout|accumulation|trend|cup|ascending|squeeze|reversal)/i.test(reasonText)) {
+      longScore += 1.5;
+      reasons.push('pattern rationale supports long continuation');
+    }
+    if (/(bear|breakdown|distribution|head\s*&?\s*shoulders|contraction|shooting\s*star|rejection)/i.test(reasonText)) {
+      shortScore += 1.5;
+      reasons.push('pattern rationale supports short continuation');
+    }
+  }
+
+  const patterns = candleData?.patterns || [];
+  const weights = [2.6, 2.0, 1.4, 1.0, 0.6];
+  patterns.slice(0, 5).forEach((p, idx) => {
+    const w = weights[idx] || 0.5;
+    if (p?.type === 'bullish') {
+      longScore += w;
+    } else if (p?.type === 'bearish') {
+      shortScore += w;
+    }
+  });
+
+  const p = toNumber(candleData?.currentPrice);
+  const swingHigh = toNumber(candleData?.swingHigh);
+  const swingLow = toNumber(candleData?.swingLow);
+  if (p !== null && swingHigh !== null && swingLow !== null && swingHigh > swingLow) {
+    const pos = (p - swingLow) / (swingHigh - swingLow);
+    if (pos < 0.35) longScore += 0.8;
+    if (pos > 0.65) shortScore += 0.8;
+  }
+
+  if (/\blong\b/i.test(String(userQuery || ''))) longScore += 0.7;
+  if (/\bshort\b/i.test(String(userQuery || ''))) shortScore += 0.7;
+
+  let direction = 'LONG';
+  if (shortScore > longScore) direction = 'SHORT';
+  if (Math.abs(longScore - shortScore) < 0.25 && change !== null) {
+    direction = change < 0 ? 'SHORT' : 'LONG';
+  }
+
+  return {
+    direction,
+    longScore,
+    shortScore,
+    confidence: Math.abs(longScore - shortScore),
+    reasons
+  };
+}
+
+function buildApiDrivenTradePlan({ symbol = 'BTC', userQuery = '', assetContext = '', candleData = null } = {}) {
+  const current = toNumber(candleData?.currentPrice);
+  if (current === null) return null;
+
+  const snapshots = parseAssetContextSnapshots(assetContext);
+  const snap = snapshots[String(symbol || '').toUpperCase()] || null;
+  const bias = evaluateDirectionalBias(snap, candleData, userQuery);
+  const direction = bias.direction;
+
+  const atr = toNumber(candleData?.atr);
+  const safeAtr = atr && atr > 0 ? atr : current * 0.03;
+  const swingHigh = toNumber(candleData?.swingHigh);
+  const swingLow = toNumber(candleData?.swingLow);
+  const range = (swingHigh !== null && swingLow !== null && swingHigh > swingLow) ? (swingHigh - swingLow) : 0;
+  const pos = range > 0 ? (current - swingLow) / range : 0.5;
+  const change = toNumber(snap?.changePct) ?? 0;
+
+  let offset = direction === 'SHORT' ? 0.14 : -0.14;
+  if (direction === 'LONG') {
+    if (change >= 4 && bias.confidence >= 2) offset = -0.07;
+    else if (change <= -1 || pos > 0.7) offset = -0.28;
+    else if (bias.confidence < 1) offset = -0.20;
+  } else {
+    if (change <= -4 && bias.confidence >= 2) offset = 0.07;
+    else if (change >= 1 || pos < 0.3) offset = 0.28;
+    else if (bias.confidence < 1) offset = 0.20;
+  }
+
+  let entry1 = current + (offset * safeAtr);
+  let entry2 = direction === 'LONG' ? entry1 - (0.45 * safeAtr) : entry1 + (0.45 * safeAtr);
+  let entry3 = direction === 'LONG' ? entry1 - (0.90 * safeAtr) : entry1 + (0.90 * safeAtr);
+
+  if (direction === 'LONG') {
+    entry1 = Math.max(0, entry1);
+    entry2 = Math.max(0, entry2);
+    entry3 = Math.max(0, entry3);
+    if (entry2 >= entry1) entry2 = Math.max(0, entry1 * 0.995);
+    if (entry3 >= entry2) entry3 = Math.max(0, entry2 * 0.995);
+  } else {
+    if (entry2 <= entry1) entry2 = entry1 * 1.005;
+    if (entry3 <= entry2) entry3 = entry2 * 1.005;
+  }
+
+  let stop = direction === 'LONG' ? entry1 - (1.25 * safeAtr) : entry1 + (1.25 * safeAtr);
+  if (direction === 'LONG' && swingLow !== null) {
+    stop = Math.min(stop, swingLow - (0.10 * safeAtr));
+  }
+  if (direction === 'SHORT' && swingHigh !== null) {
+    stop = Math.max(stop, swingHigh + (0.10 * safeAtr));
+  }
+  if (direction === 'LONG') stop = Math.max(0, stop);
+
+  let risk = Math.abs(entry1 - stop);
+  if (!(risk > 0)) risk = safeAtr;
+
+  const targets = direction === 'LONG'
+    ? [entry1 + (risk * 1.0), entry1 + (risk * 1.8), entry1 + (risk * 2.7), entry1 + (risk * 3.5)]
+    : [entry1 - (risk * 1.0), entry1 - (risk * 1.8), entry1 - (risk * 2.7), entry1 - (risk * 3.5)];
+
+  return {
+    direction,
+    entries: [entry1, entry2, entry3],
+    targets,
+    stop,
+    confidence: bias.confidence,
+    rationaleHints: bias.reasons
+  };
+}
+
 // ─── 6. OpenAI: Dual Engine Fusion (Contextual + Quantitative) ───────────────
 // Now uses AI_MEMORY for full conversation context.
 export async function fetchAIAnalysis(promptText, candleContext = null, options = {}) {
