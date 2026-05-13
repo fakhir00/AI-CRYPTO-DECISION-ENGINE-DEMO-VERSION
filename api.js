@@ -2099,9 +2099,14 @@ CRITICAL: Use this plan exactly in the final signal format.`;
   let signalText = "";
   let rationalesText = "";
 
-  let signalStart = result ? result.search(/#\s*[A-Z0-9]{2,10}\s*\/\s*USDT/i) : -1;
-  if (signalStart === -1) {
-    signalStart = result ? result.indexOf('📪 #') : -1;
+  let signalStart = -1;
+  if (result) {
+    const strictSignalHeader = result.match(/(?:^|\n)\s*(?:📪\s*)?#\s*[A-Z0-9]{2,10}\s*\/\s*USDT\b/i);
+    if (strictSignalHeader && Number.isInteger(strictSignalHeader.index)) {
+      signalStart = strictSignalHeader.index;
+    } else {
+      signalStart = result.search(/(?:^|\n)\s*(?:📪\s*)?(?:Exchanges|Signal Type)\s*:/i);
+    }
   }
   if (signalStart !== -1) {
     preamble = result.substring(0, signalStart).trim();
@@ -2146,6 +2151,11 @@ ${apiTradePlan.rationaleHints[2] ? `3. ${apiTradePlan.rationaleHints[2]}` : ''}
     </div>
   `;
 
+  const sanitizeInline = (v) => String(v ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+
   // Build pattern badge if patterns were detected
   const patternBadge = (candleData && candleData.patterns && candleData.patterns.length > 0)
     ? `<div style="display:flex;flex-wrap:wrap;gap:0.3rem;margin-bottom:0.5rem;">
@@ -2158,6 +2168,20 @@ ${apiTradePlan.rationaleHints[2] ? `3. ${apiTradePlan.rationaleHints[2]}` : ''}
           </span>`).join('')}
       </div>`
     : '';
+  const patternSummary = (() => {
+    if (!candleData) return '';
+    const symbolLabel = String(candleData.symbol || `${fallbackSymbol}USDT`).toUpperCase();
+    const intervalLabel = String(candleData.interval || interval).toLowerCase();
+    const names = Array.isArray(candleData.patterns)
+      ? candleData.patterns.map(p => p?.name).filter(Boolean)
+      : [];
+    const summaryText = names.length > 0
+      ? names.slice(0, 4).join(' | ')
+      : (candleData.summary || 'No high-confidence candlestick pattern detected in the latest candles.');
+    return `<div style="margin-bottom:0.6rem;padding:0.45rem 0.65rem;border-radius:6px;border:1px solid rgba(139,120,255,0.28);background:rgba(139,120,255,0.10);color:#DDE4FF;font-size:0.76rem;line-height:1.45;">
+      Candle Pattern Feed (${sanitizeInline(symbolLabel)} ${sanitizeInline(intervalLabel)}): ${sanitizeInline(summaryText)}
+    </div>`;
+  })();
   const apiHealth = getApiHealthSummary();
   const OPTIONAL_FALLBACK_SERVICES = new Set([
     'Etherscan Whale Flow',
@@ -2187,10 +2211,6 @@ ${apiTradePlan.rationaleHints[2] ? `3. ${apiTradePlan.rationaleHints[2]}` : ''}
     : fallbackApis.length > 0
       ? 'rgba(93, 173, 226, 0.36)'
       : 'rgba(52, 199, 89, 0.32)';
-  const sanitizeInline = (v) => String(v ?? '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
   const healthText = criticalApis.length > 0
     ? `API status: ${criticalApis.map(s => {
       const detail = s.detail ? ` (${sanitizeInline(s.detail).slice(0, 80)})` : '';
@@ -2207,6 +2227,7 @@ ${apiTradePlan.rationaleHints[2] ? `3. ${apiTradePlan.rationaleHints[2]}` : ''}
   const finalHtml = `
     <div style="width:100%;">
       ${healthBanner}
+      ${patternSummary}
       ${patternBadge}
       ${preamble ? `<div style="color:#BAC2DE;line-height:1.6;margin-bottom:0.5rem;">${renderMarkdown(preamble)}</div>` : ''}
       ${(extractedRationales || apiRationaleFallback) ? `<div style="color:#BAC2DE;line-height:1.6;margin-bottom:0.75rem;">${renderMarkdown(extractedRationales || apiRationaleFallback)}</div>` : ''}

@@ -185,31 +185,43 @@ function seededRandom(seed) {
 const HOUR_SEED = Math.floor(Date.now() / (60 * 60 * 1000));
 const stableRandom = seededRandom(HOUR_SEED);
 
-function generateReason(coin, score) {
+function detectReasonBias(reason = '') {
+  const text = String(reason || '');
+  if (/(bear|breakdown|distribution|descending|head\s*&?\s*shoulders|shooting\s*star|contraction|rejection|lower\s*high|top)/i.test(text)) {
+    return 'bearish';
+  }
+  if (/(bull|breakout|accumulation|ascending|cup|hammer|expansion|support|higher\s*low)/i.test(text)) {
+    return 'bullish';
+  }
+  return 'neutral';
+}
+
+function generateReason(coin, score, preferredBias = null) {
   const change = coin.price_change_percentage_24h || coin.change || 0;
-  const mcap = coin.market_cap || 1;
+  const mcap = Number(coin.market_cap) || 0;
   const vol = coin.total_volume || 0;
-  const volRatio = vol / mcap;
+  const volRatio = mcap > 0 ? (vol / mcap) : 0;
+  const inferredBias = change >= 1 ? 'bullish' : change <= -1 ? 'bearish' : 'neutral';
+  const bias = preferredBias || inferredBias;
+
+  if (bias === 'bullish') {
+    if (score > 85 && change > 3.5) return "Bull Flag Breakout";
+    if (volRatio > 0.16) return "Bullish SMC Structure Flip";
+    if (change > 1.8) return "High-Volume Breakout";
+    if (score > 75) return "Ascending Triangle Breakout";
+    return "Support Hold Accumulation";
+  }
+
+  if (bias === 'bearish') {
+    if (score > 85 && change < -3.5) return "Bear Flag Breakdown";
+    if (volRatio > 0.16) return "High-Volume Distribution";
+    if (change < -1.8) return "Descending Channel Breakdown";
+    if (score > 75) return "Lower High Rejection";
+    return "Supply Zone Rejection";
+  }
   
-  if (score > 85) {
-    if (change > 5) return "Bull Flag Breakout";
-    if (change < -5) return "Bear Flag Breakdown";
-    if (change < -2) return "High-Volume Distribution";
-    if (volRatio > 0.15) return "SMC Structure Flip";
-    return "Trending Pullback";
-  }
-  if (score > 75) {
-    if (change > 2) return "Cup & Handle Pattern";
-    if (change < -2) return "Descending Channel Breakdown";
-    if (volRatio > 0.1) return "Volatility Squeeze";
-    return "Momentum Reversal";
-  }
-  if (score < 40) {
-    if (change < -5) return "Bear Flag Breakdown";
-    return "Head & Shoulders Top";
-  }
   if (Math.abs(change) < 1) return "Absorption & Exhaustion";
-  return "Ascending Triangle";
+  return "Range Compression";
 }
 
 function parseVolumeBillions(vol = '') {
@@ -335,8 +347,14 @@ function applyDirectionalBiasToAssets(assetList = []) {
     const emaInfo = emaMap[asset.symbol];
     const bias = classifyDirectionalBias(asset, emaInfo);
     const evalResult = evaluateDirectionalBiasScores(asset, emaInfo);
+    const reasonBias = detectReasonBias(asset.reason);
+    const hasReason = typeof asset.reason === 'string' && asset.reason.trim().length > 0;
+    const alignedReason = (hasReason && reasonBias === bias)
+      ? asset.reason
+      : generateReason(asset, asset.score, bias);
     return {
       ...asset,
+      reason: alignedReason,
       bias,
       biasConfidence: Math.abs(evalResult.bull - evalResult.bear),
       opportunityScore: computeOpportunityScore(asset, emaInfo, evalResult.bull - evalResult.bear)
