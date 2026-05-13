@@ -20,7 +20,18 @@ import { createClient } from '@supabase/supabase-js';
 
 const supabaseUrl = process.env.VITE_SUPABASE_URL;
 const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-const supabase = createClient(supabaseUrl, supabaseKey);
+let supabase = null;
+
+function getSupabaseClient() {
+  if (supabase) return supabase;
+  if (!supabaseUrl || !supabaseKey) return null;
+  try {
+    supabase = createClient(supabaseUrl, supabaseKey);
+    return supabase;
+  } catch {
+    return null;
+  }
+}
 
 // ── Market Structure & Volatility ──────────────────────────────
 function calculateATR(candles, period = 14) {
@@ -241,73 +252,179 @@ function detectPatterns(candles) {
 
 // ── Main Handler ──────────────────────────────────────────────
 
+const ALLOWED_INTERVALS = new Set(['1m', '5m', '15m', '30m', '1h', '4h', '1d']);
+
+function sanitizeSymbol(raw = 'BTCUSDT') {
+  const cleaned = String(raw || 'BTCUSDT').toUpperCase().replace(/[^A-Z0-9]/g, '');
+  if (!cleaned) return 'BTCUSDT';
+  return cleaned.endsWith('USDT') ? cleaned : `${cleaned}USDT`;
+}
+
+function parseCandleResult(raw, symbol, interval, source = 'fresh') {
+  if (!Array.isArray(raw) || raw.length === 0) {
+    return {
+      source,
+      symbol,
+      interval,
+      candleCount: 0,
+      currentPrice: 0,
+      atr: 0,
+      swingHigh: 0,
+      swingLow: 0,
+      patterns: [],
+      summary: 'No candlestick data available.'
+    };
+  }
+
+  // Binance kline format: [openTime, open, high, low, close, volume, ...]
+  const candles = raw.map(k => ({
+    time: k[0],
+    open: parseFloat(k[1]),
+    high: parseFloat(k[2]),
+    low: parseFloat(k[3]),
+    close: parseFloat(k[4]),
+    volume: parseFloat(k[5])
+  }));
+
+  const patterns = detectPatterns(candles);
+  const atr = calculateATR(candles, 14);
+  const structure = getMarketStructure(candles);
+  const currentPrice = candles[candles.length - 1]?.close || 0;
+
+  return {
+    source,
+    symbol,
+    interval,
+    candleCount: candles.length,
+    currentPrice,
+    atr,
+    swingHigh: structure.swingHigh,
+    swingLow: structure.swingLow,
+    patterns,
+    summary: patterns.length > 0
+      ? patterns.map(p => `${p.name} (${p.type}): ${p.description}`).join(' | ')
+      : 'No significant candlestick pattern detected on this timeframe.'
+  };
+}
+
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET');
 
-  const symbol   = (req.query.symbol   || 'BTCUSDT').toUpperCase();
-  const interval = (req.query.interval || '4h');
-  const cacheKey = `candles_${symbol}_${interval}`;
+  const requestedSymbol = sanitizeSymbol(req.query.symbol || 'BTCUSDT');
+  const interval = ALLOWED_INTERVALS.has(req.query.interval) ? req.query.interval : '4h';
+  const cacheKey = `candles_${requestedSymbol}_${interval}`;
+  const now = Date.now();
+  const localCached = cache[cacheKey];
 
   try {
-    // 1. Check Supabase Global Cache first
-    const { data: cachedData, error: cacheError } = await supabase
-      .from('global_market_cache')
-      .select('data, updated_at')
-      .eq('id', cacheKey)
-      .single();
-
-    if (cachedData && (Date.now() - new Date(cachedData.updated_at).getTime() < 5 * 60 * 1000)) {
-      return res.status(200).json({ source: 'global_cache', ...cachedData.data });
+    // 1) Fast local cache for warm paths
+    if (localCached && (now - localCached.timestamp) < CACHE_TTL) {
+      return res.status(200).json({ source: 'memory_cache', ...localCached.data });
     }
 
-    // 2. Not in cache or expired — Fetch from Binance
-    const url = `https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=${interval}&limit=100`;
-    const response = await fetch(url);
-    if (!response.ok) throw new Error(`Binance HTTP ${response.status}`);
+    // 2) Optional Supabase global cache (if configured)
+    const supabaseClient = getSupabaseClient();
+    if (supabaseClient) {
+      try {
+        const { data: cachedData } = await supabaseClient
+          .from('global_market_cache')
+          .select('data, updated_at')
+          .eq('id', cacheKey)
+          .single();
+
+        if (cachedData?.data && cachedData?.updated_at) {
+          const age = now - new Date(cachedData.updated_at).getTime();
+          if (age < 5 * 60 * 1000) {
+            cache[cacheKey] = { timestamp: now, data: cachedData.data };
+            return res.status(200).json({ source: 'global_cache', ...cachedData.data });
+          }
+        }
+      } catch (cacheErr) {
+        console.warn('⚠️ Candle cache read skipped:', cacheErr.message);
+      }
+    }
+
+    // 3) Fetch requested symbol from Binance
+    let activeSymbol = requestedSymbol;
+    let response = await fetch(`https://api.binance.com/api/v3/klines?symbol=${activeSymbol}&interval=${interval}&limit=100`);
+
+    // If requested symbol is invalid/unavailable, gracefully fallback to BTCUSDT.
+    if (!response.ok && activeSymbol !== 'BTCUSDT') {
+      const fallbackRes = await fetch(`https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=${interval}&limit=100`);
+      if (fallbackRes.ok) {
+        response = fallbackRes;
+        activeSymbol = 'BTCUSDT';
+      }
+    }
+
+    if (!response.ok) {
+      // As last resort, serve stale local cache or a non-fatal empty payload.
+      if (localCached?.data) {
+        return res.status(200).json({
+          source: 'stale_memory',
+          warning: `Live fetch failed: Binance HTTP ${response.status}`,
+          ...localCached.data
+        });
+      }
+      return res.status(200).json({
+        source: 'fallback_empty',
+        symbol: activeSymbol,
+        interval,
+        candleCount: 0,
+        currentPrice: 0,
+        atr: 0,
+        swingHigh: 0,
+        swingLow: 0,
+        patterns: [],
+        summary: 'Candle feed temporarily unavailable.'
+      });
+    }
 
     const raw = await response.json();
+    const result = parseCandleResult(raw, activeSymbol, interval, activeSymbol === requestedSymbol ? 'fresh' : 'fallback_symbol');
+    if (activeSymbol !== requestedSymbol) {
+      result.requestedSymbol = requestedSymbol;
+      result.note = `Requested symbol unavailable on Binance; using ${activeSymbol} context.`;
+    }
 
-    // Binance kline format: [openTime, open, high, low, close, volume, ...]
-    const candles = raw.map(k => ({
-      time:   k[0],
-      open:   parseFloat(k[1]),
-      high:   parseFloat(k[2]),
-      low:    parseFloat(k[3]),
-      close:  parseFloat(k[4]),
-      volume: parseFloat(k[5])
-    }));
+    // Update local cache
+    cache[cacheKey] = { timestamp: now, data: result };
 
-    const patterns = detectPatterns(candles);
-    const atr = calculateATR(candles, 14);
-    const structure = getMarketStructure(candles);
-    const currentPrice = candles[candles.length - 1].close;
+    // Best-effort global cache write
+    if (supabaseClient) {
+      try {
+        await supabaseClient.from('global_market_cache').upsert({
+          id: cacheKey,
+          data: result,
+          updated_at: new Date().toISOString()
+        });
+      } catch (writeErr) {
+        console.warn('⚠️ Candle cache write skipped:', writeErr.message);
+      }
+    }
 
-    const result = {
-      symbol,
-      interval,
-      candleCount: candles.length,
-      currentPrice,
-      atr,
-      swingHigh: structure.swingHigh,
-      swingLow: structure.swingLow,
-      patterns,
-      // Summary for easy AI injection
-      summary: patterns.length > 0
-        ? patterns.map(p => `${p.name} (${p.type}): ${p.description}`).join(' | ')
-        : 'No significant candlestick pattern detected on this timeframe.'
-    };
-
-    // 3. Update Supabase Global Cache for all devices
-    await supabase.from('global_market_cache').upsert({
-      id: cacheKey,
-      data: result,
-      updated_at: new Date().toISOString()
-    });
-
-    return res.status(200).json({ source: 'fresh_global', ...result });
+    return res.status(200).json(result);
   } catch (err) {
     console.error('❌ Global Candle API Error:', err.message);
-    return res.status(500).json({ error: 'Failed to fetch candle data', details: err.message });
+    if (localCached?.data) {
+      return res.status(200).json({
+        source: 'stale_memory',
+        warning: err.message,
+        ...localCached.data
+      });
+    }
+    return res.status(200).json({
+      source: 'fallback_empty',
+      symbol: requestedSymbol,
+      interval,
+      candleCount: 0,
+      currentPrice: 0,
+      atr: 0,
+      swingHigh: 0,
+      swingLow: 0,
+      patterns: [],
+      summary: 'Candle feed temporarily unavailable.'
+    });
   }
 }

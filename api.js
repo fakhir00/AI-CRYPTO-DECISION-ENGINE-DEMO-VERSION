@@ -310,22 +310,40 @@ export async function fetchWhaleActivity() {
     const res = await fetch(url);
     const data = await res.json();
 
-    if (data.status === '1' && data.result) {
-      // Filter for massive movements > 250 ETH (~$750k+)
-      const whales = data.result.filter(tx => (parseInt(tx.value) / 1e18) > 250);
-      if (whales.length > 0) {
-        console.log('✅ Etherscan ETH whale txs found:', whales.length);
-        markApiOk('Etherscan Whale Flow', `${whales.length} live txs`);
-        return whales.map(tx => ({
+    if (data.status === '1' && Array.isArray(data.result)) {
+      const parsed = data.result.map(tx => {
+        const ethValue = Number(tx.value) / 1e18;
+        return {
           hash: tx.hash,
-          value: (parseInt(tx.value) / 1e18) * 3000, // Approximate USD value
+          ethValue: Number.isFinite(ethValue) ? ethValue : 0,
+          from: tx.from,
+          to: tx.to
+        };
+      });
+
+      // Prefer institutional-size transfers first, then gracefully widen if market is quiet.
+      const institutional = parsed.filter(tx => tx.ethValue >= 80).slice(0, 10);
+      const fallbackActive = parsed.filter(tx => tx.ethValue >= 25).slice(0, 10);
+      const feed = institutional.length > 0 ? institutional : fallbackActive;
+
+      if (feed.length > 0) {
+        const approxEthUsd = 3000;
+        console.log('✅ Etherscan ETH whale txs found:', feed.length);
+        markApiOk('Etherscan Whale Flow', `${feed.length} live txs`);
+        return feed.map(tx => ({
+          hash: tx.hash,
+          value: tx.ethValue * approxEthUsd,
           token: "ETH",
           from: tx.from,
           to: tx.to
         }));
       }
+
+      // Quiet tape is not an API failure.
+      markApiOk('Etherscan Whale Flow', 'No large transfers in latest batch');
+      return [];
     }
-    throw new Error('No valid crypto whale data found');
+    throw new Error(data.message || 'No valid Etherscan payload');
   } catch (e) {
     console.warn('⚠️ Etherscan failed, deploying institutional crypto fallback:', e.message);
     markApiDegraded('Etherscan Whale Flow', `Fallback feed: ${e.message}`);
@@ -385,8 +403,22 @@ export async function fetchSentiment() {
     return { bullish, bearish, score, source: 'Reddit NLP' };
   } catch (e) {
     console.warn('⚠️ Reddit failed:', e.message);
-    markApiFailed('Reddit Sentiment', e.message);
-    return { bullish: 5, bearish: 5, score: 50, source: 'Data Unavailable' };
+    // Browser CORS / rate limits are common here. Fall back to BTC momentum proxy.
+    try {
+      const btcRes = await fetch('https://api.binance.com/api/v3/ticker/24hr?symbol=BTCUSDT');
+      if (btcRes.ok) {
+        const btc = await btcRes.json();
+        const change = Number(btc.priceChangePercent) || 0;
+        const score = Math.min(95, Math.max(5, Math.round(50 + (change * 3.2))));
+        markApiDegraded('Reddit Sentiment', `Fallback to BTC momentum (${change.toFixed(2)}%)`);
+        return { bullish: score, bearish: 100 - score, score, source: 'Momentum Proxy' };
+      }
+    } catch (fallbackErr) {
+      console.warn('⚠️ Sentiment momentum fallback failed:', fallbackErr.message);
+    }
+
+    markApiDegraded('Reddit Sentiment', `Fallback neutral: ${e.message}`);
+    return { bullish: 50, bearish: 50, score: 50, source: 'Fallback Neutral' };
   }
 }
 
@@ -570,19 +602,43 @@ export async function fetchTechnicalSignals(symbols = []) {
 
     // 4. Fetch RSI for BTC from TAAPI (Free tier = 1 call per 15s)
     let btcRsi = null;
+    const computeFallbackBtcRsi = async (reason = 'TAAPI unavailable') => {
+      try {
+        const rsiRes = await fetch('https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=1h&limit=120');
+        if (!rsiRes.ok) throw new Error(`Binance RSI fallback HTTP ${rsiRes.status}`);
+        const rsiRaw = await rsiRes.json();
+        const closes = Array.isArray(rsiRaw) ? rsiRaw.map(k => parseFloat(k[4])).filter(Number.isFinite) : [];
+        const localRsi = computeRSI(closes, 14);
+        if (Number.isFinite(localRsi)) {
+          btcRsi = localRsi;
+          markApiDegraded('TAAPI RSI', `Fallback RSI ${localRsi.toFixed(1)} (${reason})`);
+          return true;
+        }
+      } catch (fallbackErr) {
+        console.warn('⚠️ Local RSI fallback failed:', fallbackErr.message);
+      }
+      return false;
+    };
+
     try {
       const taapiRes = await fetch(`https://api.taapi.io/rsi?secret=${KEYS.taapi}&exchange=binance&symbol=BTC/USDT&interval=1h`);
       if (taapiRes.ok) {
         const taapiJson = await taapiRes.json();
-        btcRsi = taapiJson.value;
-        console.log('✅ TAAPI RSI fetched:', btcRsi);
-        markApiOk('TAAPI RSI', `BTC RSI ${btcRsi}`);
+        btcRsi = Number(taapiJson.value);
+        if (Number.isFinite(btcRsi)) {
+          console.log('✅ TAAPI RSI fetched:', btcRsi);
+          markApiOk('TAAPI RSI', `BTC RSI ${btcRsi.toFixed(1)}`);
+        } else {
+          await computeFallbackBtcRsi('TAAPI payload');
+        }
       } else {
-        markApiDegraded('TAAPI RSI', `HTTP ${taapiRes.status}`);
+        const hadFallback = await computeFallbackBtcRsi(`HTTP ${taapiRes.status}`);
+        if (!hadFallback) markApiDegraded('TAAPI RSI', `HTTP ${taapiRes.status}`);
       }
     } catch (err) {
       console.warn('⚠️ TAAPI rate limit or error:', err.message);
-      markApiDegraded('TAAPI RSI', err.message);
+      const hadFallback = await computeFallbackBtcRsi(err.message);
+      if (!hadFallback) markApiDegraded('TAAPI RSI', err.message);
     }
 
     console.log('✅ Multi-indicator technical data fetched for', symbols.length, 'assets');
@@ -709,6 +765,34 @@ function computeEMA(data, period) {
   return ema;
 }
 
+// Helper: Compute RSI from close-price series
+function computeRSI(closes = [], period = 14) {
+  if (!Array.isArray(closes) || closes.length < period + 1) return null;
+  let gains = 0;
+  let losses = 0;
+
+  for (let i = 1; i <= period; i++) {
+    const delta = closes[i] - closes[i - 1];
+    if (delta >= 0) gains += delta;
+    else losses += Math.abs(delta);
+  }
+
+  let avgGain = gains / period;
+  let avgLoss = losses / period;
+
+  for (let i = period + 1; i < closes.length; i++) {
+    const delta = closes[i] - closes[i - 1];
+    const gain = delta > 0 ? delta : 0;
+    const loss = delta < 0 ? Math.abs(delta) : 0;
+    avgGain = ((avgGain * (period - 1)) + gain) / period;
+    avgLoss = ((avgLoss * (period - 1)) + loss) / period;
+  }
+
+  if (avgLoss === 0) return 100;
+  const rs = avgGain / avgLoss;
+  return 100 - (100 / (1 + rs));
+}
+
 // ─── 4D. CoinGecko Categories: Narratives & Sectors ──────────────────────────
 export async function fetchNarratives() {
   try {
@@ -753,13 +837,33 @@ export async function fetchCandlePatterns(symbol, interval = '4h') {
     const res = await fetch(`/api/candles?symbol=${cleanTicker}&interval=${interval}`);
     if (!res.ok) throw new Error(`Candle API HTTP ${res.status}`);
     const data = await res.json();
-    console.log(`✅ Candle patterns fetched for ${cleanTicker} (${interval}):`, data.patterns?.length, 'patterns');
-    markApiOk('NEXUS Candle API', `${cleanTicker} ${interval} (${data.patterns?.length ?? 0} patterns)`);
+    const source = String(data?.source || 'fresh');
+    const patternCount = data.patterns?.length ?? 0;
+    console.log(`✅ Candle patterns fetched for ${cleanTicker} (${interval}):`, patternCount, 'patterns');
+    if (/fallback|stale/i.test(source)) {
+      markApiDegraded('NEXUS Candle API', `${cleanTicker} ${interval} fallback (${source})`);
+    } else {
+      markApiOk('NEXUS Candle API', `${cleanTicker} ${interval} (${patternCount} patterns)`);
+    }
     return data;
   } catch (e) {
     console.warn('⚠️ Candle pattern fetch failed:', e.message);
-    markApiFailed('NEXUS Candle API', e.message);
-    return null;
+    markApiDegraded('NEXUS Candle API', `Fallback: ${e.message}`);
+    return {
+      source: 'fallback_empty',
+      symbol: (() => {
+        const base = String(symbol || 'BTC').toUpperCase().replace(/[^A-Z0-9]/g, '');
+        return base.endsWith('USDT') ? base : `${base}USDT`;
+      })(),
+      interval,
+      candleCount: 0,
+      currentPrice: 0,
+      atr: 0,
+      swingHigh: 0,
+      swingLow: 0,
+      patterns: [],
+      summary: 'Candle feed temporarily unavailable.'
+    };
   }
 }
 
@@ -1837,7 +1941,7 @@ export async function fetchDualAI(userQuery, assetContext = '') {
     : userQuery;
 
   const signalMode = isSignalRequest(userQuery);
-  const extractedSymbol = extractPrimarySymbol(userQuery, assetContext);
+  let extractedSymbol = extractPrimarySymbol(userQuery, assetContext);
   const interval = '4h';
 
   // Global Mirror Protocol: if this is a signal query, force all devices to read one canonical response first.
@@ -1854,6 +1958,9 @@ export async function fetchDualAI(userQuery, assetContext = '') {
 
   if (extractedSymbol) {
     candleData = await fetchCandlePatterns(extractedSymbol, interval);
+    if (candleData?.source === 'fallback_symbol' && candleData?.symbol) {
+      extractedSymbol = String(candleData.symbol).replace('USDT', '');
+    }
   }
 
   const apiTradePlan = signalMode
@@ -2005,20 +2112,45 @@ ${apiTradePlan.rationaleHints[2] ? `3. ${apiTradePlan.rationaleHints[2]}` : ''}
       </div>`
     : '';
   const apiHealth = getApiHealthSummary();
-  const badApis = (apiHealth.services || []).filter(s => s.status !== 'ok');
-  const healthColor = badApis.length > 0 ? 'rgba(255, 184, 77, 0.18)' : 'rgba(52, 199, 89, 0.14)';
-  const healthBorder = badApis.length > 0 ? 'rgba(255, 184, 77, 0.4)' : 'rgba(52, 199, 89, 0.32)';
+  const OPTIONAL_FALLBACK_SERVICES = new Set([
+    'Etherscan Whale Flow',
+    'Reddit Sentiment',
+    'TAAPI RSI',
+    'NEXUS Candle API',
+    'LunarCrush Sentiment'
+  ]);
+  const fallbackApis = (apiHealth.services || []).filter(
+    s => s.status === 'degraded' && OPTIONAL_FALLBACK_SERVICES.has(s.name)
+  );
+  const coreServices = (apiHealth.services || []).filter(
+    s => !OPTIONAL_FALLBACK_SERVICES.has(s.name)
+  );
+  const coreOk = coreServices.filter(s => s.status === 'ok').length;
+  const coreTotal = coreServices.length;
+  const criticalApis = (apiHealth.services || []).filter(
+    s => s.status === 'failed' || (s.status === 'degraded' && !OPTIONAL_FALLBACK_SERVICES.has(s.name))
+  );
+  const healthColor = criticalApis.length > 0
+    ? 'rgba(255, 184, 77, 0.18)'
+    : fallbackApis.length > 0
+      ? 'rgba(93, 173, 226, 0.16)'
+      : 'rgba(52, 199, 89, 0.14)';
+  const healthBorder = criticalApis.length > 0
+    ? 'rgba(255, 184, 77, 0.4)'
+    : fallbackApis.length > 0
+      ? 'rgba(93, 173, 226, 0.36)'
+      : 'rgba(52, 199, 89, 0.32)';
   const sanitizeInline = (v) => String(v ?? '')
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;');
-  const healthText = badApis.length > 0
-    ? `API status: ${badApis.map(s => {
+  const healthText = criticalApis.length > 0
+    ? `API status: ${criticalApis.map(s => {
       const detail = s.detail ? ` (${sanitizeInline(s.detail).slice(0, 80)})` : '';
       return `${sanitizeInline(s.name)}=${s.status}${detail}`;
     }).join(' | ')}`
-    : (apiHealth.total > 0
-      ? `API status: ${apiHealth.ok}/${apiHealth.total} services healthy`
+    : (coreTotal > 0
+      ? `API status: ${coreOk}/${coreTotal} core services healthy${fallbackApis.length > 0 ? ` • ${fallbackApis.length} fallback feeds active` : ''}`
       : 'API status: health checks pending first sync');
   const healthBanner = `
     <div style="margin-bottom:0.6rem;padding:0.45rem 0.65rem;border-radius:6px;border:1px solid ${healthBorder};background:${healthColor};color:#D8DFEE;font-size:0.76rem;line-height:1.4;">
