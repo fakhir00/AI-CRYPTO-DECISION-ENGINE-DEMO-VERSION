@@ -38,6 +38,7 @@ let LIVE_OI = [];        // Binance open interest
 let LIVE_DEPTH = null;   // BTC order book depth
 let LIVE_BTC_CHAIN = null; // BTC on-chain health
 let OPPORTUNITY_SORT = 'alpha';
+const MAX_TOP_OPPORTUNITIES = 50;
 const STABLE_SYMBOLS = new Set([
   'USDT', 'USDC', 'DAI', 'BUSD', 'FDUSD', 'TUSD', 'PYUSD', 'USDE', 'USDD',
   'GUSD', 'LUSD', 'EURC', 'FRAX', 'USD1', 'USDS', 'USDP', 'USDB', 'RLUSD',
@@ -310,18 +311,21 @@ function computeOpportunityScore(asset = {}, emaInfo = null, spreadOverride = nu
   const volBillions = parseVolumeBillions(asset.vol);
 
   const moveComponent = absChange < 0.5
-    ? 4 + (absChange * 4)
+    ? 3.5 + (absChange * 3.5)
     : absChange < 2
-      ? 6 + ((absChange - 0.5) * 5)
+      ? 5.2 + ((absChange - 0.5) * 4.3)
       : absChange < 8
-        ? 13.5 + ((absChange - 2) * 2.4)
-        : 28 - Math.min(9, (absChange - 8) * 1.25);
+        ? 11.6 + ((absChange - 2) * 1.9)
+        : 22 - Math.min(8, (absChange - 8) * 1.1);
 
-  const liquidityComponent = Math.min(14, Math.max(0, (Math.log10((volBillions * 10) + 1)) * 8));
-  const directionalComponent = Math.min(20, spread * 7.5);
-  const baseComponent = Math.max(0, Math.min(100, score)) * 0.62;
+  const liquidityComponent = Math.min(10, Math.max(0, (Math.log10((volBillions * 10) + 1)) * 6.2));
+  const directionalComponent = Math.min(12, spread * 4.8);
+  const baseComponent = Math.max(0, Math.min(100, score)) * 0.56;
+  const raw = baseComponent + moveComponent + liquidityComponent + directionalComponent;
 
-  return Math.round(Math.min(100, Math.max(0, baseComponent + moveComponent + liquidityComponent + directionalComponent)));
+  // Soft-cap the extreme tail so "100" remains rare and meaningful.
+  const softened = raw > 92 ? 92 + ((raw - 92) * 0.35) : raw;
+  return Math.round(Math.min(99, Math.max(0, softened)));
 }
 
 function applyDirectionalBiasToAssets(assetList = []) {
@@ -1177,16 +1181,18 @@ function typeWriterEffect(element, lines, speed = 20) {
 
 function renderOpportunitiesPage() {
   const tbody = document.getElementById('opportunities-table-body');
+  const getAlphaScore = (asset) => Number.isFinite(asset?.score) ? asset.score : 50;
   const nonStable = [...assets].filter(asset => !isStablecoinSymbol(asset.symbol, asset.name, asset.price));
   const sorted = [...nonStable].sort((a, b) => {
     if (OPPORTUNITY_SORT === 'change') return Math.abs(b.change) - Math.abs(a.change);
     if (OPPORTUNITY_SORT === 'volume') return parseVolumeBillions(b.vol) - parseVolumeBillions(a.vol);
-    return ((b.opportunityScore ?? b.score) - (a.opportunityScore ?? a.score)) || a.symbol.localeCompare(b.symbol);
+    return (getAlphaScore(b) - getAlphaScore(a)) || a.symbol.localeCompare(b.symbol);
   });
+  const visibleRows = sorted.slice(0, MAX_TOP_OPPORTUNITIES);
   
-  tbody.innerHTML = sorted.map((asset, i) => {
+  tbody.innerHTML = visibleRows.map((asset, i) => {
     const sig = generateSignalForAsset(asset);
-    const displayScore = asset.opportunityScore ?? asset.score;
+    const displayScore = getAlphaScore(asset);
     // Calculate profit potential based on max target (t4) at 5x leverage
     let profitPot = 0;
     if (sig.type !== 'WAIT' && asset.price > 0 && sig.t4 > 0) {
