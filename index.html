@@ -144,16 +144,20 @@
             <section class="summary-row" id="dashboard-summary"></section>
             
             <!-- Main Chart Area -->
-            <div class="panel mb-4">
-               <div class="panel-header">
-                  <h2 class="panel-title" id="market-cap-title"><i data-feather="activity"></i> Total Market Cap Trend (24h)</h2>
-                  <div class="panel-actions">
-                     <button class="panel-action-btn">1H</button>
-                     <button class="panel-action-btn active">24H</button>
-                     <button class="panel-action-btn">7D</button>
+            <div class="panel mb-4 market-cap-panel">
+               <div class="panel-header market-cap-header">
+                  <h2 class="panel-title market-cap-title" id="market-cap-title">
+                    <i data-feather="activity"></i>
+                    <span id="market-cap-title-text">Total Market Cap Trend (24h)</span>
+                    <span class="market-cap-btc-price" id="market-cap-btc-price">BTC syncing...</span>
+                  </h2>
+                  <div class="panel-actions market-timeframe-actions" id="market-timeframe-actions">
+                     <button class="panel-action-btn market-timeframe-btn" data-tf="1H">1H</button>
+                     <button class="panel-action-btn market-timeframe-btn active" data-tf="24H">24H</button>
+                     <button class="panel-action-btn market-timeframe-btn" data-tf="7D">7D</button>
                   </div>
                </div>
-               <div class="panel-body chart-wrapper" style="height: 250px;">
+               <div class="panel-body chart-wrapper market-cap-chart-wrap">
                   <canvas id="mainMarketChart"></canvas>
                </div>
             </div>

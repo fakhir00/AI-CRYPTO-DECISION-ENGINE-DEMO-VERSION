@@ -333,6 +333,78 @@ body {
 .panel-body::-webkit-scrollbar-track { background: transparent; }
 .panel-body::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 2px; }
 
+/* Premium Dashboard Market Cap Panel */
+.market-cap-panel {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid rgba(139, 120, 255, 0.24);
+  box-shadow: 0 20px 35px rgba(4, 8, 18, 0.45), inset 0 1px 0 rgba(255,255,255,0.06);
+}
+
+.market-cap-panel::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(140% 95% at 0% 0%, rgba(139, 120, 255, 0.16), transparent 45%),
+    linear-gradient(180deg, rgba(255,255,255,0.04), transparent 55%);
+}
+
+.market-cap-header {
+  position: relative;
+  z-index: 2;
+}
+
+.market-cap-title {
+  flex-wrap: wrap;
+  gap: 0.55rem;
+}
+
+#market-cap-title-text {
+  font-weight: 700;
+  letter-spacing: 0.01em;
+}
+
+.market-cap-btc-price {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: #D9E2F2;
+  background: rgba(18, 26, 44, 0.7);
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 999px;
+  padding: 0.2rem 0.55rem;
+  white-space: nowrap;
+}
+
+.market-cap-btc-price.up {
+  color: var(--green);
+  border-color: rgba(0, 230, 118, 0.3);
+  box-shadow: 0 0 14px rgba(0, 230, 118, 0.12);
+}
+
+.market-cap-btc-price.down {
+  color: var(--red);
+  border-color: rgba(255, 51, 102, 0.3);
+  box-shadow: 0 0 14px rgba(255, 51, 102, 0.12);
+}
+
+.market-timeframe-actions {
+  background: rgba(2, 6, 15, 0.55);
+}
+
+.market-timeframe-btn {
+  min-width: 46px;
+}
+
+.market-cap-chart-wrap {
+  height: 180px;
+  padding: 1rem 1.25rem 0.9rem;
+  overflow: hidden;
+}
+
 /* Dashboard Grids */
 .summary-row {
   display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 1.5rem; margin-bottom: 2rem;
@@ -1000,6 +1072,9 @@ body {
   .panel-action-btn {
     white-space: nowrap;
   }
+  .market-cap-chart-wrap {
+    height: 170px;
+  }
 }
 
 /* Mobile View */
@@ -1057,6 +1132,22 @@ body {
   
   .card-value {
     font-size: 1.8rem;
+  }
+
+  .market-cap-title {
+    width: 100%;
+  }
+
+  .market-cap-btc-price {
+    font-size: 0.68rem;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .market-cap-chart-wrap {
+    height: 155px;
+    padding: 0.85rem 0.9rem 0.75rem;
   }
   
   /* Tables on mobile */

@@ -38,6 +38,7 @@ let LIVE_OI = [];        // Binance open interest
 let LIVE_DEPTH = null;   // BTC order book depth
 let LIVE_BTC_CHAIN = null; // BTC on-chain health
 let OPPORTUNITY_SORT = 'alpha';
+let CURRENT_MARKET_TIMEFRAME = '24H';
 const MAX_TOP_OPPORTUNITIES = 50;
 const STABLE_SYMBOLS = new Set([
   'USDT', 'USDC', 'DAI', 'BUSD', 'FDUSD', 'TUSD', 'PYUSD', 'USDE', 'USDD',
@@ -498,6 +499,8 @@ async function testSupabase() {
 
 // --- Charts Setup (Chart.js) ---
 async function initCharts(timeframe = '24H') {
+  CURRENT_MARKET_TIMEFRAME = String(timeframe || '24H').toUpperCase();
+  updateMarketCapHeader(CURRENT_MARKET_TIMEFRAME);
   Chart.defaults.color = '#94A3B8';
   Chart.defaults.font.family = "'JetBrains Mono', monospace";
   Chart.defaults.scale.grid.color = 'rgba(255, 255, 255, 0.05)';
@@ -614,6 +617,7 @@ function simulateMarketTick() {
         mainMarketChart.update('none'); 
       }
    }
+   updateMarketCapHeader(CURRENT_MARKET_TIMEFRAME);
    
    // Update UI Elements softly
   document.querySelectorAll('.live-price').forEach(el => {
@@ -900,6 +904,12 @@ function setupSidebar() {
 }
 
 function navigateToPage(pageId) {
+  const targetPage = document.getElementById(`page-${pageId}`);
+  if (!targetPage) {
+    console.warn(`⚠️ Unknown page requested: ${pageId}`);
+    return;
+  }
+
   document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
   const activeNav = document.querySelector(`.nav-item[data-page="${pageId}"]`);
   if(activeNav) activeNav.classList.add('active');
@@ -912,12 +922,39 @@ function navigateToPage(pageId) {
   document.querySelectorAll('.page').forEach(page => {
     page.classList.remove('active');
   });
-  document.getElementById(`page-${pageId}`).classList.add('active');
+  targetPage.classList.add('active');
 }
 
 function updateTime() {
   const now = new Date();
   document.getElementById('market-time').textContent = now.toLocaleTimeString('en-US', { hour12: false }) + ' UTC';
+}
+
+function getBtcAsset() {
+  return assets.find(a => a.symbol === 'BTC') || null;
+}
+
+function updateMarketCapHeader(timeframe = CURRENT_MARKET_TIMEFRAME) {
+  CURRENT_MARKET_TIMEFRAME = String(timeframe || CURRENT_MARKET_TIMEFRAME || '24H').toUpperCase();
+  const titleTextEl = document.getElementById('market-cap-title-text');
+  if (titleTextEl) {
+    titleTextEl.textContent = `Total Market Cap Trend (${CURRENT_MARKET_TIMEFRAME})`;
+  }
+
+  const btcPriceEl = document.getElementById('market-cap-btc-price');
+  if (btcPriceEl) {
+    const btc = getBtcAsset();
+    if (btc && Number.isFinite(btc.price) && btc.price > 0) {
+      const change = Number.isFinite(btc.change) ? btc.change : 0;
+      const prefix = change >= 0 ? '+' : '';
+      btcPriceEl.textContent = `BTC $${formatPrice(btc.price)}  ${prefix}${change.toFixed(2)}%`;
+      btcPriceEl.classList.remove('up', 'down');
+      btcPriceEl.classList.add(change >= 0 ? 'up' : 'down');
+    } else {
+      btcPriceEl.textContent = 'BTC syncing...';
+      btcPriceEl.classList.remove('up', 'down');
+    }
+  }
 }
 
 // --- Page Renders ---
@@ -930,6 +967,7 @@ function renderDashboard() {
   const avgChange = tradeableAssets.length ? (tradeableAssets.reduce((s, a) => s + a.change, 0) / tradeableAssets.length) : 0;
   const sentLabel = LIVE_SENTIMENT.score > 60 ? 'Bullish' : (LIVE_SENTIMENT.score < 40 ? 'Bearish' : 'Neutral');
   const sentClass = LIVE_SENTIMENT.score > 60 ? 'text-green' : (LIVE_SENTIMENT.score < 40 ? 'text-red' : 'text-warning');
+  updateMarketCapHeader(CURRENT_MARKET_TIMEFRAME);
 
   document.getElementById('dashboard-summary').innerHTML = `
     <div class="summary-card">
@@ -1269,17 +1307,14 @@ function renderTradingPage(symbol = 'BINANCE:SOLUSDT') {
 
 function setupAllButtons() {
   // 1. Dashboard Timeframe Buttons
-  document.querySelectorAll('#page-dashboard .panel-action-btn').forEach(btn => {
+  document.querySelectorAll('#market-timeframe-actions .market-timeframe-btn').forEach(btn => {
     btn.addEventListener('click', (e) => {
-      const tf = e.target.textContent;
-      const parent = e.target.closest('.panel-actions');
-      parent.querySelectorAll('.panel-action-btn').forEach(b => b.classList.remove('active'));
-      e.target.classList.add('active');
-      
-      const titleEl = document.getElementById('market-cap-title');
-      if (titleEl) titleEl.innerHTML = `<i data-feather="activity"></i> Total Market Cap Trend (${tf})`;
-      if (typeof feather !== 'undefined') feather.replace();
-      
+      const tf = e.currentTarget.dataset.tf || e.currentTarget.textContent.trim();
+      const parent = e.currentTarget.closest('.panel-actions');
+      if (parent) parent.querySelectorAll('.panel-action-btn').forEach(b => b.classList.remove('active'));
+      e.currentTarget.classList.add('active');
+
+      updateMarketCapHeader(tf);
       showToast(`Market chart updated to ${tf} timeframe`);
       initCharts(tf);
     });
@@ -1321,7 +1356,11 @@ function setupAllButtons() {
 
   // 5. Header Search & Alerts
   const searchBtn = document.getElementById('search-btn');
-  if(searchBtn) searchBtn.addEventListener('click', () => navigateToPage('command'));
+  if(searchBtn) searchBtn.addEventListener('click', () => {
+    navigateToPage('opportunities');
+    const table = document.getElementById('opportunities-table-body');
+    if (table) table.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  });
 
   const headerAlertBtn = document.getElementById('alert-btn');
   if(headerAlertBtn) headerAlertBtn.addEventListener('click', () => {
