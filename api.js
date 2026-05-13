@@ -962,7 +962,9 @@ function getSignalMirrorCacheKey(symbol, interval = '4h') {
 }
 
 function stripLegacyApiStatusBanner(html = '') {
-  return String(html).replace(/<div[^>]*>\s*API status:[\s\S]*?<\/div>\s*/i, '');
+  return String(html)
+    .replace(/<div[^>]*>\s*API status:[\s\S]*?<\/div>\s*/i, '')
+    .replace(/<div[^>]*>\s*Candle Pattern Feed\s*\([^)]+\)\s*:[\s\S]*?<\/div>\s*/i, '');
 }
 
 async function readMirroredSignal(symbol, interval = '4h') {
@@ -979,11 +981,11 @@ async function readMirroredSignal(symbol, interval = '4h') {
     if (error || !data?.data?.html || !data?.updated_at) return null;
     const age = Date.now() - new Date(data.updated_at).getTime();
     if (age > MIRROR_SIGNAL_TTL_MS) return null;
-    const html = stripLegacyApiStatusBanner(String(data.data.html || ''));
-    const hasPlaceholderTargets = /Take-?Profit Targets:[\s\S]*?1\)\s*1[\s\S]*?2\)\s*2[\s\S]*?3\)\s*3[\s\S]*?4\)\s*4/i.test(html);
-    const hasPlaceholderStop = /Stop Targets:[\s\S]*?1\)\s*1/i.test(html);
-    const hasUnavailableFeed = /Candle Pattern Feed\s*\([^)]+\)\s*:\s*Candle feed temporarily unavailable\./i.test(html);
-    const hasHardPatternClaim = /\b(High-Volume Breakout|Bear Flag Breakdown|Bull Flag Breakout|Ascending Triangle|Cup\s*&\s*Handle|Descending Channel|Shooting Star|Bullish Hammer|Bearish Marubozu)\b/i.test(html);
+    const rawHtml = String(data.data.html || '');
+    const hasPlaceholderTargets = /Take-?Profit Targets:[\s\S]*?1\)\s*1[\s\S]*?2\)\s*2[\s\S]*?3\)\s*3[\s\S]*?4\)\s*4/i.test(rawHtml);
+    const hasPlaceholderStop = /Stop Targets:[\s\S]*?1\)\s*1/i.test(rawHtml);
+    const hasUnavailableFeed = /Candle Pattern Feed\s*\([^)]+\)\s*:\s*Candle feed temporarily unavailable\./i.test(rawHtml);
+    const hasHardPatternClaim = /\b(High-Volume Breakout|Bear Flag Breakdown|Bull Flag Breakout|Ascending Triangle|Cup\s*&\s*Handle|Descending Channel|Shooting Star|Bullish Hammer|Bearish Marubozu)\b/i.test(rawHtml);
     if (hasPlaceholderTargets && hasPlaceholderStop) {
       // Reject low-quality mirrored payloads so they don't persist for the full TTL.
       return null;
@@ -992,7 +994,7 @@ async function readMirroredSignal(symbol, interval = '4h') {
       // Reject contradictory mirrored payloads: feed unavailable but rationale still claims specific patterns.
       return null;
     }
-    return html;
+    return stripLegacyApiStatusBanner(rawHtml);
   } catch (e) {
     console.warn('⚠️ Mirror cache read failed:', e.message);
     return null;
@@ -2195,11 +2197,6 @@ CRITICAL: Use this plan exactly in the final signal format.`;
     </div>
   `;
 
-  const sanitizeInline = (v) => String(v ?? '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
-
   // Build pattern badge if patterns were detected
   const patternBadge = hasDetectedCandlePatterns(candleData)
     ? `<div style="display:flex;flex-wrap:wrap;gap:0.3rem;margin-bottom:0.5rem;">
@@ -2212,25 +2209,8 @@ CRITICAL: Use this plan exactly in the final signal format.`;
           </span>`).join('')}
       </div>`
     : '';
-  const patternSummary = (() => {
-    if (!candleData) return '';
-    const symbolLabel = String(candleData.symbol || `${fallbackSymbol}USDT`).toUpperCase();
-    const intervalLabel = String(candleData.interval || interval).toLowerCase();
-    const names = Array.isArray(candleData.patterns)
-      ? candleData.patterns.map(p => p?.name).filter(Boolean)
-      : [];
-    const summaryText = names.length > 0
-      ? names.slice(0, 4).join(' | ')
-      : (feedUnavailable
-        ? 'Candle feed temporarily unavailable. Running fallback mode from momentum, ATR, and market structure.'
-        : (candleData.summary || 'No high-confidence candlestick pattern detected in the latest candles.'));
-    return `<div style="margin-bottom:0.6rem;padding:0.45rem 0.65rem;border-radius:6px;border:1px solid rgba(139,120,255,0.28);background:rgba(139,120,255,0.10);color:#DDE4FF;font-size:0.76rem;line-height:1.45;">
-      Candle Pattern Feed (${sanitizeInline(symbolLabel)} ${sanitizeInline(intervalLabel)}): ${sanitizeInline(summaryText)}
-    </div>`;
-  })();
   const finalHtml = `
     <div style="width:100%;">
-      ${patternSummary}
       ${patternBadge}
       ${preamble ? `<div style="color:#BAC2DE;line-height:1.6;margin-bottom:0.5rem;">${renderMarkdown(preamble)}</div>` : ''}
       ${renderedRationales ? `<div style="color:#BAC2DE;line-height:1.6;margin-bottom:0.75rem;">${renderMarkdown(renderedRationales)}</div>` : ''}
