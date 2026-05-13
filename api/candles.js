@@ -289,7 +289,8 @@ function parseCandleResult(raw, symbol, interval, source = 'fresh') {
   const patterns = detectPatterns(candles);
   const atr = calculateATR(candles, 14);
   const structure = getMarketStructure(candles);
-  const currentPrice = candles[candles.length - 1]?.close || 0;
+  const lastClose = candles[candles.length - 1]?.close;
+  const currentPrice = Number.isFinite(lastClose) ? lastClose : null;
 
   return {
     source,
