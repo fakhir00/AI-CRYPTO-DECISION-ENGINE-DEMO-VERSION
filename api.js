@@ -838,12 +838,17 @@ export async function fetchCandlePatterns(symbol, interval = '4h') {
     if (!res.ok) throw new Error(`Candle API HTTP ${res.status}`);
     const data = await res.json();
     const source = String(data?.source || 'fresh');
+    const sourceLower = source.toLowerCase();
     const patternCount = data.patterns?.length ?? 0;
+    const candleCount = Number(data?.candleCount) || 0;
+    const hasUsableSeries = candleCount > 0 && Number(data?.currentPrice) > 0;
+    const isHardFallback = sourceLower.includes('fallback_empty') || sourceLower.includes('error');
+    const isSymbolFallback = sourceLower.includes('fallback_symbol');
     console.log(`✅ Candle patterns fetched for ${cleanTicker} (${interval}):`, patternCount, 'patterns');
-    if (/fallback|stale/i.test(source)) {
+    if (isHardFallback || isSymbolFallback || !hasUsableSeries) {
       markApiDegraded('NEXUS Candle API', `${cleanTicker} ${interval} fallback (${source})`);
     } else {
-      markApiOk('NEXUS Candle API', `${cleanTicker} ${interval} (${patternCount} patterns)`);
+      markApiOk('NEXUS Candle API', `${cleanTicker} ${interval} (${patternCount} patterns, source=${source})`);
     }
     return data;
   } catch (e) {

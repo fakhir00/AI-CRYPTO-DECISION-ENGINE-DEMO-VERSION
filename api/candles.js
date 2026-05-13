@@ -253,11 +253,55 @@ function detectPatterns(candles) {
 // ── Main Handler ──────────────────────────────────────────────
 
 const ALLOWED_INTERVALS = new Set(['1m', '5m', '15m', '30m', '1h', '4h', '1d']);
+const BINANCE_KLINE_ENDPOINTS = [
+  'https://api.binance.com/api/v3/klines',
+  'https://api1.binance.com/api/v3/klines',
+  'https://api2.binance.com/api/v3/klines',
+  'https://api3.binance.com/api/v3/klines',
+  'https://data-api.binance.vision/api/v3/klines'
+];
 
 function sanitizeSymbol(raw = 'BTCUSDT') {
   const cleaned = String(raw || 'BTCUSDT').toUpperCase().replace(/[^A-Z0-9]/g, '');
   if (!cleaned) return 'BTCUSDT';
   return cleaned.endsWith('USDT') ? cleaned : `${cleaned}USDT`;
+}
+
+async function fetchKlinesWithEndpointFallback(symbol, interval, limit = 100) {
+  let lastError = null;
+  let lastStatus = null;
+
+  for (const endpoint of BINANCE_KLINE_ENDPOINTS) {
+    const url = `${endpoint}?symbol=${encodeURIComponent(symbol)}&interval=${encodeURIComponent(interval)}&limit=${limit}`;
+    try {
+      const response = await fetch(url, {
+        headers: { accept: 'application/json' }
+      });
+      if (!response.ok) {
+        lastStatus = response.status;
+        lastError = new Error(`${new URL(endpoint).hostname} HTTP ${response.status}`);
+        continue;
+      }
+      const raw = await response.json();
+      if (!Array.isArray(raw) || raw.length === 0) {
+        lastError = new Error(`${new URL(endpoint).hostname} returned empty candles`);
+        continue;
+      }
+      return {
+        ok: true,
+        raw,
+        endpoint
+      };
+    } catch (err) {
+      lastError = err;
+    }
+  }
+
+  return {
+    ok: false,
+    status: lastStatus,
+    error: lastError || new Error('No Binance candle endpoint returned data')
+  };
 }
 
 function parseCandleResult(raw, symbol, interval, source = 'fresh') {
@@ -317,6 +361,7 @@ export default async function handler(req, res) {
   const cacheKey = `candles_${requestedSymbol}_${interval}`;
   const now = Date.now();
   const localCached = cache[cacheKey];
+  let staleGlobalCache = null;
 
   try {
     // 1) Fast local cache for warm paths
@@ -340,6 +385,10 @@ export default async function handler(req, res) {
             cache[cacheKey] = { timestamp: now, data: cachedData.data };
             return res.status(200).json({ source: 'global_cache', ...cachedData.data });
           }
+          staleGlobalCache = {
+            ageMs: age,
+            data: cachedData.data
+          };
         }
       } catch (cacheErr) {
         console.warn('⚠️ Candle cache read skipped:', cacheErr.message);
@@ -348,24 +397,32 @@ export default async function handler(req, res) {
 
     // 3) Fetch requested symbol from Binance
     let activeSymbol = requestedSymbol;
-    let response = await fetch(`https://api.binance.com/api/v3/klines?symbol=${activeSymbol}&interval=${interval}&limit=100`);
+    let klinesResult = await fetchKlinesWithEndpointFallback(activeSymbol, interval, 100);
 
     // If requested symbol is invalid/unavailable, gracefully fallback to BTCUSDT.
-    if (!response.ok && activeSymbol !== 'BTCUSDT') {
-      const fallbackRes = await fetch(`https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=${interval}&limit=100`);
-      if (fallbackRes.ok) {
-        response = fallbackRes;
+    if (!klinesResult.ok && activeSymbol !== 'BTCUSDT') {
+      const fallbackResult = await fetchKlinesWithEndpointFallback('BTCUSDT', interval, 100);
+      if (fallbackResult.ok) {
+        klinesResult = fallbackResult;
         activeSymbol = 'BTCUSDT';
       }
     }
 
-    if (!response.ok) {
-      // As last resort, serve stale local cache or a non-fatal empty payload.
+    if (!klinesResult.ok) {
+      // As last resort, serve stale cache tiers before returning a non-fatal empty payload.
       if (localCached?.data) {
         return res.status(200).json({
           source: 'stale_memory',
-          warning: `Live fetch failed: Binance HTTP ${response.status}`,
+          warning: `Live fetch failed: ${klinesResult.error?.message || `Binance HTTP ${klinesResult.status || 'unknown'}`}`,
           ...localCached.data
+        });
+      }
+      if (staleGlobalCache?.data) {
+        return res.status(200).json({
+          source: 'stale_global_cache',
+          warning: `Live fetch failed: ${klinesResult.error?.message || `Binance HTTP ${klinesResult.status || 'unknown'}`}`,
+          staleAgeSec: Math.max(1, Math.round(staleGlobalCache.ageMs / 1000)),
+          ...staleGlobalCache.data
         });
       }
       return res.status(200).json({
@@ -382,8 +439,15 @@ export default async function handler(req, res) {
       });
     }
 
-    const raw = await response.json();
+    const raw = klinesResult.raw;
     const result = parseCandleResult(raw, activeSymbol, interval, activeSymbol === requestedSymbol ? 'fresh' : 'fallback_symbol');
+    result.exchangeEndpoint = (() => {
+      try {
+        return new URL(klinesResult.endpoint).hostname;
+      } catch {
+        return null;
+      }
+    })();
     if (activeSymbol !== requestedSymbol) {
       result.requestedSymbol = requestedSymbol;
       result.note = `Requested symbol unavailable on Binance; using ${activeSymbol} context.`;
