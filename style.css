@@ -339,6 +339,8 @@ body {
   overflow: hidden;
   border: 1px solid rgba(139, 120, 255, 0.24);
   box-shadow: 0 20px 35px rgba(4, 8, 18, 0.45), inset 0 1px 0 rgba(255,255,255,0.06);
+  min-height: 290px;
+  max-height: 290px;
 }
 
 .market-cap-panel::before {
@@ -403,6 +405,9 @@ body {
   height: 180px;
   padding: 1rem 1.25rem 0.9rem;
   overflow: hidden;
+  flex: 0 0 180px !important;
+  min-height: 180px;
+  max-height: 180px;
 }
 
 /* Dashboard Grids */
@@ -1074,6 +1079,13 @@ body {
   }
   .market-cap-chart-wrap {
     height: 170px;
+    flex-basis: 170px !important;
+    min-height: 170px;
+    max-height: 170px;
+  }
+  .market-cap-panel {
+    min-height: 280px;
+    max-height: 280px;
   }
 }
 
@@ -1148,6 +1160,13 @@ body {
   .market-cap-chart-wrap {
     height: 155px;
     padding: 0.85rem 0.9rem 0.75rem;
+    flex-basis: 155px !important;
+    min-height: 155px;
+    max-height: 155px;
+  }
+  .market-cap-panel {
+    min-height: 255px;
+    max-height: 255px;
   }
   
   /* Tables on mobile */
