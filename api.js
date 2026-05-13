@@ -857,13 +857,27 @@ export async function fetchCandlePatterns(symbol, interval = '4h') {
       })(),
       interval,
       candleCount: 0,
-      currentPrice: 0,
-      atr: 0,
-      swingHigh: 0,
-      swingLow: 0,
+      currentPrice: null,
+      atr: null,
+      swingHigh: null,
+      swingLow: null,
       patterns: [],
       summary: 'Candle feed temporarily unavailable.'
     };
+  }
+}
+
+async function fetchBinanceReferencePrice(symbol = 'BTC') {
+  try {
+    const ticker = String(symbol || 'BTC').replace('/', '').replace('-', '').toUpperCase();
+    const cleanTicker = ticker.endsWith('USDT') ? ticker : `${ticker}USDT`;
+    const res = await fetch(`https://api.binance.com/api/v3/ticker/price?symbol=${cleanTicker}`);
+    if (!res.ok) return null;
+    const data = await res.json();
+    const price = toNumber(data?.price);
+    return price && price > 0 ? price : null;
+  } catch {
+    return null;
   }
 }
 
@@ -1226,7 +1240,7 @@ function buildDirectionalEntryLadder(direction = 'LONG', rawEntries = [], candle
   const adaptiveBase = deriveAdaptiveStartFromCandle(side, current, atr, candleData);
   const base = baseFromEntries ?? adaptiveBase ?? current ?? null;
 
-  if (base === null) return [];
+  if (!(base > 0)) return [];
 
   const step1 = atr && atr > 0 ? atr * 0.5 : Math.max(base * 0.01, 0.0000001);
   const step2 = atr && atr > 0 ? atr * 1.0 : Math.max(base * 0.02, 0.0000002);
@@ -1257,18 +1271,22 @@ function buildCanonicalSignalText(rawSignalText = '', fallbackSymbol = 'BTC', op
   const directionLabel = direction === 'SHORT' ? 'Short' : 'Long';
 
   if (forcedPlan && Array.isArray(forcedPlan.entries) && Array.isArray(forcedPlan.targets) && forcedPlan.targets.length >= 4) {
-    const formattedEntries = forcedPlan.entries
-      .slice(0, 3)
-      .map(v => formatSignalPrice(v, options.candleData?.currentPrice || v));
-    const formattedTargets = forcedPlan.targets
-      .slice(0, 4)
-      .map(v => formatSignalPrice(v, options.candleData?.currentPrice || v));
-    const formattedStop = formatSignalPrice(forcedPlan.stop, options.candleData?.currentPrice || forcedPlan.stop);
+    const entryNums = forcedPlan.entries.slice(0, 3).map(toNumber);
+    const targetNums = forcedPlan.targets.slice(0, 4).map(toNumber);
+    const stopNum = toNumber(forcedPlan.stop);
+    const forcedPlanValid =
+      entryNums.length === 3 &&
+      targetNums.length === 4 &&
+      entryNums.every(n => n !== null && n > 0) &&
+      targetNums.every(n => n !== null && n > 0) &&
+      stopNum !== null &&
+      stopNum > 0;
 
-    if (formattedEntries.length >= 3) {
-      const entryNums = forcedPlan.entries.map(toNumber).filter(n => n !== null);
-      const avgEntry = entryNums.length ? (entryNums.reduce((sum, n) => sum + n, 0) / entryNums.length) : null;
-      const stopNum = toNumber(forcedPlan.stop);
+    if (forcedPlanValid) {
+      const formattedEntries = entryNums.map(v => formatSignalPrice(v, options.candleData?.currentPrice || v));
+      const formattedTargets = targetNums.map(v => formatSignalPrice(v, options.candleData?.currentPrice || v));
+      const formattedStop = formatSignalPrice(stopNum, options.candleData?.currentPrice || stopNum);
+      const avgEntry = entryNums.reduce((sum, n) => sum + n, 0) / entryNums.length;
       const trailingConfig = getDynamicTrailingConfig(direction, avgEntry, stopNum, options.candleData, {
         confidence: options.tradeMeta?.confidence ?? forcedPlan?.confidence,
         changePct: options.tradeMeta?.changePct,
@@ -1364,7 +1382,13 @@ ${trailingBlock}`;
   let stop = stops[0] || null;
   const entryLadderNums = buildDirectionalEntryLadder(direction, entries, options.candleData);
   const entryLadder = entryLadderNums.map(v => formatSignalPrice(v, options.candleData?.currentPrice || v));
-  const refPrice = toNumber(options.candleData?.currentPrice) ?? entryLadderNums[0] ?? toNumber(entries[0]) ?? 1;
+  const refCandidates = [
+    toNumber(options.candleData?.currentPrice),
+    entryLadderNums[0],
+    toNumber(entries[0]),
+    1
+  ];
+  const refPrice = refCandidates.find(v => Number.isFinite(v) && v > 0) || 1;
 
   const parsedTargets = targets.map(toNumber).filter(n => n !== null);
   const parsedStop = toNumber(stop);
@@ -1407,23 +1431,31 @@ ${trailingBlock}`;
 
   // If parsing fails, still return a cleaned copy-ready signal without forbidden annotations.
   if (entryLadder.length < 3 || targets.length < 4 || !stop) {
-    if (entryLadder.length >= 3) {
-      const entryBase = entryLadderNums[0] ?? refPrice;
-      const atrNum = toNumber(options.candleData?.atr) ?? Math.max(entryBase * 0.03, 0.0001);
-      const autoStopNum = direction === 'SHORT'
-        ? entryBase + (1.25 * atrNum)
-        : Math.max(0, entryBase - (1.25 * atrNum));
-      const autoRisk = Math.max(Math.abs(entryBase - autoStopNum), atrNum * 0.6);
-      const dirMult = direction === 'SHORT' ? -1 : 1;
-      const autoTargets = [
-        entryBase + (dirMult * autoRisk * 1.0),
-        entryBase + (dirMult * autoRisk * 1.8),
-        entryBase + (dirMult * autoRisk * 2.7),
-        entryBase + (dirMult * autoRisk * 3.5)
-      ].map(v => formatSignalPrice(v, refPrice));
-      const autoStop = formatSignalPrice(autoStopNum, refPrice);
+    const atrNum = toNumber(options.candleData?.atr) ?? Math.max(refPrice * 0.03, 0.0001);
+    const fallbackBase = refPrice;
+    const step1 = atrNum > 0 ? atrNum * 0.5 : Math.max(fallbackBase * 0.01, 0.0000001);
+    const step2 = atrNum > 0 ? atrNum * 1.0 : Math.max(fallbackBase * 0.02, 0.0000002);
+    const autoEntryNums = entryLadderNums.length >= 3
+      ? entryLadderNums
+      : (direction === 'SHORT'
+        ? [fallbackBase, fallbackBase + step1, fallbackBase + step2]
+        : [fallbackBase, Math.max(0.0000001, fallbackBase - step1), Math.max(0.0000001, fallbackBase - step2)]);
+    const autoEntries = autoEntryNums.map(v => formatSignalPrice(v, refPrice));
+    const entryBase = autoEntryNums[0] ?? refPrice;
+    const autoStopNum = direction === 'SHORT'
+      ? entryBase + (1.25 * atrNum)
+      : Math.max(0.0000001, entryBase - (1.25 * atrNum));
+    const autoRisk = Math.max(Math.abs(entryBase - autoStopNum), atrNum * 0.6);
+    const dirMult = direction === 'SHORT' ? -1 : 1;
+    const autoTargets = [
+      entryBase + (dirMult * autoRisk * 1.0),
+      entryBase + (dirMult * autoRisk * 1.8),
+      entryBase + (dirMult * autoRisk * 2.7),
+      entryBase + (dirMult * autoRisk * 3.5)
+    ].map(v => formatSignalPrice(Math.max(v, 0.0000001), refPrice));
+    const autoStop = formatSignalPrice(autoStopNum, refPrice);
 
-      return `#${symbol}/USDT
+    return `#${symbol}/USDT
 
 Exchanges: Binance Futures
 
@@ -1432,7 +1464,7 @@ Signal Type: Regular (${directionLabel})
 Leverage: Cross (20X)
 
 Entry :
-(${entryLadder[0]}, ${entryLadder[1]}, ${entryLadder[2]})
+(${autoEntries[0]}, ${autoEntries[1]}, ${autoEntries[2]})
 
 Take-Profit Targets:
 1) ${autoTargets[0]}
@@ -1444,16 +1476,6 @@ Stop Targets:
 1) ${autoStop}
 
 ${trailingBlock}`;
-    }
-
-    let fallbackSignal = cleaned;
-    const trailingSectionRe = /Trailing Configuration:\s*[\s\S]*?(?=\n(?:#{1,6}\s*)?(?:[A-Z0-9]{2,10}\s+)?Trade Rationales|\s*$)/i;
-    if (trailingSectionRe.test(fallbackSignal)) {
-      fallbackSignal = fallbackSignal.replace(trailingSectionRe, `${trailingBlock}\n\n`);
-    } else {
-      fallbackSignal = `${fallbackSignal}\n\n${trailingBlock}`;
-    }
-    return fallbackSignal.trim();
   }
 
   return `#${symbol}/USDT
@@ -1611,18 +1633,19 @@ function evaluateDirectionalBias(snapshot = null, candleData = null, userQuery =
   };
 }
 
-function buildApiDrivenTradePlan({ symbol = 'BTC', userQuery = '', assetContext = '', candleData = null } = {}) {
+function buildApiDrivenTradePlan({ symbol = 'BTC', userQuery = '', assetContext = '', candleData = null, fallbackPrice = null } = {}) {
   const snapshots = parseAssetContextSnapshots(assetContext);
   const snap = snapshots[String(symbol || '').toUpperCase()] || null;
   let current = toNumber(candleData?.currentPrice);
-  if (current === null) current = toNumber(snap?.price);
-  if (current === null) return null;
+  if (!(current > 0)) current = toNumber(snap?.price);
+  if (!(current > 0)) current = toNumber(fallbackPrice);
+  if (!(current > 0)) return null;
 
   const bias = evaluateDirectionalBias(snap, candleData, userQuery);
   const direction = bias.direction;
 
   const atr = toNumber(candleData?.atr);
-  const safeAtr = atr && atr > 0 ? atr : current * 0.03;
+  const safeAtr = atr && atr > 0 ? atr : Math.max(current * 0.03, current * 0.008);
   const swingHigh = toNumber(candleData?.swingHigh);
   const swingLow = toNumber(candleData?.swingLow);
   const range = (swingHigh !== null && swingLow !== null && swingHigh > swingLow) ? (swingHigh - swingLow) : 0;
@@ -1665,20 +1688,32 @@ function buildApiDrivenTradePlan({ symbol = 'BTC', userQuery = '', assetContext 
   if (direction === 'LONG') stop = Math.max(0, stop);
 
   let risk = Math.abs(entry1 - stop);
-  if (!(risk > 0)) risk = safeAtr;
+  if (!(risk > 0)) risk = Math.max(safeAtr, current * 0.01);
 
   const targets = direction === 'LONG'
     ? [entry1 + (risk * 1.0), entry1 + (risk * 1.8), entry1 + (risk * 2.7), entry1 + (risk * 3.5)]
     : [entry1 - (risk * 1.0), entry1 - (risk * 1.8), entry1 - (risk * 2.7), entry1 - (risk * 3.5)];
+
+  const minPrice = Math.max(current * 0.02, 0.0000001);
+  const sanitizePositive = (n, fallback = current) => {
+    const x = toNumber(n);
+    if (!(x > 0)) return fallback;
+    return x;
+  };
+
+  const sanitizedEntries = [entry1, entry2, entry3].map(v => sanitizePositive(v, current));
+  const sanitizedTargets = targets.map(v => sanitizePositive(v, minPrice));
+  const sanitizedStop = sanitizePositive(stop, direction === 'SHORT' ? current * 1.02 : current * 0.98);
+
   const planSymbol = String(symbol || '').toUpperCase();
   const planChangePct = toNumber(snap?.changePct) ?? toNumber(candleData?.changePct);
 
   return {
     symbol: planSymbol,
     direction,
-    entries: [entry1, entry2, entry3],
-    targets,
-    stop,
+    entries: sanitizedEntries,
+    targets: sanitizedTargets,
+    stop: sanitizedStop,
     confidence: bias.confidence,
     changePct: planChangePct,
     patternBias: getPatternBiasScore(candleData),
@@ -1955,11 +1990,22 @@ export async function fetchDualAI(userQuery, assetContext = '') {
 
   // 1. Detect if the query is about a specific asset (e.g. BTC, ETH, ONDO)
   let candleData = null;
+  let fallbackReferencePrice = null;
 
   if (extractedSymbol) {
     candleData = await fetchCandlePatterns(extractedSymbol, interval);
     if (candleData?.source === 'fallback_symbol' && candleData?.symbol) {
       extractedSymbol = String(candleData.symbol).replace('USDT', '');
+    }
+    if (!(toNumber(candleData?.currentPrice) > 0)) {
+      fallbackReferencePrice = await fetchBinanceReferencePrice(extractedSymbol);
+      if (fallbackReferencePrice && candleData) {
+        candleData = {
+          ...candleData,
+          currentPrice: fallbackReferencePrice,
+          source: candleData.source || 'fallback_price'
+        };
+      }
     }
   }
 
@@ -1968,7 +2014,8 @@ export async function fetchDualAI(userQuery, assetContext = '') {
       symbol: extractedSymbol || candleData?.symbol?.replace('USDT', '') || 'BTC',
       userQuery,
       assetContext,
-      candleData
+      candleData,
+      fallbackPrice: fallbackReferencePrice
     })
     : null;
   const contextSnapshots = parseAssetContextSnapshots(assetContext);

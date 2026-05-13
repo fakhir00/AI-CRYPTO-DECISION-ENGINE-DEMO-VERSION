@@ -267,10 +267,10 @@ function parseCandleResult(raw, symbol, interval, source = 'fresh') {
       symbol,
       interval,
       candleCount: 0,
-      currentPrice: 0,
-      atr: 0,
-      swingHigh: 0,
-      swingLow: 0,
+      currentPrice: null,
+      atr: null,
+      swingHigh: null,
+      swingLow: null,
       patterns: [],
       summary: 'No candlestick data available.'
     };
@@ -372,10 +372,10 @@ export default async function handler(req, res) {
         symbol: activeSymbol,
         interval,
         candleCount: 0,
-        currentPrice: 0,
-        atr: 0,
-        swingHigh: 0,
-        swingLow: 0,
+        currentPrice: null,
+        atr: null,
+        swingHigh: null,
+        swingLow: null,
         patterns: [],
         summary: 'Candle feed temporarily unavailable.'
       });
@@ -419,10 +419,10 @@ export default async function handler(req, res) {
       symbol: requestedSymbol,
       interval,
       candleCount: 0,
-      currentPrice: 0,
-      atr: 0,
-      swingHigh: 0,
-      swingLow: 0,
+      currentPrice: null,
+      atr: null,
+      swingHigh: null,
+      swingLow: null,
       patterns: [],
       summary: 'Candle feed temporarily unavailable.'
     });
