@@ -1046,10 +1046,11 @@ function renderDashboard() {
   `;
   if (typeof feather !== 'undefined') feather.replace();
 
-  // Dash Opportunities Mini — Show top 15 for comprehensive overview
+  // Dash Opportunities Mini — keep compact for dashboard readability
   const dashOpps = document.getElementById('dash-opportunities-list');
   const sortedForDash = alphaRankedAssets;
-  dashOpps.innerHTML = sortedForDash.slice(0, 15).map(asset => `
+  if (dashOpps) {
+    dashOpps.innerHTML = sortedForDash.slice(0, 8).map(asset => `
     <div class="asset-row">
       <div class="asset-info">
         <div class="asset-icon">${asset.symbol[0]}</div>
@@ -1062,19 +1063,24 @@ function renderDashboard() {
       <div class="asset-change ${asset.change >= 0 ? 'text-green' : 'text-red'}">${asset.change > 0 ? '+' : ''}${asset.change.toFixed(2)}%</div>
       <div class="bias-badge bias-${asset.bias}">${asset.bias === 'bullish' ? 'LONG' : (asset.bias === 'bearish' ? 'SHORT' : 'WAIT')}</div>
     </div>
-  `).join('');
+    `).join('');
+  }
 
   // AI Mini with typing effect — uses live top asset
   const aiContent = document.getElementById('dash-ai-research-content');
-  aiContent.innerHTML = '';
-  const topSym = topAsset ? topAsset.symbol : 'BTC';
-  const topName = topAsset ? topAsset.name : 'Bitcoin';
-  const topBias = topAsset ? topAsset.bias : 'neutral';
-  typeWriterEffect(aiContent, [
-     `> Executive Summary: ${topSym}`,
-     `> ${topName} shows ${topBias} momentum. Alpha Score: ${topAssetScore ?? '—'}/100. 24H Change: ${topAsset ? topAsset.change.toFixed(2) : 0}%.`,
-     `> Thesis: ${topName} is the highest-conviction play based on our multi-factor scoring engine. On-chain and sentiment data align with ${topBias} positioning.`
-  ]);
+  if (aiContent) {
+    aiContent.innerHTML = '';
+    const topSym = topAsset ? topAsset.symbol : 'BTC';
+    const topName = topAsset ? topAsset.name : 'Bitcoin';
+    const topBias = topAsset ? topAsset.bias : 'neutral';
+    const scoreLabel = Number.isFinite(topAssetScore) ? topAssetScore : '—';
+    const changeLabel = topAsset && Number.isFinite(topAsset.change) ? topAsset.change.toFixed(2) : '0.00';
+    typeWriterEffect(aiContent, [
+      `> Executive Summary: ${topSym}`,
+      `> ${topName} shows ${topBias} momentum. Alpha Score: ${scoreLabel}/100. 24H Change: ${changeLabel}%.`,
+      `> Thesis: ${topName} is the highest-conviction play based on our multi-factor scoring engine. On-chain and sentiment data align with ${topBias} positioning.`
+    ]);
+  }
 
   // Whale Mini
   const dashWhale = document.getElementById('dash-whale-list');
@@ -1118,10 +1124,9 @@ function renderDashboard() {
     
     // Add derivatives intelligence to Alpha feed
     if (LIVE_FUNDING.length > 0) {
-      const extremeFunding = LIVE_FUNDING.filter(f => Math.abs(f.rate) > 0.0005);
+      const extremeFunding = LIVE_FUNDING.filter(f => Math.abs(f.rate) > 0.0005).slice(0, 2);
       extremeFunding.forEach(f => {
         const direction = f.rate > 0 ? 'Longs Overleveraged' : 'Shorts Squeezable';
-        const impact = Math.abs(f.rate) > 0.001 ? 'high' : 'medium';
         dashAlpha.innerHTML += `
           <div class="feed-item news-impact">
             <div class="feed-header">
@@ -1226,36 +1231,58 @@ window.triggerMcp = async function(type) {
 
 
 function typeWriterEffect(element, lines, speed = 20) {
-   element.innerHTML = '';
-   let lineIdx = 0;
-   
-   function typeLine() {
-      if (lineIdx >= lines.length) {
-         element.innerHTML += '<span class="ai-cursor"></span>';
-         return;
+  if (!element) return;
+  const safeLines = Array.isArray(lines) ? lines : [];
+  const state = element._typingState || { runId: 0, timers: new Set() };
+  state.runId += 1;
+  const runId = state.runId;
+  state.timers.forEach((timerId) => clearTimeout(timerId));
+  state.timers.clear();
+  element._typingState = state;
+  element.innerHTML = '';
+
+  const schedule = (fn, delay) => {
+    const timerId = setTimeout(() => {
+      state.timers.delete(timerId);
+      if (state.runId !== runId) return;
+      fn();
+    }, delay);
+    state.timers.add(timerId);
+  };
+
+  let lineIdx = 0;
+
+  function typeLine() {
+    if (state.runId !== runId) return;
+    if (lineIdx >= safeLines.length) {
+      const cursor = document.createElement('span');
+      cursor.className = 'ai-cursor';
+      element.appendChild(cursor);
+      return;
+    }
+
+    const lineText = String(safeLines[lineIdx] || '');
+    const lineDiv = document.createElement('div');
+    lineDiv.className = lineIdx === 0 ? 'ai-line highlight' : 'ai-line';
+    lineDiv.style.opacity = '1';
+    element.appendChild(lineDiv);
+
+    let charIdx = 0;
+    function typeChar() {
+      if (state.runId !== runId) return;
+      if (charIdx < lineText.length) {
+        lineDiv.textContent += lineText.charAt(charIdx);
+        charIdx += 1;
+        schedule(typeChar, speed);
+      } else {
+        lineIdx += 1;
+        schedule(typeLine, 100);
       }
-      
-      const lineText = lines[lineIdx];
-      const lineDiv = document.createElement('div');
-      lineDiv.className = lineIdx === 0 ? 'ai-line highlight' : 'ai-line';
-      lineDiv.style.opacity = '1';
-      element.appendChild(lineDiv);
-      
-      let charIdx = 0;
-      function typeChar() {
-         if (charIdx < lineText.length) {
-            lineDiv.textContent += lineText.charAt(charIdx);
-            charIdx++;
-            setTimeout(typeChar, speed);
-         } else {
-            lineIdx++;
-            setTimeout(typeLine, 100);
-         }
-      }
-      typeChar();
-   }
-   
-   typeLine();
+    }
+    typeChar();
+  }
+
+  typeLine();
 }
 
 function renderOpportunitiesPage() {
@@ -1570,19 +1597,31 @@ function setupAiResearchChat() {
   const history = document.getElementById('ai-chat-history');
 
   if (!input || !btn || !history) return;
+  let isSubmitting = false;
 
   const handleChat = async () => {
     const val = input.value.trim();
-    if(!val) return;
+    if (!val || isSubmitting) return;
+    isSubmitting = true;
+    btn.disabled = true;
     
     // Add user message
     const userMsg = document.createElement('div');
     userMsg.className = 'chat-message user';
     userMsg.style.flexDirection = 'row-reverse';
-    userMsg.innerHTML = `
-      <div class="avatar" style="background: rgba(255,255,255,0.1);"><i data-feather="user"></i></div>
-      <div class="bubble" style="background: var(--primary-gradient); color: #fff;">${val}</div>
-    `;
+    const userAvatar = document.createElement('div');
+    userAvatar.className = 'avatar';
+    userAvatar.style.background = 'rgba(255,255,255,0.1)';
+    const userIcon = document.createElement('i');
+    userIcon.setAttribute('data-feather', 'user');
+    userAvatar.appendChild(userIcon);
+    const userBubble = document.createElement('div');
+    userBubble.className = 'bubble';
+    userBubble.style.background = 'var(--primary-gradient)';
+    userBubble.style.color = '#fff';
+    userBubble.textContent = val;
+    userMsg.appendChild(userAvatar);
+    userMsg.appendChild(userBubble);
     history.appendChild(userMsg);
     if (typeof feather !== 'undefined') feather.replace();
     
@@ -1592,42 +1631,66 @@ function setupAiResearchChat() {
     // Add loading indicator
     const loadingMsg = document.createElement('div');
     loadingMsg.className = 'chat-message ai';
-    loadingMsg.innerHTML = `
-      <div class="avatar"><i data-feather="cpu"></i></div>
-      <div class="bubble"><span class="ai-cursor"></span> Synthesizing data...</div>
-    `;
+    const loadingAvatar = document.createElement('div');
+    loadingAvatar.className = 'avatar';
+    const loadingIcon = document.createElement('i');
+    loadingIcon.setAttribute('data-feather', 'cpu');
+    loadingAvatar.appendChild(loadingIcon);
+    const loadingBubble = document.createElement('div');
+    loadingBubble.className = 'bubble';
+    const loadingCursor = document.createElement('span');
+    loadingCursor.className = 'ai-cursor';
+    loadingBubble.appendChild(loadingCursor);
+    loadingBubble.appendChild(document.createTextNode(' Synthesizing data...'));
+    loadingMsg.appendChild(loadingAvatar);
+    loadingMsg.appendChild(loadingBubble);
     history.appendChild(loadingMsg);
     if (typeof feather !== 'undefined') feather.replace();
     history.scrollTop = history.scrollHeight;
 
-    // Fetch from AI with full platform context
-    const assetCtx = assets
-      .filter(a => !isStablecoinSymbol(a.symbol, a.name, a.price))
-      .map(a => `${a.symbol}: CURRENT_PRICE=$${a.price} (${a.change >= 0 ? '+' : ''}${a.change.toFixed(2)}%) - Rationale: ${a.reason}`)
-      .join(' | ');
-    const apiHealthCtx = window._apiHealthPrompt ? `API HEALTH: ${window._apiHealthPrompt}` : 'API HEALTH: pending first sync';
-    const dualRes = await fetchDualAI(val, `LATEST LIVE DATA: ${assetCtx}. ${apiHealthCtx}`);
+    try {
+      // Fetch from AI with full platform context
+      const assetCtx = assets
+        .filter(a => !isStablecoinSymbol(a.symbol, a.name, a.price))
+        .map(a => `${a.symbol}: CURRENT_PRICE=$${a.price} (${a.change >= 0 ? '+' : ''}${a.change.toFixed(2)}%) - Rationale: ${a.reason}`)
+        .join(' | ');
+      const apiHealthCtx = window._apiHealthPrompt ? `API HEALTH: ${window._apiHealthPrompt}` : 'API HEALTH: pending first sync';
+      const dualRes = await fetchDualAI(val, `LATEST LIVE DATA: ${assetCtx}. ${apiHealthCtx}`);
 
-    history.removeChild(loadingMsg);
+      if (loadingMsg.parentNode) history.removeChild(loadingMsg);
 
-    const aiMsg = document.createElement('div');
-    aiMsg.className = 'chat-message ai';
-    
-    if (dualRes) {
-      aiMsg.innerHTML = `
+      const aiMsg = document.createElement('div');
+      aiMsg.className = 'chat-message ai';
+      const aiAvatar = document.createElement('div');
+      aiAvatar.className = 'avatar';
+      const aiIcon = document.createElement('i');
+      aiIcon.setAttribute('data-feather', 'cpu');
+      aiAvatar.appendChild(aiIcon);
+      const aiBubble = document.createElement('div');
+      aiBubble.className = `bubble${dualRes ? '' : ' text-red'}`;
+      aiBubble.innerHTML = dualRes || 'Error: AI Engine offline or rate limited. Please try again.';
+      aiMsg.appendChild(aiAvatar);
+      aiMsg.appendChild(aiBubble);
+      history.appendChild(aiMsg);
+      if (typeof feather !== 'undefined') feather.replace();
+      history.scrollTop = history.scrollHeight;
+    } catch (err) {
+      console.error('AI Research Stream failed:', err);
+      if (loadingMsg.parentNode) history.removeChild(loadingMsg);
+
+      const failMsg = document.createElement('div');
+      failMsg.className = 'chat-message ai';
+      failMsg.innerHTML = `
         <div class="avatar"><i data-feather="cpu"></i></div>
-        <div class="bubble">${dualRes}</div>
+        <div class="bubble text-red">Error: AI stream timed out. Please try again.</div>
       `;
-    } else {
-      aiMsg.innerHTML = `
-        <div class="avatar"><i data-feather="cpu"></i></div>
-        <div class="bubble text-red">Error: AI Engine offline or rate limited. Please try again.</div>
-      `;
+      history.appendChild(failMsg);
+      if (typeof feather !== 'undefined') feather.replace();
+      history.scrollTop = history.scrollHeight;
+    } finally {
+      isSubmitting = false;
+      btn.disabled = false;
     }
-    
-    history.appendChild(aiMsg);
-    if (typeof feather !== 'undefined') feather.replace();
-    history.scrollTop = history.scrollHeight;
   };
 
   btn.addEventListener('click', handleChat);
