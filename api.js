@@ -118,7 +118,6 @@ export function getAIMemory() { return AI_MEMORY.getMessages(); }
 // ─── 1. CoinGecko: Real-time price, market cap, volume ───────────────────────
 export async function fetchMarketData() {
   try {
-    const MIN_MARKET_CAP_USD = 100_000_000;
     const CG_PER_PAGE = 250;
     const MAX_CG_PAGES = 5;
     const BINANCE_TOP_N = 100;
@@ -169,8 +168,7 @@ export async function fetchMarketData() {
       if (!Array.isArray(batch) || batch.length === 0) break;
       cgCoins.push(...batch);
 
-      const lastMarketCap = Number(batch[batch.length - 1]?.market_cap) || 0;
-      if (batch.length < CG_PER_PAGE || lastMarketCap < MIN_MARKET_CAP_USD) break;
+      if (batch.length < CG_PER_PAGE) break;
     }
 
     const binanceRes = await fetch('https://api.binance.com/api/v3/ticker/24hr');
@@ -184,7 +182,6 @@ export async function fetchMarketData() {
     const bySymbol = new Map();
 
     cgCoins
-      .filter(c => Number(c.market_cap) >= MIN_MARKET_CAP_USD)
       .filter(c => !isStablecoinLike(c.symbol, c.name, c.current_price))
       .forEach(c => {
         const symbol = String(c.symbol || '').toUpperCase();

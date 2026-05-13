@@ -11,7 +11,6 @@ let cacheTimestamp = 0;
 const CACHE_TTL = 15 * 1000; // 15 seconds (High-Precision Snapshot)
 
 const COINGECKO_KEY = 'CG-7gTv8kk2qS7r8kj515m2rVQJ';
-const MIN_MARKET_CAP_USD = 100_000_000;
 const CG_PER_PAGE = 250;
 const MAX_CG_PAGES = 5;
 const BINANCE_TOP_N = 100;
@@ -110,8 +109,7 @@ async function fetchCoinGeckoUniverse() {
 
     coins.push(...batch);
 
-    const lastMarketCap = Number(batch[batch.length - 1]?.market_cap) || 0;
-    if (batch.length < CG_PER_PAGE || lastMarketCap < MIN_MARKET_CAP_USD) break;
+    if (batch.length < CG_PER_PAGE) break;
   }
 
   return coins;
@@ -147,9 +145,8 @@ export default async function handler(req, res) {
     const binance24h = binance24hRes.ok ? await binance24hRes.json() : [];
     const bySymbol = new Map();
 
-    // Universe A: all non-stable CoinGecko coins with market cap >= $100M.
+    // Universe A: all non-stable CoinGecko coins (no minimum market cap).
     cgCoins
-      .filter(coin => Number(coin.market_cap) >= MIN_MARKET_CAP_USD)
       .filter(coin => !isStablecoinLike(coin.symbol, coin.name, coin.current_price))
       .forEach(coin => {
         const symbol = String(coin.symbol || '').toUpperCase();
@@ -233,8 +230,7 @@ export default async function handler(req, res) {
       age: 0,
       data: assets,
       universe: {
-        minMarketCapUsd: MIN_MARKET_CAP_USD,
-        coinGeckoQualified: assets.filter(a => Number(a.market_cap) >= MIN_MARKET_CAP_USD).length,
+        coinGeckoQualified: cgCoins.filter(coin => !isStablecoinLike(coin.symbol, coin.name, coin.current_price)).length,
         binanceTopIncluded: topBinance.length
       }
     });
