@@ -1,7 +1,7 @@
 // ═══════════════════════════════════════════════════════════════
 // NEXUS Server-Side Market Data — Single Source of Truth
 // ═══════════════════════════════════════════════════════════════
-// This Vercel serverless function fetches CoinGecko data ONCE,
+// This Vercel serverless function fetches Binance data ONCE,
 // computes deterministic Alpha Scores, and caches the result
 // for 5 minutes. Every device reads from this single endpoint,
 // guaranteeing 100% identical data across all clients.
@@ -10,14 +10,18 @@ let cachedData = null;
 let cacheTimestamp = 0;
 const CACHE_TTL = 15 * 1000; // 15 seconds (High-Precision Snapshot)
 
-const COINGECKO_KEY = 'CG-7gTv8kk2qS7r8kj515m2rVQJ';
-const CG_PER_PAGE = 250;
-const MAX_CG_PAGES = 5;
-const BINANCE_TOP_N = 100;
+const BINANCE_TOP_N = 50;
+const MIN_QUOTE_VOLUME_USD = 20_000_000;
+const MAX_ABS_CHANGE_PCT = 20;
+const MAX_INTRADAY_RANGE_PCT = 24;
 const STABLECOINS = new Set([
   'USDT', 'USDC', 'DAI', 'BUSD', 'FDUSD', 'TUSD', 'PYUSD', 'USDE', 'USDD',
   'GUSD', 'LUSD', 'EURC', 'FRAX', 'USD1', 'USDS', 'USDP', 'USDB', 'RLUSD',
   'SUSD', 'MUSD', 'USD0', 'USDL', 'EURS', 'XAUT'
+]);
+const EXCLUDED_HIGH_RISK_SYMBOLS = new Set([
+  'DOGE', 'SHIB', 'PEPE', 'WIF', 'BONK', 'FLOKI', 'MEME', 'TURBO',
+  'MOG', 'POPCAT', 'PENGU', 'NEIRO', 'BRETT', 'TRUMP'
 ]);
 
 function isStablecoinLike(symbol = '', name = '', price = null) {
@@ -44,30 +48,24 @@ function isStablecoinLike(symbol = '', name = '', price = null) {
   return false;
 }
 
-function computeAlphaScore(coin) {
-  const change24h = Number(coin.price_change_percentage_24h) || 0;
-  const volRatio = coin.market_cap > 0 ? (coin.total_volume / coin.market_cap) : 0;
-  const mcapRank = Number(coin.market_cap_rank) || 50;
-  const absChange = Math.abs(change24h);
+function isUnpredictableOrSham(ticker = {}) {
+  const base = String(ticker.base || '').toUpperCase();
+  if (!base) return true;
+  if (EXCLUDED_HIGH_RISK_SYMBOLS.has(base)) return true;
+  if (/^(1000|1000000)/.test(base)) return true;
+  if (/(UP|DOWN|BULL|BEAR)$/.test(base)) return true;
 
-  // Direction-neutral conversion score:
-  // strong bearish and bullish trends can both rank highly.
-  const moveQuality = absChange < 0.5
-    ? 8 + (absChange * 6)
-    : absChange < 2
-      ? 11 + ((absChange - 0.5) * 8)
-      : absChange < 8
-        ? 23 + ((absChange - 2) * 3.2)
-        : absChange < 15
-          ? 42 - ((absChange - 8) * 1.7)
-          : 30 - Math.min(14, (absChange - 15) * 1.5);
+  const quoteVolume = Number(ticker.quoteVolume) || 0;
+  const absChange = Math.abs(Number(ticker.changePct) || 0);
+  const openPrice = Number(ticker.openPrice) || 0;
+  const highPrice = Number(ticker.highPrice) || 0;
+  const lowPrice = Number(ticker.lowPrice) || 0;
+  const rangePct = openPrice > 0 ? ((highPrice - lowPrice) / openPrice) * 100 : absChange;
 
-  const volumeConviction = Math.min(24, Math.max(0, volRatio * 240));
-  const mcapTier = Math.min(16, Math.max(5, 16 - (mcapRank * 0.2)));
-  const stability = absChange < 1 ? 6 : absChange < 4 ? 12 : absChange < 10 ? 16 : absChange < 18 ? 11 : 7;
-  const overextensionPenalty = absChange > 18 ? Math.min(10, (absChange - 18) * 0.9) : 0;
-
-  return Math.round(Math.min(100, Math.max(0, moveQuality + volumeConviction + mcapTier + stability - overextensionPenalty)));
+  if (quoteVolume < MIN_QUOTE_VOLUME_USD) return true;
+  if (absChange > MAX_ABS_CHANGE_PCT) return true;
+  if (rangePct > MAX_INTRADAY_RANGE_PCT) return true;
+  return false;
 }
 
 function computeBinanceOnlyAlpha(changePct = 0, quoteVolumeUsd = 0) {
@@ -90,31 +88,6 @@ function computeBinanceOnlyAlpha(changePct = 0, quoteVolumeUsd = 0) {
   return Math.round(Math.min(100, Math.max(0, moveComponent + volumeComponent + 26 - overextensionPenalty)));
 }
 
-async function fetchCoinGeckoUniverse() {
-  const coins = [];
-
-  for (let page = 1; page <= MAX_CG_PAGES; page++) {
-    const url = `https://api.coingecko.com/api/v3/coins/markets`
-      + `?vs_currency=usd&order=market_cap_desc&per_page=${CG_PER_PAGE}&page=${page}`
-      + `&x_cg_demo_api_key=${COINGECKO_KEY}&sparkline=false`;
-
-    const res = await fetch(url, { cache: 'no-store' });
-    if (!res.ok) {
-      if (page === 1) throw new Error(`CoinGecko HTTP ${res.status}`);
-      break;
-    }
-
-    const batch = await res.json();
-    if (!Array.isArray(batch) || batch.length === 0) break;
-
-    coins.push(...batch);
-
-    if (batch.length < CG_PER_PAGE) break;
-  }
-
-  return coins;
-}
-
 export default async function handler(req, res) {
   // Set CORS headers
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -130,49 +103,11 @@ export default async function handler(req, res) {
   }
 
   try {
-    const [cgCoins, binanceBtcRes, binance24hRes] = await Promise.all([
-      fetchCoinGeckoUniverse(),
-      fetch('https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT'),
-      fetch('https://api.binance.com/api/v3/ticker/24hr')
-    ]);
-    
-    let binanceBtcPrice = null;
-    if (binanceBtcRes.ok) {
-      const bData = await binanceBtcRes.json();
-      binanceBtcPrice = parseFloat(bData.price);
-    }
+    const binance24hRes = await fetch('https://api.binance.com/api/v3/ticker/24hr');
+    if (!binance24hRes.ok) throw new Error(`Binance HTTP ${binance24hRes.status}`);
+    const binance24h = await binance24hRes.json();
 
-    const binance24h = binance24hRes.ok ? await binance24hRes.json() : [];
-    const bySymbol = new Map();
-
-    // Universe A: all non-stable CoinGecko coins (no minimum market cap).
-    cgCoins
-      .filter(coin => !isStablecoinLike(coin.symbol, coin.name, coin.current_price))
-      .forEach(coin => {
-        const symbol = String(coin.symbol || '').toUpperCase();
-        if (!symbol) return;
-
-        let price = Number(coin.current_price) || 0;
-        if (symbol === 'BTC' && binanceBtcPrice) price = binanceBtcPrice;
-
-        const change = Number(coin.price_change_percentage_24h) || 0;
-        const alpha = computeAlphaScore(coin);
-        bySymbol.set(symbol, {
-          symbol,
-          name: coin.name,
-          price,
-          change,
-          score: alpha,
-          bias: change >= 1 ? 'bullish' : (change <= -1 ? 'bearish' : 'neutral'),
-          confidence: Math.min(99, alpha),
-          vol: '$' + ((Number(coin.total_volume) || 0) / 1e9).toFixed(1) + 'B',
-          market_cap_rank: coin.market_cap_rank,
-          market_cap: coin.market_cap,
-          total_volume: coin.total_volume
-        });
-      });
-
-    // Universe B: Binance top-100 USDT pairs by quote volume.
+    // Binance top-50 USDT pairs by quote volume after quality filtering.
     const topBinance = Array.isArray(binance24h)
       ? binance24h
           .filter(t => typeof t?.symbol === 'string' && t.symbol.endsWith('USDT'))
@@ -182,42 +117,34 @@ export default async function handler(req, res) {
               base,
               lastPrice: Number(t.lastPrice) || 0,
               changePct: Number(t.priceChangePercent) || 0,
-              quoteVolume: Number(t.quoteVolume) || 0
+              quoteVolume: Number(t.quoteVolume) || 0,
+              openPrice: Number(t.openPrice) || 0,
+              highPrice: Number(t.highPrice) || 0,
+              lowPrice: Number(t.lowPrice) || 0
             };
           })
           .filter(t => t.base && !isStablecoinLike(t.base, t.base, t.lastPrice))
+          .filter(t => !isUnpredictableOrSham(t))
           .sort((a, b) => b.quoteVolume - a.quoteVolume)
           .slice(0, BINANCE_TOP_N)
       : [];
 
-    topBinance.forEach(t => {
-      const existing = bySymbol.get(t.base);
-      if (existing) {
-        existing.price = t.lastPrice || existing.price;
-        existing.change = Number.isFinite(t.changePct) ? t.changePct : existing.change;
-        existing.total_volume = t.quoteVolume || existing.total_volume;
-        existing.vol = '$' + ((Number(existing.total_volume) || 0) / 1e9).toFixed(1) + 'B';
-        existing.bias = existing.change >= 1 ? 'bullish' : (existing.change <= -1 ? 'bearish' : 'neutral');
-        return;
-      }
-
+    const assets = topBinance.map((t, idx) => {
       const alpha = computeBinanceOnlyAlpha(t.changePct, t.quoteVolume);
-      bySymbol.set(t.base, {
+      return {
         symbol: t.base,
-        name: `${t.base} (Binance)`,
+        name: t.base,
         price: t.lastPrice,
         change: t.changePct,
         score: alpha,
         bias: t.changePct >= 1 ? 'bullish' : (t.changePct <= -1 ? 'bearish' : 'neutral'),
         confidence: Math.min(99, alpha),
         vol: '$' + (t.quoteVolume / 1e9).toFixed(1) + 'B',
-        market_cap_rank: null,
-        market_cap: null,
+        market_cap_rank: idx + 1,
+        market_cap: 0,
         total_volume: t.quoteVolume
-      });
+      };
     });
-
-    const assets = [...bySymbol.values()];
 
     // Sort by alpha score (highest first)
     assets.sort((a, b) => (b.score - a.score) || a.symbol.localeCompare(b.symbol));
@@ -230,8 +157,12 @@ export default async function handler(req, res) {
       age: 0,
       data: assets,
       universe: {
-        coinGeckoQualified: cgCoins.filter(coin => !isStablecoinLike(coin.symbol, coin.name, coin.current_price)).length,
-        binanceTopIncluded: topBinance.length
+        binanceTopIncluded: topBinance.length,
+        qualityFilters: {
+          minQuoteVolumeUsd: MIN_QUOTE_VOLUME_USD,
+          maxAbsChangePct: MAX_ABS_CHANGE_PCT,
+          maxIntradayRangePct: MAX_INTRADAY_RANGE_PCT
+        }
       }
     });
   } catch (error) {

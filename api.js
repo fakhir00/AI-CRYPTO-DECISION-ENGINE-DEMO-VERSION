@@ -115,18 +115,23 @@ export function addToAIMemory(role, content) { AI_MEMORY.add(role, content); }
 export function clearAIMemory() { AI_MEMORY.clear(); }
 export function getAIMemory() { return AI_MEMORY.getMessages(); }
 
-// ─── 1. CoinGecko: Real-time price, market cap, volume ───────────────────────
+// ─── 1. Binance-only tradable universe (top 50 + quality filter) ─────────────
 export async function fetchMarketData() {
   try {
-    const CG_PER_PAGE = 250;
-    const MAX_CG_PAGES = 5;
-    const BINANCE_TOP_N = 100;
+    const BINANCE_TOP_N = 50;
+    const MIN_QUOTE_VOLUME_USD = 20_000_000;
+    const MAX_ABS_CHANGE_PCT = 20;
+    const MAX_INTRADAY_RANGE_PCT = 24;
 
-    // Filter out stablecoins
+    // Filter out stablecoins and low-quality/high-chaos pairs.
     const STABLECOINS = new Set([
       'USDT', 'USDC', 'DAI', 'BUSD', 'FDUSD', 'TUSD', 'PYUSD', 'USDE', 'USDD',
       'GUSD', 'LUSD', 'EURC', 'FRAX', 'USD1', 'USDS', 'USDP', 'USDB', 'RLUSD',
       'SUSD', 'MUSD', 'USD0', 'USDL', 'EURS', 'XAUT'
+    ]);
+    const EXCLUDED_HIGH_RISK_SYMBOLS = new Set([
+      'DOGE', 'SHIB', 'PEPE', 'WIF', 'BONK', 'FLOKI', 'MEME', 'TURBO',
+      'MOG', 'POPCAT', 'PENGU', 'NEIRO', 'BRETT', 'TRUMP'
     ]);
 
     const isStablecoinLike = (symbol = '', name = '', price = null) => {
@@ -152,24 +157,25 @@ export async function fetchMarketData() {
       return false;
     };
 
-    const cgCoins = [];
-    for (let page = 1; page <= MAX_CG_PAGES; page++) {
-      const url = `https://api.coingecko.com/api/v3/coins/markets`
-        + `?vs_currency=usd&order=market_cap_desc&per_page=${CG_PER_PAGE}&page=${page}`
-        + `&x_cg_demo_api_key=${KEYS.coingecko}&sparkline=false`;
+    const isUnpredictableOrSham = (ticker = {}) => {
+      const base = String(ticker.base || '').toUpperCase();
+      if (!base) return true;
+      if (EXCLUDED_HIGH_RISK_SYMBOLS.has(base)) return true;
+      if (/^(1000|1000000)/.test(base)) return true;
+      if (/(UP|DOWN|BULL|BEAR)$/.test(base)) return true;
 
-      const res = await fetch(url, { cache: 'no-store' });
-      if (!res.ok) {
-        if (page === 1) throw new Error(`CoinGecko HTTP ${res.status}`);
-        break;
-      }
+      const quoteVolume = Number(ticker.quoteVolume) || 0;
+      const absChange = Math.abs(Number(ticker.changePct) || 0);
+      const openPrice = Number(ticker.openPrice) || 0;
+      const highPrice = Number(ticker.highPrice) || 0;
+      const lowPrice = Number(ticker.lowPrice) || 0;
+      const rangePct = openPrice > 0 ? ((highPrice - lowPrice) / openPrice) * 100 : absChange;
 
-      const batch = await res.json();
-      if (!Array.isArray(batch) || batch.length === 0) break;
-      cgCoins.push(...batch);
-
-      if (batch.length < CG_PER_PAGE) break;
-    }
+      if (quoteVolume < MIN_QUOTE_VOLUME_USD) return true;
+      if (absChange > MAX_ABS_CHANGE_PCT) return true;
+      if (rangePct > MAX_INTRADAY_RANGE_PCT) return true;
+      return false;
+    };
 
     const binanceRes = await fetch('https://api.binance.com/api/v3/ticker/24hr');
     const binanceData = binanceRes.ok ? await binanceRes.json() : [];
@@ -179,17 +185,7 @@ export async function fetchMarketData() {
       markApiDegraded('Binance 24H Markets', `HTTP ${binanceRes.status}`);
     }
 
-    const bySymbol = new Map();
-
-    cgCoins
-      .filter(c => !isStablecoinLike(c.symbol, c.name, c.current_price))
-      .forEach(c => {
-        const symbol = String(c.symbol || '').toUpperCase();
-        if (!symbol) return;
-        bySymbol.set(symbol, c);
-      });
-
-    const topBinance = Array.isArray(binanceData)
+    const topTradableBinance = Array.isArray(binanceData)
       ? binanceData
           .filter(t => typeof t?.symbol === 'string' && t.symbol.endsWith('USDT'))
           .map(t => {
@@ -198,43 +194,37 @@ export async function fetchMarketData() {
               base,
               lastPrice: Number(t.lastPrice) || 0,
               changePct: Number(t.priceChangePercent) || 0,
-              quoteVolume: Number(t.quoteVolume) || 0
+              quoteVolume: Number(t.quoteVolume) || 0,
+              openPrice: Number(t.openPrice) || 0,
+              highPrice: Number(t.highPrice) || 0,
+              lowPrice: Number(t.lowPrice) || 0
             };
           })
           .filter(t => t.base && !isStablecoinLike(t.base, t.base, t.lastPrice))
+          .filter(t => !isUnpredictableOrSham(t))
           .sort((a, b) => b.quoteVolume - a.quoteVolume)
           .slice(0, BINANCE_TOP_N)
       : [];
 
-    topBinance.forEach(t => {
-      const existing = bySymbol.get(t.base);
-      if (existing) {
-        existing.current_price = t.lastPrice || existing.current_price;
-        existing.price_change_percentage_24h = Number.isFinite(t.changePct) ? t.changePct : existing.price_change_percentage_24h;
-        existing.total_volume = t.quoteVolume || existing.total_volume;
-        return;
-      }
-
-      bySymbol.set(t.base, {
+    const filteredData = topTradableBinance.map((t, idx) => {
+      return {
         id: `${t.base.toLowerCase()}-binance`,
         symbol: t.base,
-        name: `${t.base} (Binance)`,
+        name: t.base,
         current_price: t.lastPrice,
         price_change_percentage_24h: t.changePct,
         total_volume: t.quoteVolume,
         market_cap: 0,
-        market_cap_rank: 9999
-      });
+        market_cap_rank: idx + 1
+      };
     });
 
-    const filteredData = [...bySymbol.values()];
-
-    console.log('✅ Expanded market universe fetched:', filteredData.length, 'coins');
-    markApiOk('CoinGecko Markets', `${filteredData.length} assets`);
+    console.log('✅ Binance top tradable universe fetched:', filteredData.length, 'coins');
+    markApiOk('Binance Tradable Universe', `${filteredData.length} assets`);
     return filteredData;
   } catch (e) {
-    console.warn('⚠️ CoinGecko failed:', e.message);
-    markApiFailed('CoinGecko Markets', e.message);
+    console.warn('⚠️ Binance tradable universe failed:', e.message);
+    markApiFailed('Binance Tradable Universe', e.message);
     return null;
   }
 }
