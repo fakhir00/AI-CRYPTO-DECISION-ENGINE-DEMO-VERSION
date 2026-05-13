@@ -235,6 +235,27 @@ function parseVolumeBillions(vol = '') {
   return n / 1_000_000_000;
 }
 
+function getUnifiedAlphaScore(asset = {}) {
+  const opportunity = Number(asset?.opportunityScore);
+  if (Number.isFinite(opportunity)) return opportunity;
+  const base = Number(asset?.score);
+  return Number.isFinite(base) ? base : 50;
+}
+
+function getSortedTradeableAssets(sortBy = 'alpha') {
+  const sortKey = String(sortBy || 'alpha').toLowerCase();
+  const list = assets.filter(asset => !isStablecoinSymbol(asset.symbol, asset.name, asset.price));
+  return [...list].sort((a, b) => {
+    if (sortKey === 'change') {
+      return Math.abs(Number(b.change) || 0) - Math.abs(Number(a.change) || 0);
+    }
+    if (sortKey === 'volume') {
+      return parseVolumeBillions(b.vol) - parseVolumeBillions(a.vol);
+    }
+    return (getUnifiedAlphaScore(b) - getUnifiedAlphaScore(a)) || a.symbol.localeCompare(b.symbol);
+  });
+}
+
 function computeDirectionalNeutralAlpha(change24h = 0, volRatio = 0, mcapRank = 50) {
   const absChange = Math.abs(Number(change24h) || 0);
 
@@ -980,7 +1001,9 @@ function updateMarketCapHeader(timeframe = CURRENT_MARKET_TIMEFRAME) {
 function renderDashboard() {
   // Compute live summary values from assets
   const tradeableAssets = assets.filter(a => !isStablecoinSymbol(a.symbol, a.name, a.price));
-  const topAsset = [...tradeableAssets].sort((a, b) => ((b.opportunityScore ?? b.score) - (a.opportunityScore ?? a.score)) || a.symbol.localeCompare(b.symbol))[0];
+  const alphaRankedAssets = getSortedTradeableAssets('alpha');
+  const topAsset = alphaRankedAssets[0];
+  const topAssetScore = topAsset ? getUnifiedAlphaScore(topAsset) : null;
   const totalVol = tradeableAssets.reduce((sum, a) => sum + parseVolumeBillions(a.vol), 0);
   const avgChange = tradeableAssets.length ? (tradeableAssets.reduce((s, a) => s + a.change, 0) / tradeableAssets.length) : 0;
   const sentLabel = LIVE_SENTIMENT.score > 60 ? 'Bullish' : (LIVE_SENTIMENT.score < 40 ? 'Bearish' : 'Neutral');
@@ -1010,7 +1033,7 @@ function renderDashboard() {
         <i data-feather="target" class="card-icon text-primary"></i>
       </div>
       <div class="card-value text-primary">${topAsset ? topAsset.symbol : '—'}</div>
-      <div class="card-change">Score: ${topAsset ? (topAsset.opportunityScore ?? topAsset.score) : '—'} • ${topAsset && (topAsset.opportunityScore ?? topAsset.score) > 75 ? 'High Conviction' : 'Moderate'}</div>
+      <div class="card-change">Score: ${topAssetScore ?? '—'} • ${topAssetScore > 75 ? 'High Conviction' : 'Moderate'}</div>
     </div>
     <div class="summary-card">
       <div class="card-header">
@@ -1025,14 +1048,14 @@ function renderDashboard() {
 
   // Dash Opportunities Mini — Show top 15 for comprehensive overview
   const dashOpps = document.getElementById('dash-opportunities-list');
-  const sortedForDash = [...tradeableAssets].sort((a, b) => ((b.opportunityScore ?? b.score) - (a.opportunityScore ?? a.score)) || a.symbol.localeCompare(b.symbol));
+  const sortedForDash = alphaRankedAssets;
   dashOpps.innerHTML = sortedForDash.slice(0, 15).map(asset => `
     <div class="asset-row">
       <div class="asset-info">
         <div class="asset-icon">${asset.symbol[0]}</div>
         <div class="asset-name-col">
           <span class="asset-name">${asset.symbol}</span>
-          <span class="asset-symbol">Score: ${asset.opportunityScore ?? asset.score}</span>
+          <span class="asset-symbol">Score: ${getUnifiedAlphaScore(asset)}</span>
         </div>
       </div>
       <div class="asset-price">$${formatPrice(asset.price)}</div>
@@ -1049,7 +1072,7 @@ function renderDashboard() {
   const topBias = topAsset ? topAsset.bias : 'neutral';
   typeWriterEffect(aiContent, [
      `> Executive Summary: ${topSym}`,
-     `> ${topName} shows ${topBias} momentum. Alpha Score: ${topAsset ? topAsset.score : '—'}/100. 24H Change: ${topAsset ? topAsset.change.toFixed(2) : 0}%.`,
+     `> ${topName} shows ${topBias} momentum. Alpha Score: ${topAssetScore ?? '—'}/100. 24H Change: ${topAsset ? topAsset.change.toFixed(2) : 0}%.`,
      `> Thesis: ${topName} is the highest-conviction play based on our multi-factor scoring engine. On-chain and sentiment data align with ${topBias} positioning.`
   ]);
 
@@ -1237,18 +1260,12 @@ function typeWriterEffect(element, lines, speed = 20) {
 
 function renderOpportunitiesPage() {
   const tbody = document.getElementById('opportunities-table-body');
-  const getAlphaScore = (asset) => Number.isFinite(asset?.score) ? asset.score : 50;
-  const nonStable = [...assets].filter(asset => !isStablecoinSymbol(asset.symbol, asset.name, asset.price));
-  const sorted = [...nonStable].sort((a, b) => {
-    if (OPPORTUNITY_SORT === 'change') return Math.abs(b.change) - Math.abs(a.change);
-    if (OPPORTUNITY_SORT === 'volume') return parseVolumeBillions(b.vol) - parseVolumeBillions(a.vol);
-    return (getAlphaScore(b) - getAlphaScore(a)) || a.symbol.localeCompare(b.symbol);
-  });
+  const sorted = getSortedTradeableAssets(OPPORTUNITY_SORT);
   const visibleRows = sorted.slice(0, MAX_TOP_OPPORTUNITIES);
   
   tbody.innerHTML = visibleRows.map((asset, i) => {
     const sig = generateSignalForAsset(asset);
-    const displayScore = getAlphaScore(asset);
+    const displayScore = getUnifiedAlphaScore(asset);
     // Calculate profit potential based on max target (t4) at 5x leverage
     let profitPot = 0;
     if (sig.type !== 'WAIT' && asset.price > 0 && sig.t4 > 0) {
