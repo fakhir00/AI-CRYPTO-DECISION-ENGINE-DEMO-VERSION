@@ -973,8 +973,14 @@ async function readMirroredSignal(symbol, interval = '4h') {
     const html = String(data.data.html || '');
     const hasPlaceholderTargets = /Take-?Profit Targets:[\s\S]*?1\)\s*1[\s\S]*?2\)\s*2[\s\S]*?3\)\s*3[\s\S]*?4\)\s*4/i.test(html);
     const hasPlaceholderStop = /Stop Targets:[\s\S]*?1\)\s*1/i.test(html);
+    const hasUnavailableFeed = /Candle Pattern Feed\s*\([^)]+\)\s*:\s*Candle feed temporarily unavailable\./i.test(html);
+    const hasHardPatternClaim = /\b(High-Volume Breakout|Bear Flag Breakdown|Bull Flag Breakout|Ascending Triangle|Cup\s*&\s*Handle|Descending Channel|Shooting Star|Bullish Hammer|Bearish Marubozu)\b/i.test(html);
     if (hasPlaceholderTargets && hasPlaceholderStop) {
       // Reject low-quality mirrored payloads so they don't persist for the full TTL.
+      return null;
+    }
+    if (hasUnavailableFeed && hasHardPatternClaim) {
+      // Reject contradictory mirrored payloads: feed unavailable but rationale still claims specific patterns.
       return null;
     }
     return data.data.html;
@@ -1068,6 +1074,20 @@ function getPatternBiasScore(candleData = null) {
   });
 
   return bull - bear;
+}
+
+function isCandleFeedUnavailable(candleData = null) {
+  if (!candleData) return true;
+  const source = String(candleData?.source || '').toLowerCase();
+  if (source.includes('fallback_empty') || source.includes('error')) return true;
+  const summary = String(candleData?.summary || '').toLowerCase();
+  if (summary.includes('temporarily unavailable')) return true;
+  return false;
+}
+
+function hasDetectedCandlePatterns(candleData = null) {
+  if (isCandleFeedUnavailable(candleData)) return false;
+  return Array.isArray(candleData?.patterns) && candleData.patterns.length > 0;
 }
 
 function getDynamicTrailingConfig(direction = 'LONG', entryPrice = null, stopPrice = null, candleData = null, options = {}) {
@@ -1587,11 +1607,11 @@ function evaluateDirectionalBias(snapshot = null, candleData = null, userQuery =
   if (reasonText) {
     if (/(bull|breakout|accumulation|trend|cup|ascending|squeeze|reversal)/i.test(reasonText)) {
       longScore += 1.5;
-      reasons.push('pattern rationale supports long continuation');
+      reasons.push('market-structure rationale supports long continuation');
     }
     if (/(bear|breakdown|distribution|head\s*&?\s*shoulders|contraction|shooting\s*star|rejection)/i.test(reasonText)) {
       shortScore += 1.5;
-      reasons.push('pattern rationale supports short continuation');
+      reasons.push('market-structure rationale supports short continuation');
     }
   }
 
@@ -2073,8 +2093,11 @@ export async function fetchDualAI(userQuery, assetContext = '') {
 - TP4 (1:4): $${fmt(p - riskShort * 4)}
 `;
     }
-    if (candleData.patterns && candleData.patterns.length > 0) {
+    if (hasDetectedCandlePatterns(candleData)) {
       enhancedContext += `\n\n📊 LIVE CANDLESTICK PATTERNS:\n${candleData.summary}`;
+    } else if (signalMode) {
+      enhancedContext += `\n\n⚠️ CANDLE PATTERN FEED STATUS: unavailable or low-confidence.
+CRITICAL: Do NOT claim specific candlestick pattern names. Base rationale on price momentum, volatility (ATR), and swing structure only.`;
     }
   }
 
@@ -2129,14 +2152,26 @@ CRITICAL: Use this plan exactly in the final signal format.`;
     tradeMeta
   });
   const extractedRationales = extractTradeRationales(`${preamble}\n${rationalesText}\n${result || ''}`, fallbackSymbol);
-  const apiRationaleFallback = (!extractedRationales && apiTradePlan?.rationaleHints?.length)
-    ? `### ${String(fallbackSymbol || 'COIN').toUpperCase()} Trade Rationales
-1. ${apiTradePlan.rationaleHints[0] || 'Price action and volatility support the selected direction.'}
-${apiTradePlan.rationaleHints[1] ? `2. ${apiTradePlan.rationaleHints[1]}` : ''}
-${apiTradePlan.rationaleHints[2] ? `3. ${apiTradePlan.rationaleHints[2]}` : ''}
-4. Entry ladder is volatility-adjusted to improve fill quality.
-5. Targets and stop are risk-calibrated using live ATR and structure.`
-    : '';
+  const fallbackHints = apiTradePlan?.rationaleHints?.filter(Boolean) || [];
+  const feedUnavailable = isCandleFeedUnavailable(candleData);
+  const fallbackRationalePoints = [
+    fallbackHints[0] || 'Price action and volatility support the selected direction.',
+    fallbackHints[1] || (feedUnavailable
+      ? 'Candlestick feed is temporarily unavailable, so this setup uses live momentum + structure fallback logic.'
+      : 'Directional bias is validated by the latest momentum and structure context.'),
+    fallbackHints[2] || 'Entry ladder is volatility-adjusted to improve fill quality.',
+    'Targets are calibrated using risk-based progression from the live reference price.',
+    'Stop placement is structure-aware and sized for disciplined risk control.'
+  ];
+  const apiRationaleFallback = `### ${String(fallbackSymbol || 'COIN').toUpperCase()} Trade Rationales
+1. ${fallbackRationalePoints[0]}
+2. ${fallbackRationalePoints[1]}
+3. ${fallbackRationalePoints[2]}
+4. ${fallbackRationalePoints[3]}
+5. ${fallbackRationalePoints[4]}`.replace(/\n{2,}/g, '\n');
+  const renderedRationales = (signalMode && feedUnavailable)
+    ? apiRationaleFallback
+    : (extractedRationales || apiRationaleFallback);
 
   // Escape the signal text for the clipboard copy command
   const escapedSignal = signalText.replace(/"/g, '&quot;').replace(/'/g, '&#39;').replace(/\n/g, '\\n');
@@ -2157,7 +2192,7 @@ ${apiTradePlan.rationaleHints[2] ? `3. ${apiTradePlan.rationaleHints[2]}` : ''}
     .replace(/>/g, '&gt;');
 
   // Build pattern badge if patterns were detected
-  const patternBadge = (candleData && candleData.patterns && candleData.patterns.length > 0)
+  const patternBadge = hasDetectedCandlePatterns(candleData)
     ? `<div style="display:flex;flex-wrap:wrap;gap:0.3rem;margin-bottom:0.5rem;">
         ${candleData.patterns.map(p => `
           <span style="font-size:0.6rem;font-weight:700;padding:0.2rem 0.5rem;border-radius:4px;letter-spacing:0.05em;
@@ -2177,7 +2212,9 @@ ${apiTradePlan.rationaleHints[2] ? `3. ${apiTradePlan.rationaleHints[2]}` : ''}
       : [];
     const summaryText = names.length > 0
       ? names.slice(0, 4).join(' | ')
-      : (candleData.summary || 'No high-confidence candlestick pattern detected in the latest candles.');
+      : (feedUnavailable
+        ? 'Candle feed temporarily unavailable. Running fallback mode from momentum, ATR, and market structure.'
+        : (candleData.summary || 'No high-confidence candlestick pattern detected in the latest candles.'));
     return `<div style="margin-bottom:0.6rem;padding:0.45rem 0.65rem;border-radius:6px;border:1px solid rgba(139,120,255,0.28);background:rgba(139,120,255,0.10);color:#DDE4FF;font-size:0.76rem;line-height:1.45;">
       Candle Pattern Feed (${sanitizeInline(symbolLabel)} ${sanitizeInline(intervalLabel)}): ${sanitizeInline(summaryText)}
     </div>`;
@@ -2230,7 +2267,7 @@ ${apiTradePlan.rationaleHints[2] ? `3. ${apiTradePlan.rationaleHints[2]}` : ''}
       ${patternSummary}
       ${patternBadge}
       ${preamble ? `<div style="color:#BAC2DE;line-height:1.6;margin-bottom:0.5rem;">${renderMarkdown(preamble)}</div>` : ''}
-      ${(extractedRationales || apiRationaleFallback) ? `<div style="color:#BAC2DE;line-height:1.6;margin-bottom:0.75rem;">${renderMarkdown(extractedRationales || apiRationaleFallback)}</div>` : ''}
+      ${renderedRationales ? `<div style="color:#BAC2DE;line-height:1.6;margin-bottom:0.75rem;">${renderMarkdown(renderedRationales)}</div>` : ''}
       ${signalText ? signalHtml : ''}
     </div>`;
 
