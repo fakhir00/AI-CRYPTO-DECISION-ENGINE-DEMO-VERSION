@@ -961,6 +961,10 @@ function getSignalMirrorCacheKey(symbol, interval = '4h') {
   return `mirror_signal_${symbol}_${interval}`;
 }
 
+function stripLegacyApiStatusBanner(html = '') {
+  return String(html).replace(/<div[^>]*>\s*API status:[\s\S]*?<\/div>\s*/i, '');
+}
+
 async function readMirroredSignal(symbol, interval = '4h') {
   if (!symbol) return null;
   try {
@@ -975,7 +979,7 @@ async function readMirroredSignal(symbol, interval = '4h') {
     if (error || !data?.data?.html || !data?.updated_at) return null;
     const age = Date.now() - new Date(data.updated_at).getTime();
     if (age > MIRROR_SIGNAL_TTL_MS) return null;
-    const html = String(data.data.html || '');
+    const html = stripLegacyApiStatusBanner(String(data.data.html || ''));
     const hasPlaceholderTargets = /Take-?Profit Targets:[\s\S]*?1\)\s*1[\s\S]*?2\)\s*2[\s\S]*?3\)\s*3[\s\S]*?4\)\s*4/i.test(html);
     const hasPlaceholderStop = /Stop Targets:[\s\S]*?1\)\s*1/i.test(html);
     const hasUnavailableFeed = /Candle Pattern Feed\s*\([^)]+\)\s*:\s*Candle feed temporarily unavailable\./i.test(html);
@@ -988,7 +992,7 @@ async function readMirroredSignal(symbol, interval = '4h') {
       // Reject contradictory mirrored payloads: feed unavailable but rationale still claims specific patterns.
       return null;
     }
-    return data.data.html;
+    return html;
   } catch (e) {
     console.warn('⚠️ Mirror cache read failed:', e.message);
     return null;
@@ -2224,51 +2228,8 @@ CRITICAL: Use this plan exactly in the final signal format.`;
       Candle Pattern Feed (${sanitizeInline(symbolLabel)} ${sanitizeInline(intervalLabel)}): ${sanitizeInline(summaryText)}
     </div>`;
   })();
-  const apiHealth = getApiHealthSummary();
-  const OPTIONAL_FALLBACK_SERVICES = new Set([
-    'Etherscan Whale Flow',
-    'Reddit Sentiment',
-    'TAAPI RSI',
-    'NEXUS Candle API',
-    'LunarCrush Sentiment'
-  ]);
-  const fallbackApis = (apiHealth.services || []).filter(
-    s => s.status === 'degraded' && OPTIONAL_FALLBACK_SERVICES.has(s.name)
-  );
-  const coreServices = (apiHealth.services || []).filter(
-    s => !OPTIONAL_FALLBACK_SERVICES.has(s.name)
-  );
-  const coreOk = coreServices.filter(s => s.status === 'ok').length;
-  const coreTotal = coreServices.length;
-  const criticalApis = (apiHealth.services || []).filter(
-    s => s.status === 'failed' || (s.status === 'degraded' && !OPTIONAL_FALLBACK_SERVICES.has(s.name))
-  );
-  const healthColor = criticalApis.length > 0
-    ? 'rgba(255, 184, 77, 0.18)'
-    : fallbackApis.length > 0
-      ? 'rgba(93, 173, 226, 0.16)'
-      : 'rgba(52, 199, 89, 0.14)';
-  const healthBorder = criticalApis.length > 0
-    ? 'rgba(255, 184, 77, 0.4)'
-    : fallbackApis.length > 0
-      ? 'rgba(93, 173, 226, 0.36)'
-      : 'rgba(52, 199, 89, 0.32)';
-  const healthText = criticalApis.length > 0
-    ? `API status: ${criticalApis.map(s => {
-      const detail = s.detail ? ` (${sanitizeInline(s.detail).slice(0, 80)})` : '';
-      return `${sanitizeInline(s.name)}=${s.status}${detail}`;
-    }).join(' | ')}`
-    : (coreTotal > 0
-      ? `API status: ${coreOk}/${coreTotal} core services healthy${fallbackApis.length > 0 ? ` • ${fallbackApis.length} fallback feeds active` : ''}`
-      : 'API status: health checks pending first sync');
-  const healthBanner = `
-    <div style="margin-bottom:0.6rem;padding:0.45rem 0.65rem;border-radius:6px;border:1px solid ${healthBorder};background:${healthColor};color:#D8DFEE;font-size:0.76rem;line-height:1.4;">
-      ${healthText}
-    </div>`;
-
   const finalHtml = `
     <div style="width:100%;">
-      ${healthBanner}
       ${patternSummary}
       ${patternBadge}
       ${preamble ? `<div style="color:#BAC2DE;line-height:1.6;margin-bottom:0.5rem;">${renderMarkdown(preamble)}</div>` : ''}
