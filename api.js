@@ -886,8 +886,9 @@ async function fetchBinanceReferencePrice(symbol = 'BTC') {
   }
 }
 
-const MIRROR_SIGNAL_TTL_MS = 5 * 60 * 1000; // 5 minutes
+const MIRROR_SIGNAL_TTL_MS = 90 * 1000; // 90 seconds for scalp freshness
 const SIGNAL_QUERY_RE = /\b(signal|trade\s*setup|entry|entries|stop\s*loss|targets?|take[-\s]?profit|leverage|long|short)\b/i;
+const PAIR_ONLY_SIGNAL_RE = /^\s*#?\s*[A-Z0-9]{2,10}\s*(?:\/\s*USDT|USDT)\s*$/i;
 const SYMBOL_STOP_WORDS = new Set([
   'THE', 'FOR', 'AND', 'BUT', 'NOT', 'CAN', 'ARE', 'YOU', 'HIS', 'HER', 'GET', 'SET', 'USE', 'HOW', 'WHY', 'WHAT',
   'GIVE', 'LONG', 'SHORT', 'SELL', 'BUY', 'TRADE', 'SETUP', 'ANALYSIS', 'PLEASE', 'WITH', 'THIS', 'THAT', 'THEN',
@@ -897,7 +898,8 @@ const SYMBOL_STOP_WORDS = new Set([
 ]);
 
 function isSignalRequest(text = '') {
-  return SIGNAL_QUERY_RE.test(text);
+  const q = String(text || '');
+  return SIGNAL_QUERY_RE.test(q) || PAIR_ONLY_SIGNAL_RE.test(q);
 }
 
 function escapeRegExp(text = '') {
@@ -967,7 +969,7 @@ function stripLegacyApiStatusBanner(html = '') {
     .replace(/<div[^>]*>\s*Candle Pattern Feed\s*\([^)]+\)\s*:[\s\S]*?<\/div>\s*/i, '');
 }
 
-async function readMirroredSignal(symbol, interval = '4h') {
+async function readMirroredSignal(symbol, interval = '4h', liveReferencePrice = null) {
   if (!symbol) return null;
   try {
     const { supabase } = await import('./lib/supabase.js');
@@ -993,6 +995,15 @@ async function readMirroredSignal(symbol, interval = '4h') {
     if (hasUnavailableFeed && hasHardPatternClaim) {
       // Reject contradictory mirrored payloads: feed unavailable but rationale still claims specific patterns.
       return null;
+    }
+    const mirroredRefPrice = toNumber(data?.data?.referencePrice);
+    const liveRef = toNumber(liveReferencePrice);
+    if (mirroredRefPrice && liveRef) {
+      const driftPct = Math.abs(mirroredRefPrice - liveRef) / liveRef;
+      if (driftPct > 0.008) {
+        // Reject stale mirrored signal when live price drift exceeds 0.8%.
+        return null;
+      }
     }
     return stripLegacyApiStatusBanner(rawHtml);
   } catch (e) {
@@ -1072,6 +1083,29 @@ function normalizeTradeConfidence(value = null) {
   return Math.max(0, Math.min(1, raw));
 }
 
+function deriveScalpLeverageLabel(candleData = null, confidenceValue = null) {
+  const current = toNumber(candleData?.currentPrice);
+  const atr = toNumber(candleData?.atr);
+  const atrPct = (current && atr) ? (atr / current) * 100 : null;
+  const confidence = normalizeTradeConfidence(confidenceValue);
+
+  let lev = 8;
+  if (atrPct !== null) {
+    if (atrPct >= 4) lev = 4;
+    else if (atrPct >= 3) lev = 5;
+    else if (atrPct >= 2.2) lev = 6;
+    else if (atrPct >= 1.6) lev = 7;
+    else if (atrPct >= 1.1) lev = 9;
+    else lev = 11;
+  }
+
+  if (confidence >= 0.75 && (atrPct === null || atrPct < 2.8)) lev += 1;
+  if (confidence <= 0.35) lev -= 1;
+
+  lev = Math.max(4, Math.min(12, Math.round(lev)));
+  return `Cross (${lev}X)`;
+}
+
 function getPatternBiasScore(candleData = null) {
   const patterns = Array.isArray(candleData?.patterns) ? candleData.patterns : [];
   const weights = [1.0, 0.8, 0.6, 0.45, 0.35];
@@ -1149,60 +1183,61 @@ function getDynamicTrailingConfig(direction = 'LONG', entryPrice = null, stopPri
     ? 'trend'
     : (counterScore - trendScore >= 0.8 ? 'counter' : 'chop');
 
-  let trailPct = 4.2;
-  let breakevenPct = 2.2;
+  // Scalp-first defaults: protect downside quickly while allowing controlled extension.
+  let trailPct = 1.05;
+  let breakevenPct = 0.75;
 
   if (volHigh) {
-    trailPct = 5.8;
-    breakevenPct = 3.2;
+    trailPct = 1.55;
+    breakevenPct = 1.05;
   } else if (volMedium) {
-    trailPct = 5.0;
-    breakevenPct = 2.7;
+    trailPct = 1.25;
+    breakevenPct = 0.85;
   } else if (volLow) {
-    trailPct = 3.2;
-    breakevenPct = 1.6;
+    trailPct = 0.78;
+    breakevenPct = 0.45;
   }
 
   if (mode === 'trend') {
-    trailPct -= 0.8;
-    breakevenPct -= 0.4;
+    trailPct -= 0.18;
+    breakevenPct -= 0.12;
   } else if (mode === 'counter') {
-    trailPct += 0.7;
-    breakevenPct += 0.6;
+    trailPct += 0.22;
+    breakevenPct += 0.18;
   } else {
-    trailPct += 0.4;
-    breakevenPct += 0.3;
+    trailPct += 0.12;
+    breakevenPct += 0.10;
   }
 
   if (confidence >= 0.75) {
-    trailPct -= 0.4;
-    breakevenPct -= 0.2;
+    trailPct -= 0.10;
+    breakevenPct -= 0.08;
   } else if (confidence <= 0.35) {
-    trailPct += 0.5;
-    breakevenPct += 0.4;
+    trailPct += 0.14;
+    breakevenPct += 0.12;
   }
 
-  trailPct = Math.max(2.4, Math.min(7.5, trailPct));
-  breakevenPct = Math.max(1.0, Math.min(5.0, breakevenPct));
+  trailPct = Math.max(0.55, Math.min(2.40, trailPct));
+  breakevenPct = Math.max(0.25, Math.min(1.60, breakevenPct));
 
-  let startCushion = 0.4;
+  let startCushion = 0.20;
   if (mode === 'trend' && confidence >= 0.7 && !volHigh) startCushion = 0;
-  else if (volHigh && mode === 'counter') startCushion = 1.2;
-  else if (volHigh) startCushion = 0.9;
-  else if (mode === 'chop') startCushion = 0.6;
-  else if (volLow) startCushion = 0.2;
+  else if (volHigh && mode === 'counter') startCushion = 0.55;
+  else if (volHigh) startCushion = 0.40;
+  else if (mode === 'chop') startCushion = 0.30;
+  else if (volLow) startCushion = 0.08;
 
   const startRule = startCushion <= 0.05
-    ? 'Trail starts immediately after confirmation.'
-    : `Trail starts after +${formatPercentValue(startCushion)}% profit cushion.`;
+    ? 'Trail activates immediately after entry confirmation.'
+    : `Trail activates after +${formatPercentValue(startCushion)}% profit cushion.`;
 
-  let regimeHint = 'Balanced trailing profile.';
-  if (mode === 'trend') regimeHint = `${side} trend continuation detected; tighter trailing to lock gains earlier.`;
-  else if (mode === 'counter') regimeHint = `${side} counter-trend risk detected; wider leash to avoid shakeouts.`;
-  else if (volHigh) regimeHint = 'High volatility regime; delayed activation to reduce noise stops.';
+  let regimeHint = 'Scalp defense profile active.';
+  if (mode === 'trend') regimeHint = `${side} trend continuation detected; fast lock-in to preserve momentum gains.`;
+  else if (mode === 'counter') regimeHint = `${side} counter-trend risk detected; wider leash to reduce premature stop-outs.`;
+  else if (volHigh) regimeHint = 'High volatility regime; staged trailing helps avoid noise whipsaws.';
 
   if (volLow && mode === 'trend') {
-    regimeHint = `${side} low-volatility trend; aggressive protection is enabled.`;
+    regimeHint = `${side} low-volatility trend; aggressive protection is enabled for scalp retention.`;
   }
 
   return {
@@ -1273,8 +1308,8 @@ function buildDirectionalEntryLadder(direction = 'LONG', rawEntries = [], candle
 
   if (!(base > 0)) return [];
 
-  const step1 = atr && atr > 0 ? atr * 0.5 : Math.max(base * 0.01, 0.0000001);
-  const step2 = atr && atr > 0 ? atr * 1.0 : Math.max(base * 0.02, 0.0000002);
+  const step1 = atr && atr > 0 ? atr * 0.32 : Math.max(base * 0.006, 0.0000001);
+  const step2 = atr && atr > 0 ? atr * 0.64 : Math.max(base * 0.012, 0.0000002);
 
   if (side === 'SHORT') {
     const higher = unique.filter(v => v > base).sort((a, b) => a - b);
@@ -1300,6 +1335,7 @@ function buildCanonicalSignalText(rawSignalText = '', fallbackSymbol = 'BTC', op
   const forcedPlan = options.forcedPlan || null;
   const direction = forcedPlan?.direction || parseSignalDirection(cleaned);
   const directionLabel = direction === 'SHORT' ? 'Short' : 'Long';
+  const leverageLabel = forcedPlan?.leverageLabel || deriveScalpLeverageLabel(options.candleData, options.tradeMeta?.confidence);
 
   if (forcedPlan && Array.isArray(forcedPlan.entries) && Array.isArray(forcedPlan.targets) && forcedPlan.targets.length >= 4) {
     const entryNums = forcedPlan.entries.slice(0, 3).map(toNumber);
@@ -1331,7 +1367,7 @@ Exchanges: Binance Futures
 
 Signal Type: Regular (${directionLabel})
 
-Leverage: Cross (20X)
+Leverage: ${leverageLabel}
 
 Entry :
 (${formattedEntries[0]}, ${formattedEntries[1]}, ${formattedEntries[2]})
@@ -1431,17 +1467,17 @@ ${trailingBlock}`;
 
   if ((hasPlaceholderTargets && hasPlaceholderStop) || hasInvalidTargets) {
     const entryBase = entryLadderNums[0] ?? refPrice;
-    const atrNum = toNumber(options.candleData?.atr) ?? Math.max(entryBase * 0.03, 0.0001);
+    const atrNum = toNumber(options.candleData?.atr) ?? Math.max(entryBase * 0.012, 0.0001);
     const repairedStop = direction === 'SHORT'
-      ? entryBase + (1.25 * atrNum)
-      : Math.max(0, entryBase - (1.25 * atrNum));
-    const risk = Math.max(Math.abs(entryBase - repairedStop), atrNum * 0.6);
+      ? entryBase + (0.90 * atrNum)
+      : Math.max(0, entryBase - (0.90 * atrNum));
+    const risk = Math.max(Math.abs(entryBase - repairedStop), atrNum * 0.42);
     const dirMult = direction === 'SHORT' ? -1 : 1;
     const repairedTargets = [
-      entryBase + (dirMult * risk * 1.0),
-      entryBase + (dirMult * risk * 1.8),
-      entryBase + (dirMult * risk * 2.7),
-      entryBase + (dirMult * risk * 3.5)
+      entryBase + (dirMult * risk * 0.9),
+      entryBase + (dirMult * risk * 1.5),
+      entryBase + (dirMult * risk * 2.1),
+      entryBase + (dirMult * risk * 2.8)
     ];
 
     targets = repairedTargets.map(v => formatSignalPrice(v, refPrice));
@@ -1462,10 +1498,10 @@ ${trailingBlock}`;
 
   // If parsing fails, still return a cleaned copy-ready signal without forbidden annotations.
   if (entryLadder.length < 3 || targets.length < 4 || !stop) {
-    const atrNum = toNumber(options.candleData?.atr) ?? Math.max(refPrice * 0.03, 0.0001);
+    const atrNum = toNumber(options.candleData?.atr) ?? Math.max(refPrice * 0.012, 0.0001);
     const fallbackBase = refPrice;
-    const step1 = atrNum > 0 ? atrNum * 0.5 : Math.max(fallbackBase * 0.01, 0.0000001);
-    const step2 = atrNum > 0 ? atrNum * 1.0 : Math.max(fallbackBase * 0.02, 0.0000002);
+    const step1 = atrNum > 0 ? atrNum * 0.32 : Math.max(fallbackBase * 0.006, 0.0000001);
+    const step2 = atrNum > 0 ? atrNum * 0.64 : Math.max(fallbackBase * 0.012, 0.0000002);
     const autoEntryNums = entryLadderNums.length >= 3
       ? entryLadderNums
       : (direction === 'SHORT'
@@ -1474,15 +1510,15 @@ ${trailingBlock}`;
     const autoEntries = autoEntryNums.map(v => formatSignalPrice(v, refPrice));
     const entryBase = autoEntryNums[0] ?? refPrice;
     const autoStopNum = direction === 'SHORT'
-      ? entryBase + (1.25 * atrNum)
-      : Math.max(0.0000001, entryBase - (1.25 * atrNum));
-    const autoRisk = Math.max(Math.abs(entryBase - autoStopNum), atrNum * 0.6);
+      ? entryBase + (0.90 * atrNum)
+      : Math.max(0.0000001, entryBase - (0.90 * atrNum));
+    const autoRisk = Math.max(Math.abs(entryBase - autoStopNum), atrNum * 0.42);
     const dirMult = direction === 'SHORT' ? -1 : 1;
     const autoTargets = [
-      entryBase + (dirMult * autoRisk * 1.0),
-      entryBase + (dirMult * autoRisk * 1.8),
-      entryBase + (dirMult * autoRisk * 2.7),
-      entryBase + (dirMult * autoRisk * 3.5)
+      entryBase + (dirMult * autoRisk * 0.9),
+      entryBase + (dirMult * autoRisk * 1.5),
+      entryBase + (dirMult * autoRisk * 2.1),
+      entryBase + (dirMult * autoRisk * 2.8)
     ].map(v => formatSignalPrice(Math.max(v, 0.0000001), refPrice));
     const autoStop = formatSignalPrice(autoStopNum, refPrice);
 
@@ -1492,7 +1528,7 @@ Exchanges: Binance Futures
 
 Signal Type: Regular (${directionLabel})
 
-Leverage: Cross (20X)
+Leverage: ${leverageLabel}
 
 Entry :
 (${autoEntries[0]}, ${autoEntries[1]}, ${autoEntries[2]})
@@ -1515,7 +1551,7 @@ Exchanges: Binance Futures
 
 Signal Type: Regular (${directionLabel})
 
-Leverage: Cross (20X)
+Leverage: ${leverageLabel}
 
 Entry :
 (${entryLadder[0]}, ${entryLadder[1]}, ${entryLadder[2]})
@@ -1674,29 +1710,44 @@ function buildApiDrivenTradePlan({ symbol = 'BTC', userQuery = '', assetContext 
 
   const bias = evaluateDirectionalBias(snap, candleData, userQuery);
   const direction = bias.direction;
+  const confidence = normalizeTradeConfidence(bias.confidence);
 
   const atr = toNumber(candleData?.atr);
-  const safeAtr = atr && atr > 0 ? atr : Math.max(current * 0.03, current * 0.008);
+  const safeAtr = atr && atr > 0 ? atr : Math.max(current * 0.012, current * 0.004);
+  const atrPct = (safeAtr / current) * 100;
   const swingHigh = toNumber(candleData?.swingHigh);
   const swingLow = toNumber(candleData?.swingLow);
   const range = (swingHigh !== null && swingLow !== null && swingHigh > swingLow) ? (swingHigh - swingLow) : 0;
   const pos = range > 0 ? (current - swingLow) / range : 0.5;
   const change = toNumber(snap?.changePct) ?? 0;
+  const volHigh = atrPct >= 3.5;
+  const volLow = atrPct <= 1.2;
+  const leverageLabel = deriveScalpLeverageLabel(candleData, bias.confidence);
 
-  let offset = direction === 'SHORT' ? 0.14 : -0.14;
+  let offset = direction === 'SHORT' ? 0.08 : -0.08;
   if (direction === 'LONG') {
-    if (change >= 4 && bias.confidence >= 2) offset = -0.07;
-    else if (change <= -1 || pos > 0.7) offset = -0.28;
-    else if (bias.confidence < 1) offset = -0.20;
+    if (change >= 3 && bias.confidence >= 2) offset = -0.04;
+    else if (change <= -0.8 || pos > 0.7) offset = -0.16;
+    else if (bias.confidence < 1) offset = -0.12;
   } else {
-    if (change <= -4 && bias.confidence >= 2) offset = 0.07;
-    else if (change >= 1 || pos < 0.3) offset = 0.28;
-    else if (bias.confidence < 1) offset = 0.20;
+    if (change <= -3 && bias.confidence >= 2) offset = 0.04;
+    else if (change >= 0.8 || pos < 0.3) offset = 0.16;
+    else if (bias.confidence < 1) offset = 0.12;
+  }
+
+  let entryStep1 = volHigh ? 0.35 : (volLow ? 0.22 : 0.28);
+  let entryStep2 = volHigh ? 0.70 : (volLow ? 0.44 : 0.56);
+  if (confidence >= 0.75) {
+    entryStep1 *= 0.9;
+    entryStep2 *= 0.9;
+  } else if (confidence <= 0.35) {
+    entryStep1 *= 1.1;
+    entryStep2 *= 1.1;
   }
 
   let entry1 = current + (offset * safeAtr);
-  let entry2 = direction === 'LONG' ? entry1 - (0.45 * safeAtr) : entry1 + (0.45 * safeAtr);
-  let entry3 = direction === 'LONG' ? entry1 - (0.90 * safeAtr) : entry1 + (0.90 * safeAtr);
+  let entry2 = direction === 'LONG' ? entry1 - (entryStep1 * safeAtr) : entry1 + (entryStep1 * safeAtr);
+  let entry3 = direction === 'LONG' ? entry1 - (entryStep2 * safeAtr) : entry1 + (entryStep2 * safeAtr);
 
   if (direction === 'LONG') {
     entry1 = Math.max(0, entry1);
@@ -1709,21 +1760,29 @@ function buildApiDrivenTradePlan({ symbol = 'BTC', userQuery = '', assetContext 
     if (entry3 <= entry2) entry3 = entry2 * 1.005;
   }
 
-  let stop = direction === 'LONG' ? entry1 - (1.25 * safeAtr) : entry1 + (1.25 * safeAtr);
+  let stopMult = volHigh ? 1.00 : (volLow ? 0.72 : 0.85);
+  if (confidence >= 0.75) stopMult *= 0.92;
+  else if (confidence <= 0.35) stopMult *= 1.10;
+
+  let stop = direction === 'LONG' ? entry1 - (stopMult * safeAtr) : entry1 + (stopMult * safeAtr);
   if (direction === 'LONG' && swingLow !== null) {
-    stop = Math.min(stop, swingLow - (0.10 * safeAtr));
+    stop = Math.min(stop, swingLow - (0.06 * safeAtr));
   }
   if (direction === 'SHORT' && swingHigh !== null) {
-    stop = Math.max(stop, swingHigh + (0.10 * safeAtr));
+    stop = Math.max(stop, swingHigh + (0.06 * safeAtr));
   }
   if (direction === 'LONG') stop = Math.max(0, stop);
 
   let risk = Math.abs(entry1 - stop);
-  if (!(risk > 0)) risk = Math.max(safeAtr, current * 0.01);
+  if (!(risk > 0)) risk = Math.max(safeAtr * 0.45, current * 0.0035);
+
+  const tpMultipliers = confidence >= 0.75
+    ? [1.0, 1.7, 2.4, 3.2]
+    : (confidence <= 0.35 ? [0.8, 1.3, 1.8, 2.4] : [0.9, 1.5, 2.1, 2.8]);
 
   const targets = direction === 'LONG'
-    ? [entry1 + (risk * 1.0), entry1 + (risk * 1.8), entry1 + (risk * 2.7), entry1 + (risk * 3.5)]
-    : [entry1 - (risk * 1.0), entry1 - (risk * 1.8), entry1 - (risk * 2.7), entry1 - (risk * 3.5)];
+    ? tpMultipliers.map(mult => entry1 + (risk * mult))
+    : tpMultipliers.map(mult => entry1 - (risk * mult));
 
   const minPrice = Math.max(current * 0.02, 0.0000001);
   const sanitizePositive = (n, fallback = current) => {
@@ -1745,6 +1804,7 @@ function buildApiDrivenTradePlan({ symbol = 'BTC', userQuery = '', assetContext 
     entries: sanitizedEntries,
     targets: sanitizedTargets,
     stop: sanitizedStop,
+    leverageLabel,
     confidence: bias.confidence,
     changePct: planChangePct,
     patternBias: getPatternBiasScore(candleData),
@@ -1784,7 +1844,7 @@ Exchanges: Binance Futures
 
 Signal Type: Regular ([Long/Short])
 
-Leverage: Cross (20X)
+Leverage: Cross (4X-12X, volatility-adjusted)
 
 Entry :
 ([Price 1], [Price 2], [Price 3])
@@ -2008,11 +2068,15 @@ export async function fetchDualAI(userQuery, assetContext = '') {
 
   const signalMode = isSignalRequest(userQuery);
   let extractedSymbol = extractPrimarySymbol(userQuery, assetContext);
-  const interval = '4h';
+  const interval = signalMode ? '15m' : '4h';
+  const contextSnapshots = parseAssetContextSnapshots(assetContext);
+  const mirroredRefPrice = extractedSymbol
+    ? toNumber(contextSnapshots[String(extractedSymbol).toUpperCase()]?.price)
+    : null;
 
   // Global Mirror Protocol: if this is a signal query, force all devices to read one canonical response first.
   if (signalMode && extractedSymbol) {
-    const mirroredHtml = await readMirroredSignal(extractedSymbol, interval);
+    const mirroredHtml = await readMirroredSignal(extractedSymbol, interval, mirroredRefPrice);
     if (mirroredHtml) {
       console.log(`✅ Mirror cache hit for ${extractedSymbol} (${interval})`);
       return mirroredHtml;
@@ -2049,7 +2113,6 @@ export async function fetchDualAI(userQuery, assetContext = '') {
       fallbackPrice: fallbackReferencePrice
     })
     : null;
-  const contextSnapshots = parseAssetContextSnapshots(assetContext);
   const planSymbol = String(apiTradePlan?.symbol || extractedSymbol || candleData?.symbol?.replace('USDT', '') || '').toUpperCase();
   const activeSnapshot = planSymbol ? (contextSnapshots[planSymbol] || null) : null;
   const tradeMeta = {
@@ -2222,7 +2285,8 @@ CRITICAL: Use this plan exactly in the final signal format.`;
   if (signalMode && mirrorSymbol && signalText) {
     await writeMirroredSignal(mirrorSymbol, interval, finalHtml, {
       userQuery,
-      generatedAt: new Date().toISOString()
+      generatedAt: new Date().toISOString(),
+      referencePrice: toNumber(candleData?.currentPrice) ?? toNumber(activeSnapshot?.price) ?? null
     });
   }
 

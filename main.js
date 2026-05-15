@@ -1650,8 +1650,19 @@ function setupAiResearchChat() {
 
     try {
       // Fetch from AI with full platform context
-      const assetCtx = assets
-        .filter(a => !isStablecoinSymbol(a.symbol, a.name, a.price))
+      const promptUpper = String(val || '').toUpperCase();
+      const pairMatch = promptUpper.match(/\b([A-Z0-9]{2,10})\s*\/\s*USDT\b/) || promptUpper.match(/\b([A-Z0-9]{2,10})USDT\b/);
+      const requestedSymbol = pairMatch ? pairMatch[1] : null;
+      const liveAssets = assets
+        .filter(a => !isStablecoinSymbol(a.symbol, a.name, a.price));
+      const prioritizedAssets = requestedSymbol
+        ? [
+            ...liveAssets.filter(a => a.symbol === requestedSymbol),
+            ...liveAssets.filter(a => a.symbol !== requestedSymbol)
+          ]
+        : liveAssets;
+      const assetCtx = prioritizedAssets
+        .slice(0, 24)
         .map(a => `${a.symbol}: CURRENT_PRICE=$${a.price} (${a.change >= 0 ? '+' : ''}${a.change.toFixed(2)}%) - Rationale: ${a.reason}`)
         .join(' | ');
       const apiHealthCtx = window._apiHealthPrompt ? `API HEALTH: ${window._apiHealthPrompt}` : 'API HEALTH: pending first sync';

@@ -5,7 +5,7 @@
 
 // Cache: symbol+interval → { patterns, timestamp }
 const cache = {};
-const CACHE_TTL = 60 * 1000; // 1 minute
+const CACHE_TTL = 20 * 1000; // 20 seconds (scalp data freshness)
 
 // ── Pattern Detection Helpers ──────────────────────────────────
 
@@ -381,14 +381,12 @@ export default async function handler(req, res) {
 
         if (cachedData?.data && cachedData?.updated_at) {
           const age = now - new Date(cachedData.updated_at).getTime();
-          if (age < 5 * 60 * 1000) {
-            cache[cacheKey] = { timestamp: now, data: cachedData.data };
-            return res.status(200).json({ source: 'global_cache', ...cachedData.data });
+          if (age >= 0) {
+            staleGlobalCache = {
+              ageMs: age,
+              data: cachedData.data
+            };
           }
-          staleGlobalCache = {
-            ageMs: age,
-            data: cachedData.data
-          };
         }
       } catch (cacheErr) {
         console.warn('⚠️ Candle cache read skipped:', cacheErr.message);
@@ -417,7 +415,7 @@ export default async function handler(req, res) {
           ...localCached.data
         });
       }
-      if (staleGlobalCache?.data) {
+      if (staleGlobalCache?.data && staleGlobalCache.ageMs <= 30 * 60 * 1000) {
         return res.status(200).json({
           source: 'stale_global_cache',
           warning: `Live fetch failed: ${klinesResult.error?.message || `Binance HTTP ${klinesResult.status || 'unknown'}`}`,
