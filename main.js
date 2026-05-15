@@ -1229,46 +1229,6 @@ window.triggerMcp = async function(type) {
   btn.click();
 }
 
-const ANALYZE_INTENT_TTL_MS = 10 * 60 * 1000;
-
-function extractSymbolFromPairPrompt(text = '') {
-  const raw = String(text || '').toUpperCase().trim();
-  const pairMatch = raw.match(/\b([A-Z0-9]{2,10})\s*\/\s*USDT\b/);
-  if (pairMatch) return pairMatch[1];
-  const compactMatch = raw.match(/\b([A-Z0-9]{2,10})USDT\b/);
-  if (compactMatch) return compactMatch[1];
-  return null;
-}
-
-function getAnalyzeIntentStore() {
-  if (!window._pendingAnalyzeSignalIntent || typeof window._pendingAnalyzeSignalIntent !== 'object') {
-    window._pendingAnalyzeSignalIntent = {};
-  }
-  return window._pendingAnalyzeSignalIntent;
-}
-
-function setPendingAnalyzeSignalIntent(symbol, direction) {
-  const sym = String(symbol || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
-  const dir = String(direction || '').toUpperCase();
-  if (!sym || (dir !== 'LONG' && dir !== 'SHORT')) return;
-  const store = getAnalyzeIntentStore();
-  store[sym] = { direction: dir, ts: Date.now() };
-}
-
-function consumePendingAnalyzeSignalIntent(symbol) {
-  const sym = String(symbol || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
-  if (!sym) return null;
-  const store = getAnalyzeIntentStore();
-  const item = store[sym];
-  if (!item) return null;
-  delete store[sym];
-  const age = Date.now() - Number(item.ts || 0);
-  if (age > ANALYZE_INTENT_TTL_MS) return null;
-  const direction = String(item.direction || '').toUpperCase();
-  if (direction !== 'LONG' && direction !== 'SHORT') return null;
-  return { symbol: sym, direction };
-}
-
 
 function typeWriterEffect(element, lines, speed = 20) {
   if (!element) return;
@@ -1366,29 +1326,16 @@ function renderOpportunitiesPage() {
           </span>
         `}
       </td>
-      <td>
-        <button
-          class="action-btn"
-          data-symbol="${asset.symbol}"
-          data-signal-dir="${sig.type === 'WAIT' ? 'WAIT' : (sig.isBull ? 'LONG' : 'SHORT')}"
-        >Analyze</button>
-      </td>
+      <td><button class="action-btn">Analyze</button></td>
     </tr>
   `}).join('');
 
   document.querySelectorAll('#opportunities-table-body .action-btn').forEach(btn => {
     btn.addEventListener('click', (e) => {
-      const actionBtn = e.currentTarget;
-      const row = actionBtn.closest('tr');
-      const rowSymbol = row?.querySelector('.live-price')?.dataset?.symbol;
-      const symbol = String(actionBtn.dataset.symbol || rowSymbol || '').toUpperCase();
+      const row = e.target.closest('tr');
+      const symbol = row.querySelector('.live-price').dataset.symbol;
       if (!symbol) return;
-      const baseSymbol = String(symbol).replace(/\/?USDT$/i, '').toUpperCase();
-      const signalDir = String(actionBtn.dataset.signalDir || '').toUpperCase();
-      if (signalDir === 'LONG' || signalDir === 'SHORT') {
-        setPendingAnalyzeSignalIntent(baseSymbol, signalDir);
-      }
-      const pair = `${baseSymbol}/USDT`;
+      const pair = `${String(symbol).replace(/\/?USDT$/i, '').toUpperCase()}/USDT`;
       
       navigateToPage('ai-research'); // Switch to AI Research Analyst Page
       setTimeout(() => {
@@ -1709,17 +1656,8 @@ function setupAiResearchChat() {
         .filter(a => !isStablecoinSymbol(a.symbol, a.name, a.price))
         .map(a => `${a.symbol}: CURRENT_PRICE=$${a.price} (${a.change >= 0 ? '+' : ''}${a.change.toFixed(2)}%) - Rationale: ${a.reason}`)
         .join(' | ');
-      const promptSymbol = extractSymbolFromPairPrompt(val);
-      const analyzeIntent = promptSymbol ? consumePendingAnalyzeSignalIntent(promptSymbol) : null;
-      const signalIntentCtx = analyzeIntent
-        ? `FORCED_SIGNAL_DIRECTION: ${analyzeIntent.symbol}=${analyzeIntent.direction}`
-        : '';
-      const requestQuery = analyzeIntent ? `${val}\n[ANALYZE_SIGNAL_REQUEST]` : val;
       const apiHealthCtx = window._apiHealthPrompt ? `API HEALTH: ${window._apiHealthPrompt}` : 'API HEALTH: pending first sync';
-      const dualRes = await fetchDualAI(
-        requestQuery,
-        `LATEST LIVE DATA: ${assetCtx}. ${apiHealthCtx}${signalIntentCtx ? ` | ${signalIntentCtx}` : ''}`
-      );
+      const dualRes = await fetchDualAI(val, `LATEST LIVE DATA: ${assetCtx}. ${apiHealthCtx}`);
 
       if (loadingMsg.parentNode) history.removeChild(loadingMsg);
 

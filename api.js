@@ -897,8 +897,7 @@ const SYMBOL_STOP_WORDS = new Set([
 ]);
 
 function isSignalRequest(text = '') {
-  const q = String(text || '');
-  return SIGNAL_QUERY_RE.test(q) || /\[ANALYZE_SIGNAL_REQUEST\]/i.test(q);
+  return SIGNAL_QUERY_RE.test(text);
 }
 
 function escapeRegExp(text = '') {
@@ -1665,22 +1664,6 @@ function evaluateDirectionalBias(snapshot = null, candleData = null, userQuery =
   };
 }
 
-function parseForcedSignalDirectionForSymbol(assetContext = '', symbol = '') {
-  const target = String(symbol || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
-  if (!target) return null;
-  const upper = String(assetContext || '').toUpperCase();
-  const re = /FORCED_SIGNAL_DIRECTION:\s*([A-Z0-9]{2,10})\s*=\s*(LONG|SHORT)/g;
-  let match;
-  while ((match = re.exec(upper)) !== null) {
-    const sym = String(match[1] || '').toUpperCase();
-    const dir = String(match[2] || '').toUpperCase();
-    if (sym === target && (dir === 'LONG' || dir === 'SHORT')) {
-      return dir;
-    }
-  }
-  return null;
-}
-
 function buildApiDrivenTradePlan({ symbol = 'BTC', userQuery = '', assetContext = '', candleData = null, fallbackPrice = null } = {}) {
   const snapshots = parseAssetContextSnapshots(assetContext);
   const snap = snapshots[String(symbol || '').toUpperCase()] || null;
@@ -1690,8 +1673,7 @@ function buildApiDrivenTradePlan({ symbol = 'BTC', userQuery = '', assetContext 
   if (!(current > 0)) return null;
 
   const bias = evaluateDirectionalBias(snap, candleData, userQuery);
-  const forcedDirection = parseForcedSignalDirectionForSymbol(assetContext, symbol);
-  const direction = forcedDirection || bias.direction;
+  const direction = bias.direction;
 
   const atr = toNumber(candleData?.atr);
   const safeAtr = atr && atr > 0 ? atr : Math.max(current * 0.03, current * 0.008);
@@ -1766,9 +1748,7 @@ function buildApiDrivenTradePlan({ symbol = 'BTC', userQuery = '', assetContext 
     confidence: bias.confidence,
     changePct: planChangePct,
     patternBias: getPatternBiasScore(candleData),
-    rationaleHints: forcedDirection
-      ? [`Signal direction synced from Opportunities column (${forcedDirection}).`, ...bias.reasons]
-      : bias.reasons
+    rationaleHints: bias.reasons
   };
 }
 
