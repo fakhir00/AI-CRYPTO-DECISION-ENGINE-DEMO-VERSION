@@ -1334,10 +1334,12 @@ function renderOpportunitiesPage() {
     btn.addEventListener('click', (e) => {
       const row = e.target.closest('tr');
       const symbol = row.querySelector('.live-price').dataset.symbol;
+      if (!symbol) return;
+      const pair = `${String(symbol).replace(/\/?USDT$/i, '').toUpperCase()}/USDT`;
       
       navigateToPage('ai-research'); // Switch to AI Research Analyst Page
       setTimeout(() => {
-         triggerMcp(`Generate a strict quantitative algorithmic trade setup for ${symbol} using the provided market structure and candlestick patterns.`);
+         triggerMcp(pair);
       }, 100);
     });
   });
