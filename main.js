@@ -40,7 +40,7 @@ let LIVE_BTC_CHAIN = null; // BTC on-chain health
 let LIVE_DUNE_PULSE = null; // Dune macro on-chain pulse
 let OPPORTUNITY_SORT = 'alpha';
 let CURRENT_MARKET_TIMEFRAME = '24H';
-const MAX_TRADABLE_ASSETS = 50;
+const MAX_TRADABLE_ASSETS = 30;
 const MAX_TOP_OPPORTUNITIES = MAX_TRADABLE_ASSETS;
 const STABLE_SYMBOLS = new Set([
   'USDT', 'USDC', 'DAI', 'BUSD', 'FDUSD', 'TUSD', 'PYUSD', 'USDE', 'USDD',
@@ -408,32 +408,20 @@ function computeOpportunityScore(asset = {}, emaInfo = null, spreadOverride = nu
 function applyDirectionalBiasToAssets(assetList = []) {
   const emaMap = window._liveEmaData || {};
   return assetList.map(asset => {
-    const scalpSignal = asset?.signals?.scalp;
-    const daySignal = asset?.signals?.day;
-    const preferredSignal = daySignal?.status === 'SIGNAL'
-      ? daySignal
-      : (scalpSignal?.status === 'SIGNAL' ? scalpSignal : null);
-
     const emaInfo = emaMap[asset.symbol];
-    const computedBias = classifyDirectionalBias(asset, emaInfo);
-    const bias = preferredSignal?.direction === 'BUY'
-      ? 'bullish'
-      : preferredSignal?.direction === 'SELL'
-        ? 'bearish'
-        : computedBias;
+    const bias = classifyDirectionalBias(asset, emaInfo);
     const evalResult = evaluateDirectionalBiasScores(asset, emaInfo);
+    const reasonBias = detectReasonBias(asset.reason);
     const hasReason = typeof asset.reason === 'string' && asset.reason.trim().length > 0;
-    const alignedReason = hasReason ? asset.reason : generateReason(asset, asset.score, bias);
-    const preservedScore = Number(asset?.opportunityScore);
-    const opportunityScore = Number.isFinite(preservedScore)
-      ? preservedScore
-      : computeOpportunityScore(asset, emaInfo, evalResult.bull - evalResult.bear);
+    const alignedReason = (hasReason && reasonBias === bias)
+      ? asset.reason
+      : generateReason(asset, asset.score, bias);
     return {
       ...asset,
       reason: alignedReason,
       bias,
       biasConfidence: Math.abs(evalResult.bull - evalResult.bear),
-      opportunityScore
+      opportunityScore: computeOpportunityScore(asset, emaInfo, evalResult.bull - evalResult.bear)
     };
   });
 }
@@ -739,7 +727,7 @@ async function syncLiveApis() {
   if(statusEl) statusEl.textContent = "Syncing Live APIs...";
   
   try {
-    // 1. Fetch Market Leaderboard First (Top 50)
+    // 1. Fetch Market Leaderboard First (Top 30)
     const marketData = await fetchMarketData();
     if (!marketData) throw new Error('Failed to fetch market leaderboard');
 
@@ -1373,44 +1361,15 @@ function renderOpportunitiesPage() {
   const tbody = document.getElementById('opportunities-table-body');
   const sorted = getSortedTradeableAssets(OPPORTUNITY_SORT);
   const visibleRows = sorted.slice(0, MAX_TOP_OPPORTUNITIES);
-
-  const renderSignalCell = (signal = null) => {
-    if (!signal) {
-      return `
-        <div style="display:flex;flex-direction:column;gap:0.25rem;">
-          <span class="badge" style="background: rgba(255,255,255,0.05); color: var(--text-muted); font-size: 0.62rem; padding: 0.15rem 0.4rem; width: fit-content;">NO_DATA</span>
-          <span class="text-muted" style="font-size: 0.7rem;">Awaiting scan...</span>
-        </div>
-      `;
-    }
-
-    const line = String(signal.line || '');
-    if (signal.status === 'SIGNAL') {
-      const dirIsBuy = signal.direction === 'BUY';
-      return `
-        <div style="display:flex;flex-direction:column;gap:0.25rem;">
-          <span class="badge ${dirIsBuy ? 'sig-long' : 'sig-short'}" style="font-size: 0.62rem; padding: 0.15rem 0.45rem; width: fit-content;">
-            ${dirIsBuy ? 'BUY' : 'SELL'} - ${Number(signal.alpha ?? 50).toFixed(0)}
-          </span>
-          <span class="text-muted" style="font-size: 0.64rem; line-height: 1.25; font-family: var(--font-mono); word-break: break-all;">${line}</span>
-        </div>
-      `;
-    }
-
-    return `
-      <div style="display:flex;flex-direction:column;gap:0.25rem;">
-        <span class="badge" style="background: rgba(255,255,255,0.05); color: var(--text-muted); font-size: 0.62rem; padding: 0.15rem 0.4rem; width: fit-content;">NO_SIGNAL</span>
-        <span class="text-red" style="font-size: 0.68rem;">${signal.reason || 'RULE_FAIL'}</span>
-        <span class="text-muted" style="font-size: 0.64rem; line-height: 1.25; font-family: var(--font-mono); word-break: break-all;">${line}</span>
-      </div>
-    `;
-  };
   
   tbody.innerHTML = visibleRows.map((asset, i) => {
+    const sig = generateSignalForAsset(asset);
     const displayScore = getUnifiedAlphaScore(asset);
-    const scalpSignal = asset?.signals?.scalp || null;
-    const daySignal = asset?.signals?.day || null;
-
+    // Calculate profit potential based on max target (t4) at 5x leverage
+    let profitPot = 0;
+    if (sig.type !== 'WAIT' && asset.price > 0 && sig.t4 > 0) {
+       profitPot = (Math.abs(sig.t4 - asset.price) / asset.price) * 5 * 100;
+    }
     return `
     <tr>
       <td class="text-muted">${i+1}</td>
@@ -1428,8 +1387,17 @@ function renderOpportunitiesPage() {
 
 
       <td><span class="text-muted" style="font-size: 0.8rem">${asset.reason || 'Analyzing Technicals...'}</span></td>
-      <td>${renderSignalCell(scalpSignal)}</td>
-      <td>${renderSignalCell(daySignal)}</td>
+      <td>
+        ${sig.type === 'WAIT' ? `
+          <span class="badge" style="background: rgba(255,255,255,0.05); color: var(--text-muted); font-size: 0.65rem; padding: 0.2rem 0.5rem;">
+            ⏸ WAIT
+          </span>
+        ` : `
+          <span class="badge ${sig.isBull ? 'sig-long' : 'sig-short'}" style="font-size: 0.65rem; padding: 0.2rem 0.5rem; display: inline-flex; align-items: center; gap: 4px;">
+            ${sig.isBull ? '📈' : '📉'} ${sig.isBull ? 'LONG' : 'SHORT'}
+          </span>
+        `}
+      </td>
       <td><button class="action-btn">Analyze</button></td>
     </tr>
   `}).join('');

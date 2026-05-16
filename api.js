@@ -115,10 +115,10 @@ export function addToAIMemory(role, content) { AI_MEMORY.add(role, content); }
 export function clearAIMemory() { AI_MEMORY.clear(); }
 export function getAIMemory() { return AI_MEMORY.getMessages(); }
 
-// ─── 1. Binance-only tradable universe (top 50 + quality filter) ─────────────
+// ─── 1. Binance-only tradable universe (top 30 + quality filter) ─────────────
 export async function fetchMarketData() {
   try {
-    const BINANCE_TOP_N = 50;
+    const BINANCE_TOP_N = 30;
     const MIN_QUOTE_VOLUME_USD = 20_000_000;
     const MAX_ABS_CHANGE_PCT = 20;
     const MAX_INTRADAY_RANGE_PCT = 24;
@@ -129,6 +129,11 @@ export async function fetchMarketData() {
       'GUSD', 'LUSD', 'EURC', 'FRAX', 'USD1', 'USDS', 'USDP', 'USDB', 'RLUSD',
       'SUSD', 'MUSD', 'USD0', 'USDL', 'EURS', 'XAUT'
     ]);
+    const EXCLUDED_HIGH_RISK_SYMBOLS = new Set([
+      'DOGE', 'SHIB', 'PEPE', 'WIF', 'BONK', 'FLOKI', 'MEME', 'TURBO',
+      'MOG', 'POPCAT', 'PENGU', 'NEIRO', 'BRETT', 'TRUMP'
+    ]);
+
     const isStablecoinLike = (symbol = '', name = '', price = null) => {
       const sym = String(symbol || '').toUpperCase().trim();
       if (!sym) return false;
@@ -155,6 +160,7 @@ export async function fetchMarketData() {
     const isUnpredictableOrSham = (ticker = {}) => {
       const base = String(ticker.base || '').toUpperCase();
       if (!base) return true;
+      if (EXCLUDED_HIGH_RISK_SYMBOLS.has(base)) return true;
       if (/^(1000|1000000)/.test(base)) return true;
       if (/(UP|DOWN|BULL|BEAR)$/.test(base)) return true;
 
