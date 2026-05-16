@@ -24,6 +24,8 @@ const SIGNALS = [];
 const DEFI_POOLS = [];
 const NARRATIVES = [];
 const SMART_MONEY_FLOWS = []; // To be replaced with real data or removed
+const LIVE_TRENDING_COINS = [];
+const LIVE_WHALES_RAW = [];
 
 let assets = [];
 let LIVE_SENTIMENT = { bullish: 50, bearish: 50, score: 50 };
@@ -796,6 +798,10 @@ async function syncLiveApis() {
         const progress = Math.min(100, Math.max(20, 50 + (n.change * 3)));
         NARRATIVES.push({ ...n, val: progress });
       });
+      LIVE_TRENDING_COINS.length = 0;
+      if (Array.isArray(narrativesData.trendingCoins)) {
+        narrativesData.trendingCoins.forEach(c => LIVE_TRENDING_COINS.push(c));
+      }
       renderNarrativeMomentum();
     }
 
@@ -878,6 +884,8 @@ async function syncLiveApis() {
 
     // Update Whale & Smart Money Flows
     if (whales && whales.length > 0) {
+      LIVE_WHALES_RAW.length = 0;
+      whales.forEach(w => LIVE_WHALES_RAW.push(w));
       WHALE_ACTIONS.length = 0;
       SMART_MONEY_FLOWS.length = 0;
       ALPHA_SIGNALS.length = 0;
@@ -911,6 +919,8 @@ async function syncLiveApis() {
       ALPHA_SIGNALS.push({ time: "Live Alert", text: "Heavy on-chain crypto asset rotation detected across smart money addresses.", impact: "high" });
       ALPHA_SIGNALS.push({ time: "Live Alert", text: `Top whale executed a massive ${whales[0].token || 'ETH'} transaction worth $${whales[0].value.toFixed(1)}M.`, impact: "high" });
       ALPHA_SIGNALS.push({ time: "Live Alert", text: "Institutional flow algorithms detect accumulation in top 10 assets.", impact: "medium" });
+    } else {
+      LIVE_WHALES_RAW.length = 0;
     }
 
     // ═══ SINGLE SOURCE OF TRUTH ═══
@@ -1888,7 +1898,6 @@ function generateSignalForAsset(asset) {
   const indicator = LIVE_SIGNAL_CONTEXT[symbol] || {};
   const spread = LIVE_SPREADS[symbol] || {};
   const funding = LIVE_FUNDING.find(f => f.symbol === symbol) || { rate: null };
-  const oi = LIVE_OI.find(f => f.symbol === symbol) || { oi: null };
   const dune = LIVE_DUNE_PULSE || null;
   const dominanceData = window._liveGlobalMarketData || null;
   const utcHour = new Date().getUTCHours();
@@ -1917,6 +1926,39 @@ function generateSignalForAsset(asset) {
     return 0;
   };
 
+  const clamp = (value, min = 0, max = 100) => Math.max(min, Math.min(max, value));
+  const isMajorNewsHeadline = (title = '') => /(fomc|cpi|sec|etf|hack|exploit|lawsuit|ban|liquidation|outage|fed|rate hike|rate cut|exchange halt)/i.test(String(title || ''));
+
+  const hasMajorNewsWithinMinutes = (minutes = 30) => {
+    if (!Array.isArray(NEWS) || NEWS.length === 0) return false;
+    const now = Date.now();
+    const msWindow = Math.max(1, minutes) * 60 * 1000;
+    return NEWS.some((item) => {
+      const title = String(item?.title || '');
+      if (!isMajorNewsHeadline(title)) return false;
+      const published = Date.parse(item?.pubDate || item?.published || item?.isoDate || '');
+      if (!Number.isFinite(published)) return false;
+      const delta = now - published;
+      return delta >= 0 && delta <= msWindow;
+    });
+  };
+
+  const computeNewsSentimentBase = () => {
+    if (!Array.isArray(NEWS) || NEWS.length === 0) return 50;
+    const POS = /(surge|rally|breakout|approval|adoption|inflow|accumulation|partnership|upgrade|record high|launch)/i;
+    const NEG = /(dump|crash|drop|hack|exploit|lawsuit|ban|outflow|liquidation|shutdown|delay|reject)/i;
+    let pos = 0;
+    let neg = 0;
+    NEWS.slice(0, 20).forEach((item) => {
+      const t = String(item?.title || '');
+      if (POS.test(t)) pos += 1;
+      if (NEG.test(t)) neg += 1;
+    });
+    const total = pos + neg;
+    if (total === 0) return 50;
+    return clamp((pos / total) * 100, 0, 100);
+  };
+
   const classifyPattern = (type, side) => {
     const key = type === 'SCALP' ? '1m' : '15m';
     const patternFeed = LIVE_SIGNAL_PATTERNS?.[symbol]?.[key];
@@ -1924,11 +1966,18 @@ function generateSignalForAsset(asset) {
     if (!patterns.length) return { valid: false, highReliability: false, name: 'NONE' };
 
     const alignedType = side === 'BUY' ? 'bullish' : 'bearish';
-    const aligned = patterns.find(p => String(p?.type || '').toLowerCase() === alignedType);
+    const candleCount = Number(patternFeed?.candleCount);
+    const lastClosedCandle = Number.isFinite(candleCount) && candleCount >= 2 ? (candleCount - 2) : null;
+    const aligned = patterns.find((p) => {
+      const typeMatches = String(p?.type || '').toLowerCase() === alignedType;
+      if (!typeMatches) return false;
+      if (!Number.isFinite(lastClosedCandle)) return true;
+      return Number(p?.candle) === lastClosedCandle;
+    });
     if (!aligned) return { valid: false, highReliability: false, name: 'NONE' };
     const patternName = String(aligned?.name || 'Pattern').toUpperCase().replace(/\s+/g, '_');
     const isScalpHigh = /(FLAG|ENGULFING|PIN|HAMMER|SHOOTING)/i.test(patternName);
-    const isDayHigh = /(CUP|HANDLE|HEAD|SHOULDERS|H&S|TRIANGLE|FLAG)/i.test(patternName);
+    const isDayHigh = /(CUP|HANDLE|HEAD|SHOULDERS|H&S)/i.test(patternName);
     const highReliability = type === 'SCALP' ? isScalpHigh : isDayHigh;
     return { valid: true, highReliability, name: patternName };
   };
@@ -2054,13 +2103,149 @@ function generateSignalForAsset(asset) {
     return targets.slice(0, 4);
   };
 
+  const computeMacdScore = (macd, side) => {
+    if (!macd || !Number.isFinite(macd.histogram) || !Array.isArray(macd.histogramSeries)) return 50;
+    const histSeries = macd.histogramSeries.slice(-20);
+    if (histSeries.length === 0) return 50;
+    const maxHist = Math.max(...histSeries);
+    const minHist = Math.min(...histSeries);
+    const range = maxHist - minHist;
+    const strength = range === 0 ? 50 : clamp(((macd.histogram - minHist) / range) * 100, 0, 100);
+
+    const histPrev = Number(macd.histogramPrev);
+    const direction = Number.isFinite(histPrev)
+      ? (macd.histogram > histPrev ? 100 : macd.histogram < histPrev ? 0 : 50)
+      : 50;
+
+    const candlesSinceCross = side === 'BUY'
+      ? Number(macd.crossBarsAgoBullish)
+      : Number(macd.crossBarsAgoBearish);
+    const recency = Number.isFinite(candlesSinceCross)
+      ? Math.max(0, 100 - (Math.min(10, Math.max(0, candlesSinceCross)) * 10))
+      : 0;
+
+    const raw = (strength * 0.4) + (direction * 0.3) + (recency * 0.3);
+    const divergenceBonus = (side === 'BUY' && macd.bullishDivergence) || (side === 'SELL' && macd.bearishDivergence) ? 10 : 0;
+    return clamp(raw + divergenceBonus, 0, 100);
+  };
+
+  const computeWhaleActivityScore = (side) => {
+    const thresholdUsd = symbol === 'BTC' || symbol === 'ETH' ? 1_000_000 : 200_000;
+    let netFlowUsd = 0;
+    let hasData = false;
+
+    if (dune && Number.isFinite(Number(dune.signalScore))) {
+      hasData = true;
+      const duneDrift = ((Number(dune.signalScore) - 50) / 50) * thresholdUsd * 0.9;
+      netFlowUsd += duneDrift;
+    }
+
+    if (Array.isArray(LIVE_WHALES_RAW) && LIVE_WHALES_RAW.length > 0) {
+      const exchangeRe = /(binance|coinbase|kraken|okx|bybit|gate|kucoin|mexc)/i;
+      hasData = true;
+      LIVE_WHALES_RAW.slice(0, 40).forEach((tx) => {
+        const valueM = Number(tx?.value);
+        const usd = Number.isFinite(valueM) && valueM > 0 ? valueM * 1_000_000 : 0;
+        if (!(usd > 0)) return;
+        const from = String(tx?.from || '').toLowerCase();
+        const to = String(tx?.to || '').toLowerCase();
+        const fromEx = exchangeRe.test(from);
+        const toEx = exchangeRe.test(to);
+        if (fromEx && !toEx) netFlowUsd += usd; // exchange outflow (bullish)
+        if (!fromEx && toEx) netFlowUsd -= usd; // exchange inflow (bearish)
+      });
+    }
+
+    if (!hasData) return 50;
+    const bullishFlowScore = netFlowUsd >= thresholdUsd
+      ? 100
+      : netFlowUsd <= -thresholdUsd
+        ? 0
+        : clamp(50 + ((netFlowUsd / thresholdUsd) * 50), 0, 100);
+    return side === 'BUY' ? bullishFlowScore : (100 - bullishFlowScore);
+  };
+
+  const computeEmaConfluenceScore = (type, side) => {
+    const emaSnap = type === 'SCALP' ? indicator?.ema1m : indicator?.ema15m;
+    if (!emaSnap) return 50;
+
+    const e9 = Number(emaSnap.ema9);
+    const e21 = Number(emaSnap.ema21);
+    const e9Prev = Number(emaSnap.ema9Prev);
+    const e21Prev = Number(emaSnap.ema21Prev);
+    if (![e9, e21, e9Prev, e21Prev].every(Number.isFinite)) return 50;
+
+    const aboveBoth = price > e9 && price > e21;
+    const belowBoth = price < e9 && price < e21;
+    const spreadNow = Math.abs(e9 - e21);
+    const spreadPrev = Math.abs(e9Prev - e21Prev);
+    const expanding = spreadNow > spreadPrev;
+
+    if (side === 'BUY') {
+      if (aboveBoth && e9 > e21 && expanding) return 100;
+      if (belowBoth && e9 < e21) return 0;
+      return 50;
+    }
+
+    if (belowBoth && e9 < e21 && expanding) return 100;
+    if (aboveBoth && e9 > e21) return 0;
+    return 50;
+  };
+
+  const computeVolumeScore = (ratio) => {
+    if (!Number.isFinite(ratio)) return 50;
+    if (ratio > 2.0) return 100;
+    if (ratio > 1.5) return 70;
+    if (ratio > 1.2) return 50;
+    return 20;
+  };
+
+  const computeAlphaSourcesScore = (side) => {
+    const growthCandidates = (DEFI_POOLS || [])
+      .map((p) => (
+        Number(p?.tvlUsdChange24h)
+        || Number(p?.tvl_change_1d)
+        || Number(p?.change_1d)
+        || Number(p?.tvl_change_24h)
+        || Number(p?.apyPct1D)
+      ))
+      .filter(Number.isFinite);
+    const avgGrowth = growthCandidates.length
+      ? (growthCandidates.reduce((sum, x) => sum + x, 0) / growthCandidates.length)
+      : null;
+    const defiScore = avgGrowth === null ? 50 : avgGrowth > 5 ? 100 : avgGrowth > 0 ? 70 : avgGrowth < -5 ? 20 : 50;
+
+    const trendingScore = LIVE_TRENDING_COINS.length > 0
+      ? (LIVE_TRENDING_COINS.some(c => String(c?.symbol || '').toUpperCase() === symbol) ? 100 : 80)
+      : 50;
+
+    const fng = Number(LIVE_FNG?.value);
+    let fngScore = 50;
+    if (Number.isFinite(fng)) {
+      if (side === 'BUY' && fng < 25) fngScore = 100;
+      else if (side === 'SELL' && fng > 75) fngScore = 100;
+      else if (side === 'BUY' && fng > 75) fngScore = 20;
+      else if (side === 'SELL' && fng < 25) fngScore = 20;
+      else fngScore = 50;
+    }
+
+    let domScore = 50;
+    const domShift = getBtcDominanceShiftPct();
+    if (symbol !== 'BTC' && Number.isFinite(domShift)) {
+      if (side === 'BUY' && domShift <= -0.5) domScore = 100;
+      else if (side === 'SELL' && domShift >= 0.5) domScore = 100;
+      else domScore = 50;
+    }
+
+    return (defiScore + trendingScore + fngScore + domScore) / 4;
+  };
+
   const evaluateCandidate = (type) => {
     const isScalp = type === 'SCALP';
     const macd = isScalp ? indicator?.macd1m : indicator?.macd15m;
     const rsi = Number(isScalp ? indicator?.rsi1m : indicator?.rsi15m);
-    const volumeSpikeRatio = Number(isScalp ? indicator?.volumeSpikeRatio1m : indicator?.volumeSpikeRatio15m);
-    const ema9 = Number(indicator?.ema9);
-    const ema21 = Number(indicator?.ema21);
+    const emaSnap = isScalp ? indicator?.ema1m : indicator?.ema15m;
+    const volumeRatioMandatory = Number(isScalp ? indicator?.volumeVsAvg1m3 : indicator?.volumeVsAvg15m5);
     const atr = Number(indicator?.atr);
     const atrSafe = Number.isFinite(atr) && atr > 0 ? atr : price * (isScalp ? 0.0026 : 0.0044);
     const atrPct = atrSafe / price;
@@ -2070,42 +2255,35 @@ function generateSignalForAsset(asset) {
     }
 
     let side = null;
-    if (macd.line > macd.signal && macd.histogram > 0) side = 'BUY';
-    if (macd.line < macd.signal && macd.histogram < 0) side = 'SELL';
+    if (macd.line > macd.signal) side = 'BUY';
+    if (macd.line < macd.signal) side = 'SELL';
     if (!side) return buildWait(`${type}: MACD core trigger failed.`);
-
-    if (!isScalp) {
-      const dayExpansion = side === 'BUY'
-        ? (Number.isFinite(macd.histogramPrev) && macd.histogram > macd.histogramPrev)
-        : (Number.isFinite(macd.histogramPrev) && macd.histogram < macd.histogramPrev);
-      if (!dayExpansion) return buildWait('DAY: MACD histogram expansion missing.');
-    }
 
     if (isScalp && utcHour >= 0 && utcHour < 6) return buildWait('SCALP rest period active (00-06 UTC).');
     if (!isScalp && (utcHour >= 22 || utcHour < 8)) return buildWait('DAY rest period active (22-08 UTC).');
 
-    if (!Number.isFinite(ema9) || !Number.isFinite(ema21)) {
-      return buildWait(`${type}: EMA 9/21 unavailable.`);
+    if (!emaSnap) {
+      return buildWait(`${type}: EMA snapshot unavailable.`);
     }
-    const emaAligned = side === 'BUY' ? ema9 > ema21 : ema9 < ema21;
-    if (!emaAligned) return buildWait(`${type}: EMA 9/21 not aligned with side.`);
-
-    const rsiMin = isScalp ? 35 : 30;
-    const rsiMax = isScalp ? 65 : 70;
-    if (!Number.isFinite(rsi) || rsi < rsiMin || rsi > rsiMax) {
-      return buildWait(`${type}: RSI gate failed (${Number.isFinite(rsi) ? rsi.toFixed(1) : 'N/A'}).`);
+    const crossBars = side === 'BUY'
+      ? Number(emaSnap.crossBarsAgoBullish)
+      : Number(emaSnap.crossBarsAgoBearish);
+    const crossLimit = isScalp ? 2 : 3;
+    if (!Number.isFinite(crossBars) || crossBars > crossLimit) {
+      return buildWait(`${type}: EMA 9/21 cross recency failed.`);
     }
 
-    if (!Number.isFinite(volumeSpikeRatio) || volumeSpikeRatio < 1.5) {
-      return buildWait(`${type}: Volume spike gate failed (${Number.isFinite(volumeSpikeRatio) ? volumeSpikeRatio.toFixed(2) : 'N/A'}x).`);
+    const volumeGateThreshold = isScalp ? 1.5 : 1.2;
+    if (!Number.isFinite(volumeRatioMandatory) || volumeRatioMandatory <= volumeGateThreshold) {
+      return buildWait(`${type}: Volume gate failed (${Number.isFinite(volumeRatioMandatory) ? volumeRatioMandatory.toFixed(2) : 'N/A'}x).`);
     }
 
     const pattern = classifyPattern(type, side);
-    if (!pattern.valid) return buildWait(`${type}: No valid chart pattern detected.`);
+    if (!pattern.valid) return buildWait(`${type}: No valid last-candle chart pattern.`);
 
     const spreadPct = Number(spread?.spreadPct);
-    const spreadThreshold = symbol === 'BTC' || symbol === 'ETH' ? 0.08 : 0.12;
-    if (!Number.isFinite(spreadPct) || spreadPct > spreadThreshold) {
+    const spreadThreshold = isScalp ? 0.05 : 0.08;
+    if (!Number.isFinite(spreadPct) || spreadPct >= spreadThreshold) {
       return buildWait(`${type}: Spread gate failed (${Number.isFinite(spreadPct) ? spreadPct.toFixed(3) : 'N/A'}%).`);
     }
 
@@ -2114,71 +2292,40 @@ function generateSignalForAsset(asset) {
       return buildWait(`${type}: Funding risk gate failed (${Number.isFinite(fundingRate) ? (fundingRate * 100).toFixed(4) : 'N/A'}%).`);
     }
 
+    if (hasMajorNewsWithinMinutes(isScalp ? 30 : 60)) {
+      return buildWait(`${type}: Major news cooldown active.`);
+    }
+
     const isBull = side === 'BUY';
-    const baseAlpha = 50;
-    let alpha = baseAlpha;
+    const rsiScore = Number.isFinite(rsi) ? clamp(100 - (Math.abs(rsi - 50) * 2), 0, 100) : 50;
+    const macdScore = computeMacdScore(macd, side);
+    const patternScoreRaw = pattern.highReliability ? 120 : 100;
+    const technicalScore = clamp((rsiScore * 0.3) + (macdScore * 0.4) + (patternScoreRaw * 0.3), 0, 100);
+    const whaleScore = computeWhaleActivityScore(side);
+    const emaConfluenceScore = computeEmaConfluenceScore(type, side);
+    const volumeScore = computeVolumeScore(volumeRatioMandatory);
 
-    // 1) Market Momentum & Structure
-    if (isScalp ? macd.expansion : (isBull ? macd.expansion : macd.contraction)) alpha += isScalp ? 10 : 15;
-    if (Number.isFinite(macd.crossBarsAgo) && macd.crossBarsAgo <= (isScalp ? 2 : 3)) alpha += isScalp ? 8 : 10;
-    if (volumeSpikeRatio > (isScalp ? 2.0 : 1.5)) alpha += 5;
-    if (Number.isFinite(rsi) && rsi >= 45 && rsi <= 55) alpha += isScalp ? 5 : 10;
+    const marketSentimentRaw = Number.isFinite(Number(LIVE_SENTIMENT?.score)) ? clamp(Number(LIVE_SENTIMENT.score), 0, 100) : 50;
+    const sentimentScore = side === 'BUY' ? marketSentimentRaw : (100 - marketSentimentRaw);
+    const newsBase = computeNewsSentimentBase();
+    const newsScore = side === 'BUY' ? newsBase : (100 - newsBase);
+    const alphaSourcesScore = computeAlphaSourcesScore(side);
 
-    // 2) Pattern Quality
-    alpha += isScalp ? 15 : 20;
-    if (pattern.highReliability) alpha += isScalp ? 5 : 10;
+    const regime = (marketSentimentRaw > 65 || marketSentimentRaw < 35) ? 'TRENDING' : 'RANGING';
+    const weights = regime === 'TRENDING'
+      ? { technical: 0.22, whale: 0.20, ema: 0.15, volume: 0.08, sentiment: 0.15, news: 0.12, alphaSources: 0.10 }
+      : { technical: 0.15, whale: 0.15, ema: 0.08, volume: 0.15, sentiment: 0.25, news: 0.15, alphaSources: 0.12 };
 
-    // 3) Dune On-Chain Intelligence (cap ±25)
-    let duneDelta = 0;
-    if (dune && Number.isFinite(Number(dune.signalScore))) {
-      const duneScore = Number(dune.signalScore);
-      const duneBias = String(dune.bias || 'neutral').toLowerCase();
-      const volumeGrowth = Number(dune.volumeGrowthPct || 0);
-      const btcTxGrowth = Number(dune.btcTxGrowthPct || 0);
+    const rawAlpha =
+      (technicalScore * weights.technical) +
+      (whaleScore * weights.whale) +
+      (emaConfluenceScore * weights.ema) +
+      (volumeScore * weights.volume) +
+      (sentimentScore * weights.sentiment) +
+      (newsScore * weights.news) +
+      (alphaSourcesScore * weights.alphaSources);
 
-      if ((isBull && duneBias === 'bullish') || (!isBull && duneBias === 'bearish')) duneDelta += isScalp ? 5 : 8;
-      if ((isBull && duneScore >= 62) || (!isBull && duneScore <= 38)) duneDelta += isScalp ? 6 : 8;
-      if ((isBull && volumeGrowth > 3) || (!isBull && volumeGrowth < -3)) duneDelta += isScalp ? 4 : 6;
-      if ((isBull && btcTxGrowth > 2) || (!isBull && btcTxGrowth < -2)) duneDelta += 3;
-
-      if ((isBull && duneBias === 'bearish') || (!isBull && duneBias === 'bullish')) duneDelta -= isScalp ? 10 : 15;
-      if ((isBull && duneScore <= 40) || (!isBull && duneScore >= 60)) duneDelta -= isScalp ? 6 : 10;
-    }
-    duneDelta = Math.max(-25, Math.min(25, duneDelta));
-    alpha += duneDelta;
-
-    // 4) Whale, Sentiment & Macro
-    const recentWhale = Array.isArray(WHALE_ACTIONS) && WHALE_ACTIONS.length > 0;
-    if (recentWhale) alpha += isScalp ? 10 : 15;
-
-    const sentimentScore = Number(LIVE_SENTIMENT?.score);
-    if (Number.isFinite(sentimentScore) && sentimentScore > 70) alpha += isScalp ? 5 : 8;
-    if (Number.isFinite(sentimentScore)) {
-      if ((isBull && sentimentScore < 35) || (!isBull && sentimentScore > 65)) alpha -= isScalp ? 15 : 20;
-    }
-
-    const fng = Number(LIVE_FNG?.value);
-    if (Number.isFinite(fng)) {
-      if ((isBull && fng <= 25) || (!isBull && fng >= 75)) alpha += isScalp ? 5 : 10;
-      if ((isBull && fng >= 75) || (!isBull && fng <= 25)) alpha -= isScalp ? 6 : 10;
-    }
-
-    const btcDomShift = getBtcDominanceShiftPct();
-    if (symbol !== 'BTC' && Number.isFinite(btcDomShift) && btcDomShift <= -0.5 && isBull) alpha += isScalp ? 0 : 8;
-
-    // Additional negative penalties
-    const oiValue = Number(oi?.oi);
-    if (Number.isFinite(oiValue) && oiValue < 10000) alpha -= isScalp ? 8 : 10;
-    if (Number.isFinite(fundingRate) && (fundingRate < -0.0005 || fundingRate > 0.0008)) alpha -= isScalp ? 10 : 15;
-
-    const headlineText = Array.isArray(NEWS)
-      ? NEWS.slice(0, 5).map(n => `${n?.title || ''}`).join(' ')
-      : '';
-    if (headlineText && /(hack|exploit|liquidation|lawsuit|ban|outage)/i.test(headlineText)) {
-      alpha -= isScalp ? 15 : 20;
-    }
-
-    alpha = Math.max(0, Math.min(100, Math.round(alpha)));
+    const alpha = clamp(Math.round(rawAlpha), 0, 100);
     const threshold = isScalp ? 65 : 70;
     if (alpha < threshold) return buildWait(`${type}: Alpha ${alpha} below threshold ${threshold}.`);
 
@@ -2199,7 +2346,13 @@ function generateSignalForAsset(asset) {
       atrSafe,
       structure
     });
-    const sl = isBull ? Math.max(0.0000001, entry1 - risk) : entry1 + risk;
+    let sl = isBull ? Math.max(0.0000001, entry1 - risk) : entry1 + risk;
+    if (isBull && Array.isArray(structure?.entrySupports) && structure.entrySupports[0] > 0) {
+      sl = Math.max(0.0000001, Math.min(sl, Number(structure.entrySupports[0])));
+    }
+    if (!isBull && Array.isArray(structure?.entryResistances) && structure.entryResistances[0] > 0) {
+      sl = Math.max(sl, Number(structure.entryResistances[0]));
+    }
 
     const riskPerUnit = Math.abs(entry1 - sl);
     const reward = Math.abs(t2 - entry1);
@@ -2214,7 +2367,7 @@ function generateSignalForAsset(asset) {
       'SIGNAL',
       type,
       `${symbol}/USDT`,
-      isBull ? 'LONG' : 'SHORT',
+      side,
       formatPrice(entry1),
       formatPrice(t1),
       formatPrice(t2),
@@ -2245,7 +2398,17 @@ function generateSignalForAsset(asset) {
       alpha,
       signalText,
       timestampUtc,
-      gateSummary: `${type} gates passed (MACD, EMA, RSI, Volume, Pattern, Spread, Funding).`,
+      gateSummary: `${type} gates passed (MACD, EMA cross, Volume, Pattern, Spread, Funding, News cooldown).`,
+      pillarScores: {
+        regime,
+        technical: Math.round(technicalScore),
+        whale: Math.round(whaleScore),
+        emaConfluence: Math.round(emaConfluenceScore),
+        volume: Math.round(volumeScore),
+        sentiment: Math.round(sentimentScore),
+        news: Math.round(newsScore),
+        alphaSources: Math.round(alphaSourcesScore)
+      },
       waitReason: ''
     };
   };
@@ -2255,10 +2418,15 @@ function generateSignalForAsset(asset) {
 
   const candidates = [day, scalp].filter(s => s.type !== 'WAIT');
   if (!candidates.length) {
-    return day.type === 'WAIT' ? day : scalp;
+    return {
+      ...buildWait(`${day.waitReason} | ${scalp.waitReason}`),
+      type: 'WAIT'
+    };
   }
   candidates.sort((a, b) => (b.alpha - a.alpha) || (a.type === 'DAY' ? -1 : 1));
-  return candidates[0];
+  const best = candidates[0];
+  best.signalLines = candidates.map(c => c.signalText);
+  return best;
 }
 
 function renderProSignals() {
@@ -2297,7 +2465,7 @@ function renderProSignals() {
     }
 
     const dirIcon = sig.isBull ? '📈' : '📉';
-    const dirLabel = sig.isBull ? 'LONG' : 'SHORT';
+    const dirLabel = sig.side || (sig.isBull ? 'BUY' : 'SELL');
     const targetPct = (targetPrice) => {
       if (!(asset.price > 0) || !(targetPrice > 0)) return 0;
       const raw = sig.isBull
@@ -2401,7 +2569,7 @@ function renderProSignals() {
             </div>
             <div class="signal-row">
               <span class="signal-label">Signal String</span>
-              <span class="signal-value signal-mono" style="font-size:0.68rem;line-height:1.35;">${sig.signalText}</span>
+              <span class="signal-value signal-mono" style="font-size:0.68rem;line-height:1.35;">${Array.isArray(sig.signalLines) ? sig.signalLines.join('<br/>') : sig.signalText}</span>
             </div>
           </div>
         </div>

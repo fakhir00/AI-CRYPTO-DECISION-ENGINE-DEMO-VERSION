@@ -630,10 +630,14 @@ export async function fetchTechnicalSignals(symbols = []) {
 
       const macd15m = computeMACDSnapshot(closes15m);
       const macd1m = computeMACDSnapshot(closes1m);
+      const emaTrend1m = computeEMAConfluenceSnapshot(closes1m, 9, 21);
+      const emaTrend15m = computeEMAConfluenceSnapshot(closes15m, 9, 21);
       const localRsi15m = computeRSI(closes15m, 14);
       const localRsi1m = computeRSI(closes1m, 14);
       const localVolumeSpike15m = computeVolumeSpikeRatio(volumes15m, 20);
       const localVolumeSpike1m = computeVolumeSpikeRatio(volumes1m, 45);
+      const volumeVsAvg1m3 = computeVolumeVsRecentAvg(volumes1m, 3);
+      const volumeVsAvg15m5 = computeVolumeVsRecentAvg(volumes15m, 5);
 
       if (Number.isFinite(ema9) && Number.isFinite(ema21) && Number.isFinite(atr)) {
         emaData[sym] = { ema9, ema21, atr, lastClose: closes4h[closes4h.length - 1] };
@@ -651,8 +655,12 @@ export async function fetchTechnicalSignals(symbols = []) {
         rsi1m: localRsi1m,
         rsi15m: localRsi15m,
         rsiSource: 'binance_local',
+        ema1m: emaTrend1m,
+        ema15m: emaTrend15m,
         volumeSpikeRatio1m: localVolumeSpike1m,
         volumeSpikeRatio15m: localVolumeSpike15m,
+        volumeVsAvg1m3,
+        volumeVsAvg15m5,
         volumeSpikeRatio: localVolumeSpike15m
       };
     });
@@ -1010,13 +1018,40 @@ function computeMACDSnapshot(closes = [], fast = 12, slow = 26, signal = 9) {
   const prev = history[history.length - 2];
 
   let crossBarsAgo = null;
+  let crossBarsAgoBullish = null;
+  let crossBarsAgoBearish = null;
   for (let i = history.length - 1; i >= 1; i--) {
     const now = history[i].line - history[i].signal;
     const prior = history[i - 1].line - history[i - 1].signal;
     if ((now >= 0 && prior < 0) || (now <= 0 && prior > 0)) {
-      crossBarsAgo = history.length - 1 - i;
-      break;
+      const barsAgo = history.length - 1 - i;
+      if (crossBarsAgo === null) crossBarsAgo = barsAgo;
+      if (now >= 0 && crossBarsAgoBullish === null) crossBarsAgoBullish = barsAgo;
+      if (now <= 0 && crossBarsAgoBearish === null) crossBarsAgoBearish = barsAgo;
     }
+  }
+
+  const histogramSeries = history.map(h => h.histogram);
+  const lineSeries = history.map(h => h.line);
+  const recentPrice = closes.slice(-10);
+  const recentHist = histogramSeries.slice(-10);
+  const prevPrice = closes.slice(-20, -10);
+  const prevHist = histogramSeries.slice(-20, -10);
+
+  let bullishDivergence = false;
+  let bearishDivergence = false;
+  if (recentPrice.length >= 3 && prevPrice.length >= 3 && recentHist.length >= 3 && prevHist.length >= 3) {
+    const prevPriceLow = Math.min(...prevPrice);
+    const recentPriceLow = Math.min(...recentPrice);
+    const prevHistLow = Math.min(...prevHist);
+    const recentHistLow = Math.min(...recentHist);
+    bullishDivergence = recentPriceLow < prevPriceLow && recentHistLow > prevHistLow;
+
+    const prevPriceHigh = Math.max(...prevPrice);
+    const recentPriceHigh = Math.max(...recentPrice);
+    const prevHistHigh = Math.max(...prevHist);
+    const recentHistHigh = Math.max(...recentHist);
+    bearishDivergence = recentPriceHigh > prevPriceHigh && recentHistHigh < prevHistHigh;
   }
 
   return {
@@ -1028,7 +1063,53 @@ function computeMACDSnapshot(closes = [], fast = 12, slow = 26, signal = 9) {
     bearish: last.line < last.signal && last.histogram < 0,
     expansion: last.histogram > prev.histogram,
     contraction: last.histogram < prev.histogram,
-    crossBarsAgo
+    crossBarsAgo,
+    crossBarsAgoBullish,
+    crossBarsAgoBearish,
+    histogramSeries,
+    macdLineSeries: lineSeries,
+    bullishDivergence,
+    bearishDivergence
+  };
+}
+
+function computeEMAConfluenceSnapshot(closes = [], fast = 9, slow = 21) {
+  if (!Array.isArray(closes) || closes.length < slow + 3) return null;
+  const emaFastSeries = computeEMASequence(closes, fast);
+  const emaSlowSeries = computeEMASequence(closes, slow);
+  const lastIdx = closes.length - 1;
+  const prevIdx = closes.length - 2;
+
+  const emaFast = emaFastSeries[lastIdx];
+  const emaSlow = emaSlowSeries[lastIdx];
+  const emaFastPrev = emaFastSeries[prevIdx];
+  const emaSlowPrev = emaSlowSeries[prevIdx];
+  if (![emaFast, emaSlow, emaFastPrev, emaSlowPrev].every(Number.isFinite)) return null;
+
+  let crossBarsAgoBullish = null;
+  let crossBarsAgoBearish = null;
+  for (let i = lastIdx; i >= 1; i--) {
+    const nowDiff = emaFastSeries[i] - emaSlowSeries[i];
+    const prevDiff = emaFastSeries[i - 1] - emaSlowSeries[i - 1];
+    if (!Number.isFinite(nowDiff) || !Number.isFinite(prevDiff)) continue;
+    if (nowDiff >= 0 && prevDiff < 0 && crossBarsAgoBullish === null) {
+      crossBarsAgoBullish = lastIdx - i;
+    }
+    if (nowDiff <= 0 && prevDiff > 0 && crossBarsAgoBearish === null) {
+      crossBarsAgoBearish = lastIdx - i;
+    }
+    if (crossBarsAgoBullish !== null && crossBarsAgoBearish !== null) break;
+  }
+
+  return {
+    ema9: emaFast,
+    ema21: emaSlow,
+    ema9Prev: emaFastPrev,
+    ema21Prev: emaSlowPrev,
+    spread: emaFast - emaSlow,
+    spreadPrev: emaFastPrev - emaSlowPrev,
+    crossBarsAgoBullish,
+    crossBarsAgoBearish
   };
 }
 
@@ -1042,6 +1123,23 @@ function computeVolumeSpikeRatio(volumes = [], lookback = 20) {
   const avg = reference.reduce((sum, v) => sum + v, 0) / reference.length;
   if (!(avg > 0)) return null;
   return current / avg;
+}
+
+function computeVolumeVsRecentAvg(volumes = [], lookback = 3) {
+  if (!Array.isArray(volumes) || volumes.length < lookback + 3) return null;
+  const clean = volumes.map(v => Number(v)).filter(Number.isFinite);
+  if (clean.length < lookback + 3) return null;
+
+  // Use last closed candle volume (exclude the currently forming candle).
+  const closedIdx = clean.length - 2;
+  if (closedIdx <= 0) return null;
+  const currentClosed = clean[closedIdx];
+  const from = Math.max(0, closedIdx - lookback);
+  const baseline = clean.slice(from, closedIdx);
+  if (baseline.length < lookback) return null;
+  const avg = baseline.reduce((sum, v) => sum + v, 0) / baseline.length;
+  if (!(avg > 0)) return null;
+  return currentClosed / avg;
 }
 
 // Helper: Compute Exponential Moving Average
