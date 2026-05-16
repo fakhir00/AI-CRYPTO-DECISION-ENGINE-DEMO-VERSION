@@ -43,6 +43,7 @@ let CURRENT_MARKET_TIMEFRAME = '24H';
 const MAX_TRADABLE_ASSETS = 50;
 const MAX_TOP_OPPORTUNITIES = MAX_TRADABLE_ASSETS;
 const SIGNAL_SCAN_INTERVAL_MS = 60 * 1000;
+const SCALP_SCAN_SYMBOLS = ['BTC', 'ETH', 'SOL', 'BNB'];
 const SIGNAL_KLINE_LIMIT = 80;
 const SIGNAL_FETCH_TIMEOUT_MS = 6000;
 const SIGNAL_KLINE_CONCURRENCY = 10;
@@ -758,7 +759,7 @@ function sigBuildSnapshot(candles = [], timeframe = 'SCALP') {
   const macd = sigComputeMacdStats(closes);
   const divergence = sigDetectMacdDivergence(candles, macd.histSeries || []);
   const pattern = sigDetectPattern(candles, timeframe);
-  const atrPct = sigComputeAtrPercent(candles, 14);
+  const atrPct = sigComputeAtrPercent(candles, 5);
   const breakout = sigDetectBreakoutRetest(candles);
 
   return {
@@ -778,7 +779,7 @@ function sigBuildSnapshot(candles = [], timeframe = 'SCALP') {
   };
 }
 
-function sigComputeAtrPercent(candles = [], period = 14) {
+function sigComputeAtrPercent(candles = [], period = 5) {
   if (!Array.isArray(candles) || candles.length < period + 1) return 0;
   let trSum = 0;
   let count = 0;
@@ -1018,6 +1019,12 @@ function sigEvaluate(symbol, timeframe, snapshot, timestamp, spreadPct = null) {
     alphaSources: 50
   };
   const alpha = sigComputeAlpha(pillars);
+  if (alpha < 60) {
+    const out = sigNoSignal(timeframe, symbol, timestamp, 'ALPHA_SCORE_FAIL', Math.round(alpha), direction);
+    out.patternSummary = snapshot.pattern?.summary || snapshot.pattern?.name || 'NONE';
+    out.spreadPct = Number.isFinite(spreadPct) ? spreadPct : null;
+    return out;
+  }
   const levels = sigComputeTradePlan(symbol, direction, snapshot.price, snapshot.atrPct, snapshot);
   const rrRatio = sigComputeRiskRewardRatio(levels.entry1, levels.tp2, levels.sl);
   if (!(rrRatio >= MIN_SIGNAL_RR_RATIO)) {
@@ -1185,11 +1192,21 @@ async function hydrateAssetsWithSignals(assetList = []) {
     return !(cached?.scalp?.line && !stale);
   });
 
-  if (missingSymbols.length > 0) {
-    const spreadMap = await sigFetchSpreadMap(missingSymbols);
+  if (missingSymbols.length > 0 || stale || SCALP_SCAN_SYMBOLS.some(s => !SIGNAL_CACHE.bySymbol[s]?.scalp?.line)) {
+    const scanSymbols = [...new Set([...SCALP_SCAN_SYMBOLS, ...missingSymbols])];
+    const spreadMap = await sigFetchSpreadMap(scanSymbols);
     const tasks = [];
-    missingSymbols.forEach((symbol) => {
+    
+    // Rule: Always scan primary pairs for signals every 60s
+    SCALP_SCAN_SYMBOLS.forEach((symbol) => {
       tasks.push({ symbol, timeframe: 'SCALP', interval: '1m' });
+    });
+    
+    // Also scan any other symbols that are in the top list but missing data
+    missingSymbols.forEach((symbol) => {
+      if (!SCALP_SCAN_SYMBOLS.includes(symbol)) {
+        tasks.push({ symbol, timeframe: 'SCALP', interval: '1m' });
+      }
     });
 
     const fetched = await sigMapWithConcurrency(tasks, SIGNAL_KLINE_CONCURRENCY, async (task) => {
