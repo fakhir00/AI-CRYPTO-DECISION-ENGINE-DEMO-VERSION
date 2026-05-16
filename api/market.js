@@ -33,10 +33,6 @@ function avg(values = []) {
   return clean.reduce((s, v) => s + v, 0) / clean.length;
 }
 
-function pctPrice(price, pct) {
-  return price * (1 + (pct / 100));
-}
-
 function isStablecoinLike(symbol = '', name = '', price = null) {
   const sym = String(symbol || '').toUpperCase().trim();
   if (!sym) return false;
@@ -537,46 +533,66 @@ function computeAlphaFromPillars(pillars = {}) {
   };
 }
 
-function computeTpSl(timeframe = 'SCALP', symbol = 'BTC', direction = 'BUY', entry = 0) {
-  const isMajors = symbol === 'BTC' || symbol === 'ETH';
+function computeScalpTradePlan(symbol = 'BTC', direction = 'BUY', entry = 0, atrPct = 0) {
+  const isMajor = symbol === 'BTC' || symbol === 'ETH';
 
-  let tp1Pct;
-  let tp2Pct;
-  let slPct;
+  const entry2 = direction === 'BUY'
+    ? entry * (1 - 0.0008)
+    : entry * (1 + 0.0008);
+  const entry3 = direction === 'BUY'
+    ? entry * (1 - 0.0015)
+    : entry * (1 + 0.0015);
 
-  if (timeframe === 'SCALP') {
-    if (isMajors) {
-      tp1Pct = 0.25;
-      tp2Pct = 0.40;
-      slPct = 0.15;
-    } else {
-      tp1Pct = 0.35;
-      tp2Pct = 0.50;
-      slPct = 0.20;
-    }
-  } else if (isMajors) {
-    tp1Pct = 1.0;
-    tp2Pct = 1.8;
-    slPct = 0.6;
-  } else {
-    tp1Pct = 1.5;
-    tp2Pct = 2.5;
-    slPct = 0.8;
-  }
+  const tp1Pct = isMajor ? 0.0020 : 0.0030;
+  const tp2Pct = isMajor ? 0.0035 : 0.0050;
+  const tp3Pct = isMajor ? 0.0050 : 0.0070;
+  const tp4Pct = isMajor ? 0.0070 : 0.0100;
+  const slPct = isMajor ? 0.0080 : 0.0120;
 
-  if (direction === 'BUY') {
-    return {
-      tp1: pctPrice(entry, tp1Pct),
-      tp2: pctPrice(entry, tp2Pct),
-      sl: pctPrice(entry, -slPct)
-    };
-  }
+  const dir = direction === 'BUY' ? 1 : -1;
+  const tp1 = entry * (1 + (dir * tp1Pct));
+  const tp2 = entry * (1 + (dir * tp2Pct));
+  const tp3 = entry * (1 + (dir * tp3Pct));
+  const tp4 = entry * (1 + (dir * tp4Pct));
+  const sl = direction === 'BUY'
+    ? entry * (1 - slPct)
+    : entry * (1 + slPct);
+
+  let leverage = '8X-12X';
+  if (atrPct > 0.5) leverage = '5X-8X';
+  else if (atrPct < 0.2) leverage = '15X-25X';
 
   return {
-    tp1: pctPrice(entry, -tp1Pct),
-    tp2: pctPrice(entry, -tp2Pct),
-    sl: pctPrice(entry, slPct)
+    entry1: entry,
+    entry2,
+    entry3,
+    tp1,
+    tp2,
+    tp3,
+    tp4,
+    sl,
+    leverage
   };
+}
+
+function computeAtrPercent(candles = [], period = 14) {
+  if (!Array.isArray(candles) || candles.length < period + 1) return 0;
+  let trSum = 0;
+  let count = 0;
+  const start = Math.max(1, candles.length - period);
+  for (let i = start; i < candles.length; i++) {
+    const cur = candles[i];
+    const prev = candles[i - 1];
+    const hl = cur.high - cur.low;
+    const hpc = Math.abs(cur.high - prev.close);
+    const lpc = Math.abs(cur.low - prev.close);
+    trSum += Math.max(hl, hpc, lpc);
+    count += 1;
+  }
+  const atr = count > 0 ? (trSum / count) : 0;
+  const lastClose = Number(candles[candles.length - 1]?.close) || 0;
+  if (!(lastClose > 0)) return 0;
+  return (atr / lastClose) * 100;
 }
 
 function formatLineNumber(v) {
@@ -588,8 +604,8 @@ function buildNoSignalLine(timeframe, symbol, timestamp, reason) {
   return `NO_SIGNAL|${timeframe}|${symbol}/USDT|${timestamp}|${reason}`;
 }
 
-function buildSignalLine(timeframe, symbol, direction, entry, tp1, tp2, sl, patternName, timestamp, alpha) {
-  return `SIGNAL|${timeframe}|${symbol}/USDT|${direction}|${formatLineNumber(entry)}|${formatLineNumber(tp1)}|${formatLineNumber(tp2)}|${formatLineNumber(sl)}|${patternName || 'NONE'}|${timestamp}|${Math.round(alpha)}`;
+function buildSignalLine(timeframe, symbol, direction, levels, patternName, timestamp, alpha) {
+  return `SIGNAL|${timeframe}|${symbol}/USDT|${direction}|${formatLineNumber(levels.entry1)}|${formatLineNumber(levels.entry2)}|${formatLineNumber(levels.entry3)}|${formatLineNumber(levels.tp1)}|${formatLineNumber(levels.tp2)}|${formatLineNumber(levels.tp3)}|${formatLineNumber(levels.tp4)}|${formatLineNumber(levels.sl)}|${levels.leverage || 'N/A'}|${patternName || 'NONE'}|${timestamp}|${Math.round(alpha)}`;
 }
 
 async function fetchJsonWithTimeout(url) {
@@ -668,6 +684,7 @@ function buildTimeframeSnapshot(candles = [], timeframe = 'SCALP') {
   const macd = computeMacdStats(closes);
   const divergence = detectMacdDivergence(candles, macd.histSeries || []);
   const pattern = detectPattern(candles, timeframe);
+  const atrPct = computeAtrPercent(candles, 14);
 
   return {
     price: closes[closes.length - 1],
@@ -679,6 +696,7 @@ function buildTimeframeSnapshot(candles = [], timeframe = 'SCALP') {
     macd,
     divergence,
     pattern,
+    atrPct,
     volumeRatio3,
     volumeRatio5,
     currentVolume,
@@ -687,13 +705,14 @@ function buildTimeframeSnapshot(candles = [], timeframe = 'SCALP') {
   };
 }
 
-function evaluateSignal(symbol, timeframe, snapshot, timestampIso) {
+function evaluateSignal(symbol, timeframe, snapshot, timestampIso, spreadPct = null) {
   if (!snapshot) {
     return {
       status: 'NO_SIGNAL',
       reason: 'DATA_UNAVAILABLE',
       alpha: 50,
       patternSummary: 'NONE',
+      spreadPct: null,
       line: buildNoSignalLine(timeframe, symbol, timestampIso, 'DATA_UNAVAILABLE')
     };
   }
@@ -708,19 +727,33 @@ function evaluateSignal(symbol, timeframe, snapshot, timestampIso) {
       reason: 'EMA_CROSS_FAIL',
       alpha: 50,
       patternSummary: 'NONE',
+      spreadPct,
       line: buildNoSignalLine(timeframe, symbol, timestampIso, 'EMA_CROSS_FAIL')
     };
   }
 
   const volumeRatio = timeframe === 'SCALP' ? snapshot.volumeRatio3 : snapshot.volumeRatio5;
-  if (!(Number.isFinite(volumeRatio) && volumeRatio > 0.5)) {
+  if (!(Number.isFinite(volumeRatio) && volumeRatio > 0.8)) {
     return {
       status: 'NO_SIGNAL',
       reason: 'VOLUME_FAIL',
       alpha: 50,
       direction,
       patternSummary: snapshot.pattern?.summary || snapshot.pattern?.name || 'NONE',
+      spreadPct,
       line: buildNoSignalLine(timeframe, symbol, timestampIso, 'VOLUME_FAIL')
+    };
+  }
+
+  if (!(Number.isFinite(spreadPct) && spreadPct < 0.15)) {
+    return {
+      status: 'NO_SIGNAL',
+      reason: 'SPREAD_FAIL',
+      alpha: 50,
+      direction,
+      patternSummary: snapshot.pattern?.summary || snapshot.pattern?.name || 'NONE',
+      spreadPct,
+      line: buildNoSignalLine(timeframe, symbol, timestampIso, 'SPREAD_FAIL')
     };
   }
 
@@ -749,7 +782,7 @@ function evaluateSignal(symbol, timeframe, snapshot, timestampIso) {
   const alphaMeta = computeAlphaFromPillars(pillars);
   const alpha = alphaMeta.alpha;
 
-  const levels = computeTpSl(timeframe, symbol, direction, snapshot.price);
+  const levels = computeScalpTradePlan(symbol, direction, snapshot.price, snapshot.atrPct);
   const patternName = snapshot.pattern?.name || 'NONE';
   const patternSummary = snapshot.pattern?.summary || patternName;
 
@@ -757,13 +790,21 @@ function evaluateSignal(symbol, timeframe, snapshot, timestampIso) {
     status: 'SIGNAL',
     direction,
     reason: null,
-    entry: snapshot.price,
+    entry: levels.entry1,
+    entry1: levels.entry1,
+    entry2: levels.entry2,
+    entry3: levels.entry3,
     tp1: levels.tp1,
     tp2: levels.tp2,
+    tp3: levels.tp3,
+    tp4: levels.tp4,
     sl: levels.sl,
+    leverage: levels.leverage,
     pattern: patternName,
     patternSummary,
     alpha: Math.round(alpha),
+    spreadPct,
+    atrPct: snapshot.atrPct,
     regime: alphaMeta.regime,
     pillars: {
       technical: Math.round(technicalScore),
@@ -783,10 +824,7 @@ function evaluateSignal(symbol, timeframe, snapshot, timestampIso) {
       timeframe,
       symbol,
       direction,
-      snapshot.price,
-      levels.tp1,
-      levels.tp2,
-      levels.sl,
+      levels,
       patternName,
       timestampIso,
       alpha
@@ -808,6 +846,24 @@ export default async function handler(req, res) {
 
   try {
     const binance24h = await fetchJsonWithTimeout('https://api.binance.com/api/v3/ticker/24hr');
+    let bookTicker = [];
+    try {
+      const rawBook = await fetchJsonWithTimeout('https://api.binance.com/api/v3/ticker/bookTicker');
+      bookTicker = Array.isArray(rawBook) ? rawBook : [];
+    } catch {
+      bookTicker = [];
+    }
+
+    const spreadBySymbol = {};
+    bookTicker.forEach((row) => {
+      const symbol = String(row?.symbol || '').toUpperCase();
+      const bid = Number(row?.bidPrice);
+      const ask = Number(row?.askPrice);
+      if (!symbol || !(bid > 0) || !(ask > 0) || ask < bid) return;
+      const mid = (ask + bid) / 2;
+      if (!(mid > 0)) return;
+      spreadBySymbol[symbol] = ((ask - bid) / mid) * 100;
+    });
 
     const topBinance = Array.isArray(binance24h)
       ? binance24h
@@ -854,7 +910,8 @@ export default async function handler(req, res) {
 
     const assets = topBinance.map((t, idx) => {
       const scalpSnapshot = snapshotMap.get(`${t.base}_SCALP`) || null;
-      const scalpSignal = evaluateSignal(t.base, 'SCALP', scalpSnapshot, timestampIso);
+      const spreadPct = spreadBySymbol[`${t.base}USDT`];
+      const scalpSignal = evaluateSignal(t.base, 'SCALP', scalpSnapshot, timestampIso, spreadPct);
       const combinedAlpha = Math.round(Number(scalpSignal.alpha) || 50);
       const preferred = scalpSignal;
 
@@ -879,6 +936,7 @@ export default async function handler(req, res) {
         market_cap_rank: idx + 1,
         market_cap: 0,
         total_volume: t.quoteVolume,
+        spreadPct: Number.isFinite(spreadPct) ? spreadPct : null,
         scanTimestamp: timestampIso,
         signals: {
           scalp: scalpSignal
@@ -906,8 +964,8 @@ export default async function handler(req, res) {
         mandatoryChecks: {
           mode: 'SCALP_ONLY',
           emaState: 'EMA9 above EMA21 = BUY, below = SELL',
-          volumeRatioThreshold: 0.5,
-          spreadCheck: 'disabled'
+          volumeRatioThreshold: 0.8,
+          spreadCheck: '< 0.15%'
         }
       }
     });

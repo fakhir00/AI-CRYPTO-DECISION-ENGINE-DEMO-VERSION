@@ -307,10 +307,6 @@ function sigAvg(values = []) {
   return clean.reduce((s, v) => s + v, 0) / clean.length;
 }
 
-function sigPctPrice(price, pct) {
-  return price * (1 + (pct / 100));
-}
-
 function sigFormatLineNumber(v) {
   if (!Number.isFinite(v)) return '0';
   return v >= 1000 ? v.toFixed(2) : v.toFixed(4);
@@ -320,8 +316,8 @@ function sigBuildNoSignalLine(timeframe, symbol, timestamp, reason) {
   return `NO_SIGNAL|${timeframe}|${symbol}/USDT|${timestamp}|${reason}`;
 }
 
-function sigBuildSignalLine(timeframe, symbol, direction, entry, tp1, tp2, sl, patternName, timestamp, alpha) {
-  return `SIGNAL|${timeframe}|${symbol}/USDT|${direction}|${sigFormatLineNumber(entry)}|${sigFormatLineNumber(tp1)}|${sigFormatLineNumber(tp2)}|${sigFormatLineNumber(sl)}|${patternName || 'NONE'}|${timestamp}|${Math.round(alpha)}`;
+function sigBuildSignalLine(timeframe, symbol, direction, levels, patternName, timestamp, alpha) {
+  return `SIGNAL|${timeframe}|${symbol}/USDT|${direction}|${sigFormatLineNumber(levels.entry1)}|${sigFormatLineNumber(levels.entry2)}|${sigFormatLineNumber(levels.entry3)}|${sigFormatLineNumber(levels.tp1)}|${sigFormatLineNumber(levels.tp2)}|${sigFormatLineNumber(levels.tp3)}|${sigFormatLineNumber(levels.tp4)}|${sigFormatLineNumber(levels.sl)}|${levels.leverage || 'N/A'}|${patternName || 'NONE'}|${timestamp}|${Math.round(alpha)}`;
 }
 
 function sigComputeEmaSeries(values = [], period = 9) {
@@ -693,6 +689,7 @@ function sigBuildSnapshot(candles = [], timeframe = 'SCALP') {
   const macd = sigComputeMacdStats(closes);
   const divergence = sigDetectMacdDivergence(candles, macd.histSeries || []);
   const pattern = sigDetectPattern(candles, timeframe);
+  const atrPct = sigComputeAtrPercent(candles, 14);
 
   return {
     price: closes[closes.length - 1],
@@ -704,9 +701,30 @@ function sigBuildSnapshot(candles = [], timeframe = 'SCALP') {
     macd,
     divergence,
     pattern,
+    atrPct,
     volumeRatio3,
     volumeRatio5
   };
+}
+
+function sigComputeAtrPercent(candles = [], period = 14) {
+  if (!Array.isArray(candles) || candles.length < period + 1) return 0;
+  let trSum = 0;
+  let count = 0;
+  const start = Math.max(1, candles.length - period);
+  for (let i = start; i < candles.length; i++) {
+    const cur = candles[i];
+    const prev = candles[i - 1];
+    const hl = cur.high - cur.low;
+    const hpc = Math.abs(cur.high - prev.close);
+    const lpc = Math.abs(cur.low - prev.close);
+    trSum += Math.max(hl, hpc, lpc);
+    count += 1;
+  }
+  const atr = count > 0 ? (trSum / count) : 0;
+  const lastClose = Number(candles[candles.length - 1]?.close) || 0;
+  if (!(lastClose > 0)) return 0;
+  return (atr / lastClose) * 100;
 }
 
 function sigComputeTechnicalScore(snapshot = {}, direction = 'BUY', timeframe = 'SCALP') {
@@ -805,36 +823,45 @@ function sigComputeAlpha(pillars = {}) {
   return sigClamp(raw, 0, 100);
 }
 
-function sigComputeTpSl(timeframe = 'SCALP', symbol = 'BTC', direction = 'BUY', entry = 0) {
+function sigComputeTradePlan(symbol = 'BTC', direction = 'BUY', entry = 0, atrPct = 0) {
   const isMajor = symbol === 'BTC' || symbol === 'ETH';
-  let tp1Pct;
-  let tp2Pct;
-  let slPct;
 
-  if (timeframe === 'SCALP') {
-    if (isMajor) {
-      tp1Pct = 0.25; tp2Pct = 0.40; slPct = 0.15;
-    } else {
-      tp1Pct = 0.35; tp2Pct = 0.50; slPct = 0.20;
-    }
-  } else if (isMajor) {
-    tp1Pct = 1.0; tp2Pct = 1.8; slPct = 0.6;
-  } else {
-    tp1Pct = 1.5; tp2Pct = 2.5; slPct = 0.8;
-  }
+  const entry2 = direction === 'BUY'
+    ? entry * (1 - 0.0008)
+    : entry * (1 + 0.0008);
+  const entry3 = direction === 'BUY'
+    ? entry * (1 - 0.0015)
+    : entry * (1 + 0.0015);
 
-  if (direction === 'BUY') {
-    return {
-      tp1: sigPctPrice(entry, tp1Pct),
-      tp2: sigPctPrice(entry, tp2Pct),
-      sl: sigPctPrice(entry, -slPct)
-    };
-  }
+  const tp1Pct = isMajor ? 0.0020 : 0.0030;
+  const tp2Pct = isMajor ? 0.0035 : 0.0050;
+  const tp3Pct = isMajor ? 0.0050 : 0.0070;
+  const tp4Pct = isMajor ? 0.0070 : 0.0100;
+  const slPct = isMajor ? 0.0080 : 0.0120;
+
+  const dir = direction === 'BUY' ? 1 : -1;
+  const tp1 = entry * (1 + (dir * tp1Pct));
+  const tp2 = entry * (1 + (dir * tp2Pct));
+  const tp3 = entry * (1 + (dir * tp3Pct));
+  const tp4 = entry * (1 + (dir * tp4Pct));
+  const sl = direction === 'BUY'
+    ? entry * (1 - slPct)
+    : entry * (1 + slPct);
+
+  let leverage = '8X-12X';
+  if (atrPct > 0.5) leverage = '5X-8X';
+  else if (atrPct < 0.2) leverage = '15X-25X';
 
   return {
-    tp1: sigPctPrice(entry, -tp1Pct),
-    tp2: sigPctPrice(entry, -tp2Pct),
-    sl: sigPctPrice(entry, slPct)
+    entry1: entry,
+    entry2,
+    entry3,
+    tp1,
+    tp2,
+    tp3,
+    tp4,
+    sl,
+    leverage
   };
 }
 
@@ -845,11 +872,12 @@ function sigNoSignal(timeframe, symbol, timestamp, reason, alpha = 50, direction
     alpha: Math.round(alpha),
     direction,
     patternSummary: 'NONE',
+    spreadPct: null,
     line: sigBuildNoSignalLine(timeframe, symbol, timestamp, reason)
   };
 }
 
-function sigEvaluate(symbol, timeframe, snapshot, timestamp) {
+function sigEvaluate(symbol, timeframe, snapshot, timestamp, spreadPct = null) {
   if (!snapshot) return sigNoSignal(timeframe, symbol, timestamp, 'DATA_UNAVAILABLE');
 
   let direction = null;
@@ -858,8 +886,18 @@ function sigEvaluate(symbol, timeframe, snapshot, timestamp) {
   if (!direction) return sigNoSignal(timeframe, symbol, timestamp, 'EMA_CROSS_FAIL');
 
   const volumeRatio = timeframe === 'SCALP' ? snapshot.volumeRatio3 : snapshot.volumeRatio5;
-  if (!(Number.isFinite(volumeRatio) && volumeRatio > 0.5)) {
-    return sigNoSignal(timeframe, symbol, timestamp, 'VOLUME_FAIL', 50, direction);
+  if (!(Number.isFinite(volumeRatio) && volumeRatio > 0.8)) {
+    const out = sigNoSignal(timeframe, symbol, timestamp, 'VOLUME_FAIL', 50, direction);
+    out.patternSummary = snapshot.pattern?.summary || snapshot.pattern?.name || 'NONE';
+    out.spreadPct = Number.isFinite(spreadPct) ? spreadPct : null;
+    return out;
+  }
+
+  if (!(Number.isFinite(spreadPct) && spreadPct < 0.15)) {
+    const out = sigNoSignal(timeframe, symbol, timestamp, 'SPREAD_FAIL', 50, direction);
+    out.patternSummary = snapshot.pattern?.summary || snapshot.pattern?.name || 'NONE';
+    out.spreadPct = Number.isFinite(spreadPct) ? spreadPct : null;
+    return out;
   }
 
   const technical = sigComputeTechnicalScore(snapshot, direction, timeframe);
@@ -877,7 +915,7 @@ function sigEvaluate(symbol, timeframe, snapshot, timestamp) {
     alphaSources: 50
   };
   const alpha = sigComputeAlpha(pillars);
-  const levels = sigComputeTpSl(timeframe, symbol, direction, snapshot.price);
+  const levels = sigComputeTradePlan(symbol, direction, snapshot.price, snapshot.atrPct);
   const patternName = snapshot.pattern?.name || 'NONE';
   const patternSummary = snapshot.pattern?.summary || patternName;
 
@@ -888,18 +926,23 @@ function sigEvaluate(symbol, timeframe, snapshot, timestamp) {
     alpha: Math.round(alpha),
     pattern: patternName,
     patternSummary,
-    entry: snapshot.price,
+    entry: levels.entry1,
+    entry1: levels.entry1,
+    entry2: levels.entry2,
+    entry3: levels.entry3,
     tp1: levels.tp1,
     tp2: levels.tp2,
+    tp3: levels.tp3,
+    tp4: levels.tp4,
     sl: levels.sl,
+    leverage: levels.leverage,
+    spreadPct: Number.isFinite(spreadPct) ? spreadPct : null,
+    atrPct: snapshot.atrPct,
     line: sigBuildSignalLine(
       timeframe,
       symbol,
       direction,
-      snapshot.price,
-      levels.tp1,
-      levels.tp2,
-      levels.sl,
+      levels,
       patternName,
       timestamp,
       alpha
@@ -938,6 +981,45 @@ async function sigFetchKlines(symbol, interval, limit = SIGNAL_KLINE_LIMIT) {
   }
 
   return null;
+}
+
+async function sigFetchSpreadMap(symbols = []) {
+  const wanted = new Set((symbols || []).map(s => `${String(s || '').toUpperCase()}USDT`));
+  if (!wanted.size) return {};
+
+  for (const base of SIGNAL_BINANCE_ENDPOINTS) {
+    const endpoint = base.replace('/klines', '/ticker/bookTicker');
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), SIGNAL_FETCH_TIMEOUT_MS);
+    try {
+      const res = await fetch(endpoint, {
+        headers: { accept: 'application/json' },
+        signal: controller.signal
+      });
+      if (!res.ok) continue;
+      const raw = await res.json();
+      if (!Array.isArray(raw)) continue;
+
+      const map = {};
+      raw.forEach((row) => {
+        const pair = String(row?.symbol || '').toUpperCase();
+        if (!wanted.has(pair)) return;
+        const bid = Number(row?.bidPrice);
+        const ask = Number(row?.askPrice);
+        if (!(bid > 0) || !(ask > 0) || ask < bid) return;
+        const mid = (ask + bid) / 2;
+        if (!(mid > 0)) return;
+        map[pair] = ((ask - bid) / mid) * 100;
+      });
+      return map;
+    } catch {
+      // Try next endpoint.
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  return {};
 }
 
 async function sigMapWithConcurrency(items, concurrency, mapper) {
@@ -992,6 +1074,7 @@ async function hydrateAssetsWithSignals(assetList = []) {
   });
 
   if (missingSymbols.length > 0) {
+    const spreadMap = await sigFetchSpreadMap(missingSymbols);
     const tasks = [];
     missingSymbols.forEach((symbol) => {
       tasks.push({ symbol, timeframe: 'SCALP', interval: '1m' });
@@ -1013,9 +1096,10 @@ async function hydrateAssetsWithSignals(assetList = []) {
     missingSymbols.forEach((symbol) => {
       const scalpCandles = grouped[symbol]?.SCALP || null;
       const scalpSnapshot = sigBuildSnapshot(scalpCandles || [], 'SCALP');
+      const spreadPct = spreadMap[`${symbol}USDT`];
 
       SIGNAL_CACHE.bySymbol[symbol] = {
-        scalp: sigEvaluate(symbol, 'SCALP', scalpSnapshot, timestampIso)
+        scalp: sigEvaluate(symbol, 'SCALP', scalpSnapshot, timestampIso, spreadPct)
       };
     });
 
@@ -2178,10 +2262,28 @@ function renderOpportunitiesPage() {
     const line = String(signal.line || '');
     if (signal.status === 'SIGNAL') {
       const dirIsBuy = signal.direction === 'BUY';
+      const e1 = Number(signal.entry1 ?? signal.entry);
+      const e2 = Number(signal.entry2);
+      const e3 = Number(signal.entry3);
+      const tp1 = Number(signal.tp1);
+      const tp2 = Number(signal.tp2);
+      const tp3 = Number(signal.tp3);
+      const tp4 = Number(signal.tp4);
+      const sl = Number(signal.sl);
+      const lev = signal.leverage || 'N/A';
       return `
         <div style="display:flex;flex-direction:column;gap:0.25rem;">
           <span class="badge ${dirIsBuy ? 'sig-long' : 'sig-short'}" style="font-size: 0.62rem; padding: 0.15rem 0.45rem; width: fit-content;">
             ${dirIsBuy ? 'BUY' : 'SELL'} - ${Number(signal.alpha ?? 50).toFixed(0)}
+          </span>
+          <span class="text-muted" style="font-size: 0.64rem; line-height: 1.25; font-family: var(--font-mono);">
+            E: ${formatPrice(e1)} | ${formatPrice(e2)} | ${formatPrice(e3)}
+          </span>
+          <span class="text-muted" style="font-size: 0.64rem; line-height: 1.25; font-family: var(--font-mono);">
+            TP: ${formatPrice(tp1)} / ${formatPrice(tp2)} / ${formatPrice(tp3)} / ${formatPrice(tp4)}
+          </span>
+          <span class="text-muted" style="font-size: 0.64rem; line-height: 1.25; font-family: var(--font-mono);">
+            SL: ${formatPrice(sl)} | Lev: ${lev}
           </span>
           <span class="text-muted" style="font-size: 0.64rem; line-height: 1.25; font-family: var(--font-mono); word-break: break-all;">${line}</span>
         </div>
@@ -2200,12 +2302,18 @@ function renderOpportunitiesPage() {
   tbody.innerHTML = visibleRows.map((asset, i) => {
     const displayScore = getUnifiedAlphaScore(asset);
     const scalpSignal = asset?.signals?.scalp || null;
-    const patternLabel = asset?.patternDetected || asset?.reason || 'NONE';
+    const patternLabel = scalpSignal?.patternSummary || scalpSignal?.pattern || asset?.patternDetected || asset?.reason || 'NONE';
+    const symbolText = String(asset.symbol || '').toUpperCase();
+    const nameText = String(asset.name || '').trim();
+    const showBoth = nameText && nameText.toUpperCase() !== symbolText;
+    const coinCell = showBoth
+      ? `<strong>${nameText}</strong> <span class="text-muted ml-2">${symbolText}</span>`
+      : `<strong>${symbolText}</strong>`;
 
     return `
     <tr>
       <td class="text-muted">${i+1}</td>
-      <td><strong>${asset.name}</strong> <span class="text-muted ml-2">${asset.symbol}</span></td>
+      <td>${coinCell}</td>
       <td style="font-family: var(--font-mono)" class="live-price" data-symbol="${asset.symbol}">$${formatPrice(asset.price)}</td>
       <td class="${asset.change >= 0 ? 'text-green' : 'text-red'} live-change" data-symbol="${asset.symbol}">${asset.change > 0 ? '+' : ''}${asset.change.toFixed(2)}%</td>
       <td>
@@ -2238,9 +2346,11 @@ function renderOpportunitiesPage() {
             `Generate a SCALP-only trade plan for ${symbol}/USDT. `
             + `Use these mandatory algorithmic values exactly: `
             + `direction=${scalpSignal.direction}, `
-            + `entry=${scalpSignal.entry}, tp1=${scalpSignal.tp1}, tp2=${scalpSignal.tp2}, sl=${scalpSignal.sl}, `
+            + `entry1=${scalpSignal.entry1 ?? scalpSignal.entry}, entry2=${scalpSignal.entry2}, entry3=${scalpSignal.entry3}, `
+            + `tp1=${scalpSignal.tp1}, tp2=${scalpSignal.tp2}, tp3=${scalpSignal.tp3}, tp4=${scalpSignal.tp4}, `
+            + `sl=${scalpSignal.sl}, leverage=${scalpSignal.leverage}, `
             + `alpha=${scalpSignal.alpha}, line="${scalpSignal.line}". `
-            + `Output 3 entries around the provided entry and keep tight scalp risk management.`
+            + `Do not alter these numbers.`
           );
         } else {
           triggerMcp(`No valid SCALP signal exists for ${symbol}/USDT right now. Explain why and what must change before entry.`);
@@ -2667,28 +2777,20 @@ function generateSignalForAsset(asset) {
   }
 
   const isBull = scalp.direction === 'BUY';
-  const entry1 = Number(scalp.entry) || Number(asset.price) || 0;
-  const sl = Number(scalp.sl) || (entry1 * (isBull ? 0.998 : 1.002));
-  const t1 = Number(scalp.tp1) || (entry1 * (isBull ? 1.0025 : 0.9975));
-  const t2 = Number(scalp.tp2) || (entry1 * (isBull ? 1.004 : 0.996));
+  const entry1 = Number(scalp.entry1 ?? scalp.entry) || Number(asset.price) || 0;
+  const entry2 = Number(scalp.entry2) || (isBull ? entry1 * (1 - 0.0008) : entry1 * (1 + 0.0008));
+  const entry3 = Number(scalp.entry3) || (isBull ? entry1 * (1 - 0.0015) : entry1 * (1 + 0.0015));
+  const sl = Number(scalp.sl) || (isBull ? entry1 * (1 - 0.008) : entry1 * (1 + 0.008));
+  const t1 = Number(scalp.tp1) || (isBull ? entry1 * (1 + 0.002) : entry1 * (1 - 0.002));
+  const t2 = Number(scalp.tp2) || (isBull ? entry1 * (1 + 0.0035) : entry1 * (1 - 0.0035));
+  const t3 = Number(scalp.tp3) || (isBull ? entry1 * (1 + 0.005) : entry1 * (1 - 0.005));
+  const t4 = Number(scalp.tp4) || (isBull ? entry1 * (1 + 0.007) : entry1 * (1 - 0.007));
 
   const risk = Math.max(Math.abs(entry1 - sl), entry1 * 0.0005);
-  const entryStep = risk * 0.5;
-  const entry2 = isBull ? Math.max(0, entry1 - entryStep) : (entry1 + entryStep);
-  const entry3 = isBull ? Math.max(0, entry1 - (entryStep * 2)) : (entry1 + (entryStep * 2));
-
-  const extension = Math.abs(t2 - entry1);
-  const t3 = isBull ? (t2 + (extension * 0.6)) : (t2 - (extension * 0.6));
-  const t4 = isBull ? (t2 + extension) : (t2 - extension);
-
   const rewardT2 = Math.abs(t2 - entry1);
   const rrRatio = risk > 0 ? (rewardT2 / risk).toFixed(1) : '2.0';
-  const atrPct = entry1 > 0 ? (risk / entry1) : 0;
-
-  let levNum;
-  if (atrPct > 0.01) levNum = '2x-3x';
-  else if (atrPct > 0.006) levNum = '3x-4x';
-  else levNum = '4x-5x';
+  const atrPct = Number.isFinite(Number(scalp.atrPct)) ? Number(scalp.atrPct) : ((entry1 > 0 ? (risk / entry1) * 100 : 0));
+  const leverage = scalp.leverage || (atrPct > 0.5 ? '5X-8X' : atrPct < 0.2 ? '15X-25X' : '8X-12X');
 
   const strength = score >= 80
     ? { label: 'HIGH CONVICTION', cls: 'text-green' }
@@ -2706,7 +2808,7 @@ function generateSignalForAsset(asset) {
     t4,
     sl,
     exchanges: ['Binance'],
-    leverage: `${levNum} Cross`,
+    leverage,
     strength,
     isBull,
     type: 'SCALP',
@@ -2847,7 +2949,7 @@ function renderProSignals() {
         <div class="signal-footer">
           <span>Alpha: <strong class="text-primary">${asset.opportunityScore ?? asset.score}/100</strong></span>
           <span>Risk:Reward <strong class="text-green">${sig.rrRatio}</strong></span>
-          <span>Vol: <strong class="text-warning">${(sig.atrPct * 100).toFixed(1)}%</strong></span>
+          <span>Vol: <strong class="text-warning">${Number(sig.atrPct || 0).toFixed(2)}%</strong></span>
           <span class="signal-brand">⚡ NEXUS Pro</span>
         </div>
       </div>
