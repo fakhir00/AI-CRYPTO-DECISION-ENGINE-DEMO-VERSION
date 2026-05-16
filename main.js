@@ -235,6 +235,43 @@ function generateReason(coin, score, preferredBias = null) {
   return "Range Compression";
 }
 
+function formatPatternLabel(raw = '') {
+  return String(raw || '')
+    .trim()
+    .replace(/[_-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .toUpperCase();
+}
+
+function getLiveDetectedPattern(symbol = '') {
+  const sym = String(symbol || '').toUpperCase().trim();
+  if (!sym) return 'NONE';
+
+  const tfOrder = ['15m', '1m'];
+  for (const tf of tfOrder) {
+    const feed = LIVE_SIGNAL_PATTERNS?.[sym]?.[tf];
+    const patterns = Array.isArray(feed?.patterns) ? feed.patterns : [];
+    if (!patterns.length) continue;
+
+    const candleCount = Number(feed?.candleCount);
+    const lastClosed = Number.isFinite(candleCount) && candleCount >= 2 ? (candleCount - 2) : null;
+    const selected = (Number.isFinite(lastClosed)
+      ? (patterns.find(p => Number(p?.candle) === lastClosed) || patterns[0])
+      : patterns[0]);
+
+    const name = formatPatternLabel(selected?.name || 'PATTERN');
+    const direction = String(selected?.type || '').toLowerCase();
+    const sideTag = direction === 'bullish'
+      ? 'BULLISH'
+      : direction === 'bearish'
+        ? 'BEARISH'
+        : 'NEUTRAL';
+    return `${name} (${sideTag}, ${tf.toUpperCase()})`;
+  }
+
+  return 'NONE';
+}
+
 function parseVolumeBillions(vol = '') {
   const str = String(vol || '').trim().toUpperCase();
   const n = Number.parseFloat(str.replace(/[^0-9.]/g, ''));
@@ -755,7 +792,7 @@ async function syncLiveApis() {
       .map(c => c.symbol.toUpperCase());
     const derivativeSymbols = topSymbols.slice(0, 15); // Top 15 for heavy OI/Funding data
     const technicalSymbols = [...new Set([...topSymbols, ...SIGNAL_SCAN_PAIRS])];
-    const patternUniverse = topSymbols.slice(0, 12);
+    const patternUniverse = topSymbols.slice(0, MAX_TRADABLE_ASSETS);
     const signalPatternJobs = patternUniverse.flatMap((sym) => ([
       fetchCandlePatterns(sym, '1m').then(data => ({ symbol: sym, interval: '1m', data })).catch(() => ({ symbol: sym, interval: '1m', data: null })),
       fetchCandlePatterns(sym, '15m').then(data => ({ symbol: sym, interval: '15m', data })).catch(() => ({ symbol: sym, interval: '15m', data: null }))
@@ -1484,7 +1521,11 @@ function renderOpportunitiesPage() {
       </td>
 
 
-      <td><span class="text-muted" style="font-size: 0.8rem">${asset.reason || 'Analyzing Technicals...'}</span></td>
+      <td><span class="text-muted" style="font-size: 0.8rem">${(() => {
+        const livePattern = getLiveDetectedPattern(asset.symbol);
+        if (livePattern !== 'NONE') return livePattern;
+        return asset.reason || 'NONE';
+      })()}</span></td>
       <td>
         <div style="font-family: var(--font-mono); font-size: 0.64rem; line-height: 1.35; color: #cfd8ff; max-width: 360px; white-space: normal;">
           ${(Array.isArray(sig.signalLines) ? sig.signalLines : [sig.signalText]).filter(Boolean).join('<br/>')}
