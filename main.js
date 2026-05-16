@@ -1455,11 +1455,17 @@ function typeWriterEffect(element, lines, speed = 20) {
 function renderOpportunitiesPage() {
   const tbody = document.getElementById('opportunities-table-body');
   const sorted = getSortedTradeableAssets(OPPORTUNITY_SORT);
-  const visibleRows = sorted.slice(0, MAX_TOP_OPPORTUNITIES);
-  
-  tbody.innerHTML = visibleRows.map((asset, i) => {
+  const rows = sorted.map((asset) => {
     const sig = generateSignalForAsset(asset, { enforceScanUniverse: false });
-    const displayScore = getUnifiedAlphaScore(asset);
+    const displayScore = Number.isFinite(Number(sig?.alpha)) ? Math.round(Number(sig.alpha)) : 0;
+    return { asset, sig, displayScore };
+  });
+  if (OPPORTUNITY_SORT === 'alpha') {
+    rows.sort((a, b) => (b.displayScore - a.displayScore) || a.asset.symbol.localeCompare(b.asset.symbol));
+  }
+  const visibleRows = rows.slice(0, MAX_TOP_OPPORTUNITIES);
+  
+  tbody.innerHTML = visibleRows.map(({ asset, sig, displayScore }, i) => {
     // Calculate profit potential based on max target (t4) at 5x leverage
     let profitPot = 0;
     if (sig.type !== 'WAIT' && asset.price > 0 && sig.t4 > 0) {
@@ -2045,12 +2051,14 @@ function generateSignalForAsset(asset, options = {}) {
   if (!(price > 0)) {
     return {
       type: 'WAIT',
+      signalType: 'SCAN',
       isBull: null,
       strength: { label: 'WAIT', cls: 'text-muted' },
       exchanges: ['Binance'],
       leverage: 'None',
       entry1: 0, entry2: 0, entry3: 0,
       t1: 0, t2: 0, t3: 0, t4: 0, sl: 0, rrRatio: '0.0',
+      alpha: 0,
       waitReason: 'PRICE_UNAVAILABLE',
       signalText: `NO_SIGNAL|${symbol || 'UNKNOWN'}/USDT|${new Date().toISOString()}|PRICE_UNAVAILABLE`,
       signalLines: [`NO_SIGNAL|${symbol || 'UNKNOWN'}/USDT|${new Date().toISOString()}|PRICE_UNAVAILABLE`]
@@ -2061,12 +2069,14 @@ function generateSignalForAsset(asset, options = {}) {
   if (enforceScanUniverse && !activeUniverse.includes(symbol)) {
     return {
       type: 'WAIT',
+      signalType: 'SCAN',
       isBull: null,
       strength: { label: 'WAIT', cls: 'text-muted' },
       exchanges: ['Binance'],
       leverage: 'None',
       entry1: 0, entry2: 0, entry3: 0,
       t1: 0, t2: 0, t3: 0, t4: 0, sl: 0, rrRatio: '0.0',
+      alpha: 0,
       waitReason: 'OUTSIDE_UNIVERSE',
       signalText: `NO_SIGNAL|${symbol}/USDT|${new Date().toISOString()}|OUTSIDE_UNIVERSE`,
       signalLines: [`NO_SIGNAL|${symbol}/USDT|${new Date().toISOString()}|OUTSIDE_UNIVERSE`]
@@ -2080,27 +2090,31 @@ function generateSignalForAsset(asset, options = {}) {
   const dominanceData = window._liveGlobalMarketData || null;
   const utcHour = new Date().getUTCHours();
 
-  const buildWait = (reason, signalType = 'SCAN') => {
+  const buildWait = (reason, signalType = 'SCAN', details = {}) => {
     const ts = new Date().toISOString();
     const reasonText = String(reason || 'CONDITIONS_NOT_MET');
     const line = `NO_SIGNAL|${symbol}/USDT|${ts}|${reasonText}`;
+    const alphaVal = Number(details?.alpha);
+    const resolvedAlpha = Number.isFinite(alphaVal) ? Math.max(0, Math.min(100, Math.round(alphaVal))) : 0;
     return {
       type: 'WAIT',
       signalType,
-      isBull: null,
-      side: null,
-      pattern: 'NONE',
+      isBull: typeof details?.isBull === 'boolean' ? details.isBull : null,
+      side: details?.side || null,
+      pattern: details?.pattern || 'NONE',
       strength: { label: 'WAIT', cls: 'text-muted' },
       exchanges: ['Binance'],
       leverage: 'None',
       entry1: 0, entry2: 0, entry3: 0,
       t1: 0, t2: 0, t3: 0, t4: 0, sl: 0, rrRatio: '0.0',
       atrPct: 0,
-      alpha: 0,
+      alpha: resolvedAlpha,
       signalText: line,
-      signalLines: [line],
+      signalLines: Array.isArray(details?.signalLines) && details.signalLines.length ? details.signalLines : [line],
       timestampUtc: ts,
-      waitReason: reasonText
+      waitReason: reasonText,
+      gateSummary: details?.gateSummary || '',
+      pillarScores: details?.pillarScores || null
     };
   };
 
@@ -2510,15 +2524,32 @@ function generateSignalForAsset(asset, options = {}) {
       News: newsScore,
       AlphaSources: alphaSourcesScore
     };
+    const waitDetails = {
+      alpha,
+      side,
+      isBull: side === 'BUY',
+      pattern: pattern.valid ? pattern.name : 'NONE',
+      gateSummary: `${type} mandatory gates checked.`,
+      pillarScores: {
+        regime,
+        technical: Math.round(technicalScore),
+        whale: Math.round(whaleScore),
+        emaConfluence: Math.round(emaConfluenceScore),
+        volume: Math.round(volumeScore),
+        sentiment: Math.round(sentimentScore),
+        news: Math.round(newsScore),
+        alphaSources: Math.round(alphaSourcesScore)
+      }
+    };
     const poorCount = Object.values(pillars).filter(v => Number(v) < 40).length;
-    if (poorCount >= 3) return buildWait(`${type}:TOO_MANY_POOR_PILLARS`, type);
-    if (technicalScore < 45) return buildWait(`${type}:PILLAR_FLOOR_FAIL:Technical`, type);
+    if (poorCount >= 3) return buildWait(`${type}:TOO_MANY_POOR_PILLARS`, type, waitDetails);
+    if (technicalScore < 45) return buildWait(`${type}:PILLAR_FLOOR_FAIL:Technical`, type, waitDetails);
     const emaFloor = regime === 'TRENDING' ? 50 : 40;
-    if (emaConfluenceScore < emaFloor) return buildWait(`${type}:PILLAR_FLOOR_FAIL:EMA`, type);
+    if (emaConfluenceScore < emaFloor) return buildWait(`${type}:PILLAR_FLOOR_FAIL:EMA`, type, waitDetails);
     const volumeFloor = isScalp ? 40 : 35;
-    if (volumeScore < volumeFloor) return buildWait(`${type}:PILLAR_FLOOR_FAIL:Volume`, type);
+    if (volumeScore < volumeFloor) return buildWait(`${type}:PILLAR_FLOOR_FAIL:Volume`, type, waitDetails);
     const alphaThreshold = isScalp ? 65 : 70;
-    if (alpha < alphaThreshold) return buildWait(`${type}:ALPHA_BELOW_THRESHOLD`, type);
+    if (alpha < alphaThreshold) return buildWait(`${type}:ALPHA_BELOW_THRESHOLD`, type, waitDetails);
 
     const structure = getStructureLevels(type, side, price);
     const isBull = side === 'BUY';
@@ -2537,6 +2568,13 @@ function generateSignalForAsset(asset, options = {}) {
     if (!isBull && Array.isArray(structure?.entryResistances) && structure.entryResistances.length > 0) {
       entry2 = Number(structure.entryResistances[0]) || entry2;
       entry3 = Number(structure.entryResistances[1] || (entry2 * (1 + 0.0008))) || entry3;
+    }
+    if (isBull) {
+      if (!(entry2 < entry1)) entry2 = entry1 * 0.9992;
+      if (!(entry3 < entry2)) entry3 = entry2 * 0.9992;
+    } else {
+      if (!(entry2 > entry1)) entry2 = entry1 * 1.0008;
+      if (!(entry3 > entry2)) entry3 = entry2 * 1.0008;
     }
 
     // Fixed TP/SL profile from requested rules.
@@ -2640,8 +2678,19 @@ function generateSignalForAsset(asset, options = {}) {
   const candidates = [day, scalp].filter(s => s.type !== 'WAIT');
   if (!candidates.length) {
     const mergedLines = [scalp?.signalText, day?.signalText].filter(Boolean);
+    const dayAlpha = Number(day?.alpha) || 0;
+    const scalpAlpha = Number(scalp?.alpha) || 0;
+    const preferred = dayAlpha >= scalpAlpha ? day : scalp;
     return {
-      ...buildWait(`${day.waitReason} | ${scalp.waitReason}`),
+      ...buildWait(`${day.waitReason} | ${scalp.waitReason}`, 'SCAN', {
+        alpha: Math.max(dayAlpha, scalpAlpha),
+        side: preferred?.side || null,
+        isBull: typeof preferred?.isBull === 'boolean' ? preferred.isBull : null,
+        pattern: preferred?.pattern || 'NONE',
+        gateSummary: preferred?.gateSummary || '',
+        pillarScores: preferred?.pillarScores || null,
+        signalLines: mergedLines
+      }),
       type: 'WAIT',
       signalLines: mergedLines.length ? mergedLines : undefined
     };
@@ -2799,7 +2848,7 @@ function renderProSignals() {
 
         <!-- Footer -->
         <div class="signal-footer">
-          <span>Alpha: <strong class="text-primary">${sig.alpha ?? (asset.opportunityScore ?? asset.score)}/100</strong></span>
+          <span>Alpha: <strong class="text-primary">${Number.isFinite(Number(sig.alpha)) ? Math.round(Number(sig.alpha)) : 0}/100</strong></span>
           <span>Risk:Reward <strong class="text-green">${sig.rrRatio}</strong></span>
           <span>Vol: <strong class="text-warning">${(sig.atrPct * 100).toFixed(1)}%</strong></span>
           <span class="signal-brand">⚡ NEXUS Pro</span>
