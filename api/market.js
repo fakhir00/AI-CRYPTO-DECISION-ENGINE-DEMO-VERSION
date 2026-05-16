@@ -15,7 +15,7 @@ const MAX_INTRADAY_RANGE_PCT = 24;
 const KLINE_LIMIT = 80;
 const FETCH_TIMEOUT_MS = 6000;
 const KLINE_CONCURRENCY = 12;
-const MIN_SIGNAL_RR_RATIO = 1.5;
+const MIN_SIGNAL_RR_RATIO = 1.0;
 
 const STABLECOINS = new Set([
   'USDT', 'USDC', 'DAI', 'BUSD', 'FDUSD', 'TUSD', 'PYUSD', 'USDE', 'USDD',
@@ -992,7 +992,7 @@ export default async function handler(req, res) {
           emaState: 'EMA9 above EMA21 = BUY, below = SELL',
           volumeRatioThreshold: 0.8,
           spreadCheck: '< 0.15%',
-          minRiskReward: '1:1.5 (TP4 vs SL)'
+          minRiskReward: '1:1.0 (TP4 vs SL)'
         }
       }
     });

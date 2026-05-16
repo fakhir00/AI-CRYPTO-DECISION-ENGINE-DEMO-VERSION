@@ -46,7 +46,7 @@ const SIGNAL_SCAN_INTERVAL_MS = 60 * 1000;
 const SIGNAL_KLINE_LIMIT = 80;
 const SIGNAL_FETCH_TIMEOUT_MS = 6000;
 const SIGNAL_KLINE_CONCURRENCY = 10;
-const MIN_SIGNAL_RR_RATIO = 1.5;
+const MIN_SIGNAL_RR_RATIO = 1.0;
 const SIGNAL_BINANCE_ENDPOINTS = [
   'https://api.binance.com/api/v3/klines',
   'https://api1.binance.com/api/v3/klines',
@@ -2299,7 +2299,6 @@ function renderOpportunitiesPage() {
       `;
     }
 
-    const line = String(signal.line || '');
     if (signal.status === 'SIGNAL') {
       const dirIsBuy = signal.direction === 'BUY';
       const e1 = Number(signal.entry1 ?? signal.entry);
@@ -2329,7 +2328,6 @@ function renderOpportunitiesPage() {
           <span class="text-muted" style="font-size: 0.64rem; line-height: 1.25; font-family: var(--font-mono);">
             RR: ${(Number.isFinite(rr) ? rr.toFixed(2) : '0.00')}
           </span>
-          <span class="text-muted" style="font-size: 0.64rem; line-height: 1.25; font-family: var(--font-mono); word-break: break-all;">${line}</span>
         </div>
       `;
     }
@@ -2338,7 +2336,6 @@ function renderOpportunitiesPage() {
       <div style="display:flex;flex-direction:column;gap:0.25rem;">
         <span class="badge" style="background: rgba(255,255,255,0.05); color: var(--text-muted); font-size: 0.62rem; padding: 0.15rem 0.4rem; width: fit-content;">NO_SIGNAL</span>
         <span class="text-red" style="font-size: 0.68rem;">${signal.reason || 'RULE_FAIL'}</span>
-        <span class="text-muted" style="font-size: 0.64rem; line-height: 1.25; font-family: var(--font-mono); word-break: break-all;">${line}</span>
       </div>
     `;
   };
@@ -2347,7 +2344,7 @@ function renderOpportunitiesPage() {
     tbody.innerHTML = `
       <tr>
         <td colspan="8" style="text-align:center;padding:1.25rem;color:var(--text-muted);">
-          No SCALP trades currently meet minimum risk/reward 1:1.5.
+          No SCALP trades currently meet minimum risk/reward 1:1.
         </td>
       </tr>
     `;
