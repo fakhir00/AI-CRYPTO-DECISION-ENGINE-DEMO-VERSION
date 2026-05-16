@@ -2434,7 +2434,7 @@ function renderOpportunitiesPage() {
     tbody.innerHTML = `
       <tr>
         <td colspan="8" style="text-align:center;padding:1.25rem;color:var(--text-muted);">
-          No SCALP trades currently meet minimum risk/reward 1.5:1.
+          No SCALP trades currently meet minimum risk/reward 1:1.5.
         </td>
       </tr>
     `;

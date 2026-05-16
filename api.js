@@ -1631,7 +1631,7 @@ Take-Profit Targets:
 Stop Targets:
 1) ${formattedStop}
 
-Risk-Reward: 1:2`;
+Risk-Reward: 1:1.5`;
     }
   }
 
@@ -1782,7 +1782,7 @@ Take-Profit Targets:
 Stop Targets:
 1) ${autoStop}
 
-Risk-Reward: 1:2`;
+Risk-Reward: 1:1.5`;
   }
 
   return `#${symbol}/USDT
@@ -1802,7 +1802,7 @@ Take-Profit Targets:
 Stop Targets:
 1) ${stop}
 
-Risk-Reward: 1:2`;
+Risk-Reward: 1:1.5`;
 }
 
 function extractTradeRationales(text = '', symbol = 'COIN') {
@@ -2004,7 +2004,7 @@ function buildApiDrivenTradePlan({ symbol = 'BTC', userQuery = '', assetContext 
     keyLevelType: keyMeta.levelType,
     keyLevelFibLabel: keyMeta.fibLabel,
     levelStrength: keyMeta.levelStrength,
-    riskRewardLabel: '1:2',
+    riskRewardLabel: '1:1.5',
     leverageLabel,
     confidence: bias.confidence,
     changePct: planChangePct,
@@ -2037,7 +2037,7 @@ CRITICAL: You are a DUAL-DIRECTIONAL agent. If the Alpha Score is low and the pr
 
 MATHEMATICAL TARGET GENERATION (STRICT): You will be provided with PRE-CALCULATED MANDATORY targets based on live Volatility (ATR) and Risk-Reward constraints in the context (under "MANDATORY LONG/SHORT TARGETS"). 
 CRITICAL: You MUST use the exact Entry, Stop Loss, and TP1-TP3 values provided in the context. Do NOT calculate your own. If the context says the Stop Loss is $3.85, you output $3.85. No exceptions. This ensures all devices (PC and Mobile) show identical signals.
-CRITICAL SCALP RULE: Every signal is SCALPING only. Keep stop-loss disciplined and set TP1-TP3 around nearby structure with minimum risk-reward 1:2.
+CRITICAL SCALP RULE: Every signal is SCALPING only. Keep stop-loss disciplined and set TP1-TP3 around nearby structure with minimum risk-reward 1:1.5.
 
 MANDATORY SIGNAL FORMAT (FOLLOW STRICTLY):
 # [SYMBOL]/USDT
@@ -2057,9 +2057,9 @@ Take-Profit Targets:
 Stop Targets:
 1) [Price]
 
-Risk-Reward: 1:2
+Risk-Reward: 1:1.5
 
-CRITICAL: NEVER add "(1:1 R:R)", "(1:2 R:R)", "(1:3 R:R)", "(1:4 R:R)" or "(1.5 ATR)" anywhere in the signal. 
+CRITICAL: NEVER add "(1:1 R:R)", "(1:1.5 R:R)", "(1:3 R:R)", "(1:4 R:R)" or "(1.5 ATR)" anywhere in the signal. 
 CRITICAL ENTRY ORDER RULE:
 - LONG entries must be: Entry1 near support, Entry2 exactly 0.5% lower, Entry3 exactly 0.5% lower from Entry2.
 - SHORT entries must be: Entry1 near resistance, Entry2 exactly 0.5% higher, Entry3 exactly 0.5% higher from Entry2.
@@ -2401,7 +2401,7 @@ CRITICAL: Do NOT claim specific candlestick pattern names. Base rationale on pri
 - Entry Ladder: (${fmtPlan(apiTradePlan.entries[0])}, ${fmtPlan(apiTradePlan.entries[1])}, ${fmtPlan(apiTradePlan.entries[2])})
 - TP1-TP3: (${fmtPlan(apiTradePlan.targets[0])}, ${fmtPlan(apiTradePlan.targets[1])}, ${fmtPlan(apiTradePlan.targets[2])})
 - Stop: ${fmtPlan(apiTradePlan.stop)}
-- Risk-Reward: ${apiTradePlan.riskRewardLabel || '1:2'}
+- Risk-Reward: ${apiTradePlan.riskRewardLabel || '1:1.5'}
 - Confidence: ${formatPercentValue(apiTradePlan.confidence || 0)}
 CRITICAL: Use this plan exactly in the final signal format.`;
   }
