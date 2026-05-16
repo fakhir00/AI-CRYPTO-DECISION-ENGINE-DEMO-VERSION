@@ -1484,20 +1484,22 @@ function getScalpRiskEnvelope(candleData = null, confidenceValue = null) {
   const atrPct = (current && atr) ? (atr / current) * 100 : null;
   const confidence = normalizeTradeConfidence(confidenceValue);
 
-  // User Requirement: SL should not be lower than 5%
-  let minRiskPct = 5.0;
-  let maxRiskPct = 6.2;
+  let minRiskPct = 0.35;
+  let maxRiskPct = 1.10;
 
   if (atrPct !== null) {
     if (atrPct >= 4.2) {
-      minRiskPct = 6.5;
-      maxRiskPct = 9.0;
+      minRiskPct = 0.75;
+      maxRiskPct = 1.95;
     } else if (atrPct >= 3.0) {
-      minRiskPct = 5.8;
-      maxRiskPct = 7.5;
+      minRiskPct = 0.62;
+      maxRiskPct = 1.65;
     } else if (atrPct >= 2.0) {
-      minRiskPct = 5.3;
-      maxRiskPct = 6.8;
+      minRiskPct = 0.50;
+      maxRiskPct = 1.35;
+    } else if (atrPct <= 0.9) {
+      minRiskPct = 0.25;
+      maxRiskPct = 0.80;
     }
   }
 
@@ -1578,22 +1580,22 @@ function buildScalpTargetsFromStructure(direction = 'LONG', entryPrice = null, r
   const maxTravel = Math.max(safeRisk * (multipliers[3] + 0.20), entry * 0.0095);
 
   const directionalLevels = getDirectionalStructureLevels(side, entry, candleData);
-  
-  // Requirement: set tps based on local resistance for long and support for short
-  // We prioritize these levels as primary targets.
   let levels = directionalLevels.filter(level => {
     const d = Math.abs(level - entry);
-    const risk = safeRisk || (entry * 0.05); // Use 5% as a fallback distance
-    return d >= (minStep * 0.65) && d <= (risk * 4.5); // Allow more room for structural targets
+    return d >= (minStep * 0.75) && d <= (maxTravel * 1.25);
   });
 
   if (levels.length === 0 && directionalLevels.length > 0) {
-    // If no levels in ideal range, take the 4 nearest ones regardless of travel constraints
-    levels = directionalLevels.slice(0, 4);
+    const nearestLevel = directionalLevels[0];
+    const nearestDist = Math.abs(nearestLevel - entry);
+    const projectedDist = Math.max(minStep, Math.min(nearestDist, maxTravel));
+    const factors = [0.38, 0.58, 0.78, 0.96];
+    levels = factors.map(f => side === 'LONG'
+      ? entry + (projectedDist * f)
+      : Math.max(0.0000001, entry - (projectedDist * f)));
   }
 
   const targets = [];
-  // Add structural levels first
   for (const level of levels) {
     if (targets.length === 4) break;
     const prev = targets.length ? targets[targets.length - 1] : entry;
@@ -1602,13 +1604,17 @@ function buildScalpTargetsFromStructure(direction = 'LONG', entryPrice = null, r
     targets.push(level);
   }
 
-  // Fill remaining targets with ATR-based levels if needed
   for (let i = 0; targets.length < 4 && i < multipliers.length; i++) {
     const raw = side === 'LONG'
       ? entry + (safeRisk * multipliers[i])
       : entry - (safeRisk * multipliers[i]);
     let candidate = raw;
-    
+    if (side === 'LONG') {
+      candidate = Math.min(entry + maxTravel, candidate);
+    } else {
+      candidate = Math.max(0.0000001, Math.max(entry - maxTravel, candidate));
+    }
+
     const prev = targets.length ? targets[targets.length - 1] : entry;
     if (side === 'LONG' && candidate <= prev) candidate = prev + minStep;
     if (side === 'SHORT' && candidate >= prev) candidate = Math.max(0.0000001, prev - minStep);
@@ -1819,17 +1825,10 @@ function deriveAdaptiveStartFromCandle(direction = 'LONG', currentPrice = null, 
   const position = range > 0 ? (current - swingLow) / range : 0.5;
 
   let offsetAtr = side === 'SHORT' ? 0.15 : -0.15;
-  
-  // Requirement: set entry prices based on the candle stick patterns
-  const patternBias = getPatternBiasScore(candleData); // bull > 0, bear < 0
   if (side === 'LONG') {
-    if (patternBias > 0.5) offsetAtr = -0.05; // Aggressive entry for strong bullish patterns
-    else if (patternBias < -0.3) offsetAtr = -0.35; // Deeper entry if patterns are bearish but bias is long
-    else if (position > 0.7) offsetAtr = -0.28;
+    if (position > 0.7) offsetAtr = -0.28;
     else if (position < 0.35) offsetAtr = -0.08;
   } else {
-    if (patternBias < -0.5) offsetAtr = 0.05; // Aggressive entry for strong bearish patterns
-    else if (patternBias > 0.3) offsetAtr = 0.35; // Deeper entry if patterns are bullish but bias is short
     if (position < 0.3) offsetAtr = 0.28;
     else if (position > 0.65) offsetAtr = 0.08;
   }
@@ -2009,12 +2008,11 @@ ${trailingBlock}`;
 
   if ((hasPlaceholderTargets && hasPlaceholderStop) || hasInvalidTargets) {
     const entryBase = entryLadderNums[0] ?? refPrice;
-    const envelope = getScalpRiskEnvelope(options.candleData, options.tradeMeta?.confidence);
-    const minRisk = entryBase * (envelope.minRiskPct / 100);
+    const atrNum = toNumber(options.candleData?.atr) ?? Math.max(entryBase * 0.0075, 0.0001);
     const repairedStop = direction === 'SHORT'
-      ? entryBase + minRisk
-      : Math.max(0, entryBase - minRisk);
-    const risk = minRisk;
+      ? entryBase + (0.58 * atrNum)
+      : Math.max(0, entryBase - (0.58 * atrNum));
+    const risk = Math.max(Math.abs(entryBase - repairedStop), atrNum * 0.28);
     const repairedTargets = buildScalpTargetsFromStructure(
       direction,
       entryBase,
@@ -2376,7 +2374,7 @@ CRITICAL: You are a DUAL-DIRECTIONAL agent. If the Alpha Score is low and the pr
 
 MATHEMATICAL TARGET GENERATION (STRICT): You will be provided with PRE-CALCULATED MANDATORY targets based on live Volatility (ATR) and Risk-Reward constraints in the context (under "MANDATORY LONG/SHORT TARGETS"). 
 CRITICAL: You MUST use the exact Entry, Stop Loss, and TP1-TP4 values provided in the context. Do NOT calculate your own. If the context says the Stop Loss is $3.85, you output $3.85. No exceptions. This ensures all devices (PC and Mobile) show identical signals.
-CRITICAL RISK RULE: All signals MUST have a Stop-Loss of at least 5% from the entry price to allow for market volatility. Set TP1-TP4 using local structure levels (resistance for LONG, support for SHORT) provided in the context. Never output distant swing targets.
+CRITICAL SCALP RULE: Every signal is SCALPING only. Keep stop-loss tight and set TP1-TP4 using the nearest local structure levels (resistance for LONG, support for SHORT). Never output distant swing targets.
 
 MANDATORY SIGNAL FORMAT (FOLLOW STRICTLY):
 # [SYMBOL]/USDT
