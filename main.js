@@ -747,7 +747,7 @@ async function syncLiveApis() {
       .filter(c => !isStablecoinSymbol(c.symbol, c.name, c.current_price))
       .map(c => c.symbol.toUpperCase());
     const derivativeSymbols = topSymbols.slice(0, 15); // Top 15 for heavy OI/Funding data
-    const technicalSymbols = [...new Set([...derivativeSymbols, ...SIGNAL_SCAN_PAIRS])];
+    const technicalSymbols = [...new Set([...topSymbols, ...SIGNAL_SCAN_PAIRS])];
     const signalPatternJobs = SIGNAL_SCAN_PAIRS.flatMap((sym) => ([
       fetchCandlePatterns(sym, '1m').then(data => ({ symbol: sym, interval: '1m', data })).catch(() => ({ symbol: sym, interval: '1m', data: null })),
       fetchCandlePatterns(sym, '15m').then(data => ({ symbol: sym, interval: '15m', data })).catch(() => ({ symbol: sym, interval: '15m', data: null }))
@@ -1413,7 +1413,7 @@ function renderOpportunitiesPage() {
   const visibleRows = sorted.slice(0, MAX_TOP_OPPORTUNITIES);
   
   tbody.innerHTML = visibleRows.map((asset, i) => {
-    const sig = generateSignalForAsset(asset);
+    const sig = generateSignalForAsset(asset, { enforceScanUniverse: false });
     const displayScore = getUnifiedAlphaScore(asset);
     // Calculate profit potential based on max target (t4) at 5x leverage
     let profitPot = 0;
@@ -1439,13 +1439,16 @@ function renderOpportunitiesPage() {
       <td><span class="text-muted" style="font-size: 0.8rem">${asset.reason || 'Analyzing Technicals...'}</span></td>
       <td>
         ${sig.type === 'WAIT' ? `
-          <span class="badge" style="background: rgba(255,255,255,0.05); color: var(--text-muted); font-size: 0.65rem; padding: 0.2rem 0.5rem;">
-            ⏸ WAIT
-          </span>
+          <div>
+            <span class="badge" style="background: rgba(255,255,255,0.05); color: var(--text-muted); font-size: 0.65rem; padding: 0.2rem 0.5rem;">⏸ WAIT</span>
+            <div style="font-size:0.64rem; color:var(--text-muted); margin-top:0.25rem; max-width: 280px; line-height:1.35;">
+              ${sig.waitReason || 'Mandatory conditions not met.'}
+            </div>
+          </div>
         ` : `
-          <span class="badge ${sig.isBull ? 'sig-long' : 'sig-short'}" style="font-size: 0.65rem; padding: 0.2rem 0.5rem; display: inline-flex; align-items: center; gap: 4px;">
-            ${sig.isBull ? '📈' : '📉'} ${sig.isBull ? 'LONG' : 'SHORT'}
-          </span>
+          <div style="font-family: var(--font-mono); font-size: 0.64rem; line-height: 1.35; color: #cfd8ff; max-width: 360px; white-space: normal;">
+            ${(Array.isArray(sig.signalLines) ? sig.signalLines : [sig.signalText]).filter(Boolean).join('<br/>')}
+          </div>
         `}
       </td>
       <td><button class="action-btn">Analyze</button></td>
@@ -1720,6 +1723,17 @@ function setupAiResearchChat() {
 
   if (!input || !btn || !history) return;
   let isSubmitting = false;
+  const SIGNAL_INTENT_RE = /\b(signal|scalp|day|entry|entries|tp|target|stop|sl|setup|long|short|buy|sell|trade)\b/i;
+  const extractRequestedSymbols = (text = '') => {
+    const upper = String(text || '').toUpperCase();
+    const symbols = new Set();
+    const pairMatches = [...upper.matchAll(/\b([A-Z0-9]{2,10})\s*\/\s*USDT\b/g)];
+    pairMatches.forEach((m) => symbols.add(m[1]));
+    const compactMatches = [...upper.matchAll(/\b([A-Z0-9]{2,10})USDT\b/g)];
+    compactMatches.forEach((m) => symbols.add(m[1]));
+    const filtered = [...symbols].filter((s) => SIGNAL_SCAN_PAIRS.includes(s));
+    return filtered.length ? filtered : [...SIGNAL_SCAN_PAIRS];
+  };
 
   const handleChat = async () => {
     const val = input.value.trim();
@@ -1771,6 +1785,52 @@ function setupAiResearchChat() {
     history.scrollTop = history.scrollHeight;
 
     try {
+      // Force simplified deterministic signal mode in chat when user asks for signals.
+      if (SIGNAL_INTENT_RE.test(val)) {
+        const requested = extractRequestedSymbols(val);
+        const signalLines = [];
+        const waitRows = [];
+
+        requested.forEach((sym) => {
+          const asset = assets.find(a => a.symbol === sym);
+          if (!asset) {
+            waitRows.push(`${sym}/USDT: asset context unavailable.`);
+            return;
+          }
+          const sig = generateSignalForAsset(asset);
+          if (sig.type === 'WAIT') {
+            waitRows.push(`${sym}/USDT: ${sig.waitReason}`);
+            return;
+          }
+          if (Array.isArray(sig.signalLines) && sig.signalLines.length > 0) {
+            sig.signalLines.forEach((line) => signalLines.push(line));
+          } else if (sig.signalText) {
+            signalLines.push(sig.signalText);
+          }
+        });
+
+        if (loadingMsg.parentNode) history.removeChild(loadingMsg);
+        const aiMsg = document.createElement('div');
+        aiMsg.className = 'chat-message ai';
+        const aiAvatar = document.createElement('div');
+        aiAvatar.className = 'avatar';
+        const aiIcon = document.createElement('i');
+        aiIcon.setAttribute('data-feather', 'cpu');
+        aiAvatar.appendChild(aiIcon);
+        const aiBubble = document.createElement('div');
+        aiBubble.className = 'bubble';
+        const body = signalLines.length
+          ? signalLines.join('\n')
+          : `No signal generated (mandatory EMA-cross/volume checks failed).\n${waitRows.join('\n')}`;
+        aiBubble.innerHTML = `<pre style="margin:0;white-space:pre-wrap;font-family:var(--font-mono);font-size:0.82rem;line-height:1.55;">${body}</pre>`;
+        aiMsg.appendChild(aiAvatar);
+        aiMsg.appendChild(aiBubble);
+        history.appendChild(aiMsg);
+        if (typeof feather !== 'undefined') feather.replace();
+        history.scrollTop = history.scrollHeight;
+        return;
+      }
+
       // Fetch from AI with full platform context
       const promptUpper = String(val || '').toUpperCase();
       const pairMatch = promptUpper.match(/\b([A-Z0-9]{2,10})\s*\/\s*USDT\b/) || promptUpper.match(/\b([A-Z0-9]{2,10})USDT\b/);
@@ -1864,7 +1924,8 @@ function formatPrice(num) {
 // NEXUS PRO SIGNALS
 // ============================================================
 
-function generateSignalForAsset(asset) {
+function generateSignalForAsset(asset, options = {}) {
+  const enforceScanUniverse = options?.enforceScanUniverse !== false;
   const symbol = String(asset?.symbol || '').toUpperCase();
   const price = Number(asset?.price);
   if (!(price > 0)) {
@@ -1881,7 +1942,7 @@ function generateSignalForAsset(asset) {
     };
   }
 
-  if (!SIGNAL_SCAN_PAIRS.includes(symbol)) {
+  if (enforceScanUniverse && !SIGNAL_SCAN_PAIRS.includes(symbol)) {
     return {
       type: 'WAIT',
       isBull: null,
