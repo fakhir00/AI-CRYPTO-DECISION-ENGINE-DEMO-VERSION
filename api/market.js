@@ -19,6 +19,7 @@ const KLINE_CONCURRENCY = 12;
 const STABLECOINS = new Set([
   'USDT', 'USDC', 'DAI', 'BUSD', 'FDUSD', 'TUSD', 'PYUSD', 'USDE', 'USDD',
   'GUSD', 'LUSD', 'EURC', 'FRAX', 'USD1', 'USDS', 'USDP', 'USDB', 'RLUSD',
+  'U', 'USDUC',
   'SUSD', 'MUSD', 'USD0', 'USDL', 'EURS', 'XAUT'
 ]);
 
@@ -63,8 +64,10 @@ function isStablecoinLike(symbol = '', name = '', price = null) {
 function isUnpredictableOrSham(ticker = {}) {
   const base = String(ticker.base || '').toUpperCase();
   if (!base) return true;
+  if (base.length < 2) return true;
   if (/^(1000|1000000)/.test(base)) return true;
   if (/(UP|DOWN|BULL|BEAR)$/.test(base)) return true;
+  if (/(SCAM|FAKE|TEST)/.test(base)) return true;
 
   const quoteVolume = Number(ticker.quoteVolume) || 0;
   const absChange = Math.abs(Number(ticker.changePct) || 0);

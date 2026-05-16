@@ -60,6 +60,7 @@ const SIGNAL_CACHE = {
 const STABLE_SYMBOLS = new Set([
   'USDT', 'USDC', 'DAI', 'BUSD', 'FDUSD', 'TUSD', 'PYUSD', 'USDE', 'USDD',
   'GUSD', 'LUSD', 'EURC', 'FRAX', 'USD1', 'USDS', 'USDP', 'USDB', 'RLUSD',
+  'U', 'USDUC',
   'SUSD', 'MUSD', 'USD0', 'USDL', 'EURS', 'XAUT'
 ]);
 
@@ -86,6 +87,21 @@ function isStablecoinSymbol(symbol = '', name = '', price = null) {
     return true;
   }
 
+  return false;
+}
+
+function isScamLikeAsset(asset = {}) {
+  const symbol = String(asset?.symbol || '').toUpperCase().trim();
+  const name = String(asset?.name || '').toUpperCase();
+  const vol = Number(asset?.total_volume) || 0;
+
+  if (!symbol) return true;
+  if (symbol.length < 2) return true;
+  if (/^(1000|1000000)/.test(symbol)) return true;
+  if (/(UP|DOWN|BULL|BEAR)$/.test(symbol)) return true;
+  if (/(SCAM|FAKE|TEST)/.test(symbol)) return true;
+  if (/(SCAM|FAKE|TEST|AIRDROP|BONUS)/.test(name)) return true;
+  if (Number.isFinite(vol) && vol > 0 && vol < 5_000_000) return true;
   return false;
 }
 
@@ -269,7 +285,7 @@ function getUnifiedAlphaScore(asset = {}) {
 
 function getSortedTradeableAssets(sortBy = 'alpha') {
   const sortKey = String(sortBy || 'alpha').toLowerCase();
-  const list = assets.filter(asset => !isStablecoinSymbol(asset.symbol, asset.name, asset.price));
+  const list = assets.filter(asset => !isStablecoinSymbol(asset.symbol, asset.name, asset.price) && !isScamLikeAsset(asset));
   return [...list].sort((a, b) => {
     if (sortKey === 'change') {
       return Math.abs(Number(b.change) || 0) - Math.abs(Number(a.change) || 0);
@@ -1035,7 +1051,7 @@ async function hydrateAssetsWithSignals(assetList = []) {
 
 function enforceTopAssetUniverse(assetList = [], maxAssets = MAX_TRADABLE_ASSETS) {
   const clean = (assetList || [])
-    .filter(asset => asset && asset.symbol && !isStablecoinSymbol(asset.symbol, asset.name, asset.price))
+    .filter(asset => asset && asset.symbol && !isStablecoinSymbol(asset.symbol, asset.name, asset.price) && !isScamLikeAsset(asset))
     .map(asset => ({ ...asset }));
 
   const ranked = clean.sort((a, b) => {
@@ -1516,10 +1532,12 @@ async function syncLiveApis() {
 
     const cappedMarketData = marketData
       .filter(c => !isStablecoinSymbol(c.symbol, c.name, c.current_price))
+      .filter(c => !isScamLikeAsset({ symbol: c.symbol, name: c.name, total_volume: c.total_volume }))
       .slice(0, MAX_TRADABLE_ASSETS);
 
     const topSymbols = cappedMarketData
       .filter(c => !isStablecoinSymbol(c.symbol, c.name, c.current_price))
+      .filter(c => !isScamLikeAsset({ symbol: c.symbol, name: c.name, total_volume: c.total_volume }))
       .map(c => c.symbol.toUpperCase());
     const derivativeSymbols = topSymbols.slice(0, 15); // Top 15 for heavy OI/Funding data
 
@@ -1673,7 +1691,7 @@ async function syncLiveApis() {
                a.reason = generateReason(a, a.score);
             }
             return a;
-          }).filter(a => !isStablecoinSymbol(a.symbol, a.name, a.price));
+          }).filter(a => !isStablecoinSymbol(a.symbol, a.name, a.price) && !isScamLikeAsset(a));
           console.log(`✅ Server market data loaded (source: ${serverData.source}, age: ${serverData.age}s)`);
         }
       }
@@ -1699,7 +1717,7 @@ async function syncLiveApis() {
            bias: change24h >= 1 ? 'bullish' : (change24h <= -1 ? 'bearish' : 'neutral'),
            reason: actualReason, vol: '$' + (coin.total_volume / 1e9).toFixed(1) + 'B'
          };
-      }).filter(a => !isStablecoinSymbol(a.symbol, a.name, a.price));
+      }).filter(a => !isStablecoinSymbol(a.symbol, a.name, a.price) && !isScamLikeAsset(a));
       assets = applyDuneMacroCalibration(assets, LIVE_DUNE_PULSE);
     }
 
@@ -1838,7 +1856,7 @@ function updateMarketCapHeader(timeframe = CURRENT_MARKET_TIMEFRAME) {
 
 function renderDashboard() {
   // Compute live summary values from assets
-  const tradeableAssets = assets.filter(a => !isStablecoinSymbol(a.symbol, a.name, a.price));
+  const tradeableAssets = assets.filter(a => !isStablecoinSymbol(a.symbol, a.name, a.price) && !isScamLikeAsset(a));
   const alphaRankedAssets = getSortedTradeableAssets('alpha');
   const topAsset = alphaRankedAssets[0];
   const topAssetScore = topAsset ? getUnifiedAlphaScore(topAsset) : null;
@@ -2543,7 +2561,7 @@ function setupAiResearchChat() {
       const pairMatch = promptUpper.match(/\b([A-Z0-9]{2,10})\s*\/\s*USDT\b/) || promptUpper.match(/\b([A-Z0-9]{2,10})USDT\b/);
       const requestedSymbol = pairMatch ? pairMatch[1] : null;
       const liveAssets = assets
-        .filter(a => !isStablecoinSymbol(a.symbol, a.name, a.price));
+        .filter(a => !isStablecoinSymbol(a.symbol, a.name, a.price) && !isScamLikeAsset(a));
       const prioritizedAssets = requestedSymbol
         ? [
             ...liveAssets.filter(a => a.symbol === requestedSymbol),
@@ -2703,7 +2721,7 @@ function renderProSignals() {
 
   // Use top 15 assets by opportunity score for the Pro Signals grid
   const top = [...assets]
-    .filter(a => !isStablecoinSymbol(a.symbol, a.name, a.price))
+    .filter(a => !isStablecoinSymbol(a.symbol, a.name, a.price) && !isScamLikeAsset(a))
     .sort((a, b) => ((b.opportunityScore ?? b.score) - (a.opportunityScore ?? a.score)) || a.symbol.localeCompare(b.symbol))
     .slice(0, 15);
 
