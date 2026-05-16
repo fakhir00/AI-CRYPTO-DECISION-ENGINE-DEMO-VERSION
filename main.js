@@ -1,5 +1,5 @@
 import './style.css';
-import { fetchMarketData, fetchCandlePatterns, fetchGlobalMarketData, fetchWhaleActivity, fetchSentiment, fetchFearAndGreed, fetchAIAnalysis, fetchHermesAnalysis, fetchDualAI, calculateAlphaScore, fetchDefiPools, fetchNews, fetchTechnicalSignals, fetchTrendingNarratives, fetchChartData, fetchFundingRates, fetchOpenInterest, fetchOrderBookDepth, fetchBtcOnChain, addToAIMemory, clearAIMemory, getAIMemory, getApiHealthSummary, getApiHealthPromptSummary } from './api.js';
+import { fetchMarketData, fetchCandlePatterns, fetchGlobalMarketData, fetchWhaleActivity, fetchSentiment, fetchFearAndGreed, fetchAIAnalysis, fetchHermesAnalysis, fetchDualAI, calculateAlphaScore, fetchDefiPools, fetchNews, fetchTechnicalSignals, fetchTrendingNarratives, fetchChartData, fetchFundingRates, fetchOpenInterest, fetchOrderBookDepth, fetchBtcOnChain, fetchDuneMarketPulse, addToAIMemory, clearAIMemory, getAIMemory, getApiHealthSummary, getApiHealthPromptSummary } from './api.js';
 import { setupAuth, openSignIn, logout, openUserProfile, clerk } from './lib/auth.js';
 import { supabase } from './lib/supabase.js';
 
@@ -37,9 +37,11 @@ let LIVE_FUNDING = [];   // Binance funding rates
 let LIVE_OI = [];        // Binance open interest
 let LIVE_DEPTH = null;   // BTC order book depth
 let LIVE_BTC_CHAIN = null; // BTC on-chain health
+let LIVE_DUNE_PULSE = null; // Dune macro on-chain pulse
 let OPPORTUNITY_SORT = 'alpha';
 let CURRENT_MARKET_TIMEFRAME = '24H';
-const MAX_TOP_OPPORTUNITIES = 50;
+const MAX_TRADABLE_ASSETS = 30;
+const MAX_TOP_OPPORTUNITIES = MAX_TRADABLE_ASSETS;
 const STABLE_SYMBOLS = new Set([
   'USDT', 'USDC', 'DAI', 'BUSD', 'FDUSD', 'TUSD', 'PYUSD', 'USDE', 'USDD',
   'GUSD', 'LUSD', 'EURC', 'FRAX', 'USD1', 'USDS', 'USDP', 'USDB', 'RLUSD',
@@ -153,6 +155,7 @@ async function loadDataCache() {
         return a;
       });
       assets = applyDirectionalBiasToAssets(assets);
+      assets = enforceTopAssetUniverse(assets);
       WHALE_ACTIONS.length = 0; cache.WHALE_ACTIONS?.forEach(w => WHALE_ACTIONS.push(w));
       SMART_MONEY_FLOWS.length = 0; cache.SMART_MONEY_FLOWS?.forEach(s => SMART_MONEY_FLOWS.push(s));
       NARRATIVES.length = 0; cache.NARRATIVES?.forEach(n => NARRATIVES.push(n));
@@ -253,6 +256,46 @@ function getSortedTradeableAssets(sortBy = 'alpha') {
       return parseVolumeBillions(b.vol) - parseVolumeBillions(a.vol);
     }
     return (getUnifiedAlphaScore(b) - getUnifiedAlphaScore(a)) || a.symbol.localeCompare(b.symbol);
+  });
+}
+
+function enforceTopAssetUniverse(assetList = [], maxAssets = MAX_TRADABLE_ASSETS) {
+  const clean = (assetList || [])
+    .filter(asset => asset && asset.symbol && !isStablecoinSymbol(asset.symbol, asset.name, asset.price))
+    .map(asset => ({ ...asset }));
+
+  const ranked = clean.sort((a, b) => {
+    const aScore = Number.isFinite(a?.opportunityScore) ? Number(a.opportunityScore) : (Number.isFinite(a?.score) ? Number(a.score) : 0);
+    const bScore = Number.isFinite(b?.opportunityScore) ? Number(b.opportunityScore) : (Number.isFinite(b?.score) ? Number(b.score) : 0);
+    if (bScore !== aScore) return bScore - aScore;
+    const av = parseVolumeBillions(a?.vol);
+    const bv = parseVolumeBillions(b?.vol);
+    if (bv !== av) return bv - av;
+    return String(a.symbol).localeCompare(String(b.symbol));
+  });
+
+  return ranked.slice(0, Math.max(1, maxAssets));
+}
+
+function applyDuneMacroCalibration(assetList = [], dunePulse = null) {
+  if (!dunePulse || !Number.isFinite(Number(dunePulse.signalScore))) return assetList;
+
+  const macroScore = Number(dunePulse.signalScore);
+  const macroTilt = Math.max(-1, Math.min(1, (macroScore - 50) / 35)); // -1..1
+  const growthWeight = Math.max(-1, Math.min(1, Number(dunePulse.volumeGrowthPct || 0) / 22));
+  const txWeight = Math.max(-1, Math.min(1, Number(dunePulse.btcTxGrowthPct || 0) / 18));
+  const blended = (macroTilt * 0.62) + (growthWeight * 0.25) + (txWeight * 0.13);
+
+  return assetList.map(asset => {
+    const change = Number(asset.change) || 0;
+    const directionSign = change >= 0 ? 1 : -1;
+    const alignmentBoost = blended * directionSign * 6.5;
+    const baseScore = Number.isFinite(asset.score) ? Number(asset.score) : 50;
+    const adjustedScore = Math.max(0, Math.min(100, Math.round(baseScore + alignmentBoost)));
+    return {
+      ...asset,
+      score: adjustedScore
+    };
   });
 }
 
@@ -684,11 +727,15 @@ async function syncLiveApis() {
   if(statusEl) statusEl.textContent = "Syncing Live APIs...";
   
   try {
-    // 1. Fetch Market Leaderboard First (Top 50)
+    // 1. Fetch Market Leaderboard First (Top 30)
     const marketData = await fetchMarketData();
     if (!marketData) throw new Error('Failed to fetch market leaderboard');
 
-    const topSymbols = marketData
+    const cappedMarketData = marketData
+      .filter(c => !isStablecoinSymbol(c.symbol, c.name, c.current_price))
+      .slice(0, MAX_TRADABLE_ASSETS);
+
+    const topSymbols = cappedMarketData
       .filter(c => !isStablecoinSymbol(c.symbol, c.name, c.current_price))
       .map(c => c.symbol.toUpperCase());
     const derivativeSymbols = topSymbols.slice(0, 15); // Top 15 for heavy OI/Funding data
@@ -701,6 +748,7 @@ async function syncLiveApis() {
       fundingData,
       oiData,
       depthData,
+      dunePulseData,
       btcChainData,
       sentimentData,
       fearGreedData,
@@ -715,6 +763,7 @@ async function syncLiveApis() {
       fetchFundingRates(derivativeSymbols),
       fetchOpenInterest(derivativeSymbols),
       fetchOrderBookDepth('BTC'),
+      fetchDuneMarketPulse(),
       fetchBtcOnChain(),
       fetchSentiment(),
       fetchFearAndGreed(),
@@ -768,10 +817,12 @@ async function syncLiveApis() {
     if (fundingData && fundingData.length > 0) LIVE_FUNDING = fundingData;
     if (oiData && oiData.length > 0) LIVE_OI = oiData;
     if (depthData) LIVE_DEPTH = depthData;
+    if (dunePulseData) LIVE_DUNE_PULSE = dunePulseData;
     if (btcChainData) LIVE_BTC_CHAIN = btcChainData;
     window._liveFundingData = LIVE_FUNDING;
     window._liveOiData = LIVE_OI;
     window._liveDepthData = LIVE_DEPTH;
+    window._liveDunePulse = LIVE_DUNE_PULSE;
 
     // Surface API status for debugging + AI context injection
     const apiHealth = getApiHealthSummary();
@@ -848,10 +899,10 @@ async function syncLiveApis() {
     }
 
     if (serverAssets) {
-      assets = serverAssets;
+      assets = applyDuneMacroCalibration(serverAssets, LIVE_DUNE_PULSE);
     } else if (marketData && marketData.length > 0) {
       // Fallback: compute client-side (only if server endpoint is down)
-      assets = marketData.map(coin => {
+      assets = cappedMarketData.map(coin => {
          const symbol = coin.symbol.toUpperCase();
          const change24h = coin.price_change_percentage_24h || 0;
          const volRatio = coin.market_cap > 0 ? (coin.total_volume / coin.market_cap) : 0;
@@ -866,10 +917,12 @@ async function syncLiveApis() {
            reason: actualReason, vol: '$' + (coin.total_volume / 1e9).toFixed(1) + 'B'
          };
       }).filter(a => !isStablecoinSymbol(a.symbol, a.name, a.price));
+      assets = applyDuneMacroCalibration(assets, LIVE_DUNE_PULSE);
     }
 
     if (assets.length > 0) {
       assets = applyDirectionalBiasToAssets(assets);
+      assets = enforceTopAssetUniverse(assets);
     }
 
     if (assets.length > 0) {
@@ -1151,6 +1204,25 @@ function renderDashboard() {
           </div>
           <div class="feed-content">
             Hash Rate: <strong>${LIVE_BTC_CHAIN.hashRate} EH/s</strong> | Mempool: <strong>${LIVE_BTC_CHAIN.unconfirmedTx.toLocaleString()}</strong> unconfirmed txs
+          </div>
+        </div>
+      `;
+    }
+
+    if (LIVE_DUNE_PULSE) {
+      const duneBiasColor = LIVE_DUNE_PULSE.bias === 'bullish'
+        ? 'var(--green)'
+        : (LIVE_DUNE_PULSE.bias === 'bearish' ? 'var(--red)' : 'var(--warning)');
+      dashAlpha.innerHTML += `
+        <div class="feed-item news-impact">
+          <div class="feed-header">
+            <span class="feed-time">Dune Macro</span>
+            <span class="feed-tag" style="background: rgba(108,92,231,0.18); color: var(--primary);">ON-CHAIN PULSE</span>
+          </div>
+          <div class="feed-content">
+            Score: <strong style="color:${duneBiasColor};">${LIVE_DUNE_PULSE.signalScore.toFixed(1)}/100 (${LIVE_DUNE_PULSE.bias.toUpperCase()})</strong> |
+            DEX Vol Δ24h: <strong>${LIVE_DUNE_PULSE.volumeGrowthPct.toFixed(1)}%</strong> |
+            BTC Tx Δ24h: <strong>${LIVE_DUNE_PULSE.btcTxGrowthPct.toFixed(1)}%</strong>
           </div>
         </div>
       `;
@@ -1666,7 +1738,10 @@ function setupAiResearchChat() {
         .map(a => `${a.symbol}: CURRENT_PRICE=$${a.price} (${a.change >= 0 ? '+' : ''}${a.change.toFixed(2)}%) - Rationale: ${a.reason}`)
         .join(' | ');
       const apiHealthCtx = window._apiHealthPrompt ? `API HEALTH: ${window._apiHealthPrompt}` : 'API HEALTH: pending first sync';
-      const dualRes = await fetchDualAI(val, `LATEST LIVE DATA: ${assetCtx}. ${apiHealthCtx}`);
+      const duneCtx = LIVE_DUNE_PULSE
+        ? `DUNE_PULSE: score=${LIVE_DUNE_PULSE.signalScore.toFixed(1)}, bias=${LIVE_DUNE_PULSE.bias}, dex_volume_growth_24h=${LIVE_DUNE_PULSE.volumeGrowthPct.toFixed(1)}%, btc_tx_growth_24h=${LIVE_DUNE_PULSE.btcTxGrowthPct.toFixed(1)}%.`
+        : 'DUNE_PULSE: unavailable.';
+      const dualRes = await fetchDualAI(val, `LATEST LIVE DATA: ${assetCtx}. ${apiHealthCtx}. ${duneCtx}`);
 
       if (loadingMsg.parentNode) history.removeChild(loadingMsg);
 

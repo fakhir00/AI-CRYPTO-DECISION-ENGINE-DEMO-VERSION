@@ -115,10 +115,10 @@ export function addToAIMemory(role, content) { AI_MEMORY.add(role, content); }
 export function clearAIMemory() { AI_MEMORY.clear(); }
 export function getAIMemory() { return AI_MEMORY.getMessages(); }
 
-// ─── 1. Binance-only tradable universe (top 50 + quality filter) ─────────────
+// ─── 1. Binance-only tradable universe (top 30 + quality filter) ─────────────
 export async function fetchMarketData() {
   try {
-    const BINANCE_TOP_N = 50;
+    const BINANCE_TOP_N = 30;
     const MIN_QUOTE_VOLUME_USD = 20_000_000;
     const MAX_ABS_CHANGE_PCT = 20;
     const MAX_INTRADAY_RANGE_PCT = 24;
@@ -755,6 +755,49 @@ export async function fetchBtcOnChain() {
   }
 }
 
+// ─── 4C-6. Dune: Cross-Chain Macro Flow Pulse (Serverless Proxy) ────────────
+export async function fetchDuneMarketPulse() {
+  try {
+    const res = await fetch('/api/dune');
+    if (!res.ok) throw new Error(`Dune Proxy HTTP ${res.status}`);
+    const payload = await res.json();
+    if (!payload || !payload.data) throw new Error('Invalid Dune payload');
+
+    const data = payload.data;
+    const signalScore = Number(data.signalScore);
+    const volumeGrowthPct = Number(data.volumeGrowthPct);
+    const btcTxGrowthPct = Number(data.btcTxGrowthPct);
+    const uniqueTraders24h = Number(data.uniqueTraders24h);
+    const bias = String(data.bias || 'neutral');
+
+    if (!Number.isFinite(signalScore)) throw new Error('Missing Dune signal score');
+
+    markApiOk(
+      'Dune Market Pulse',
+      `Score ${signalScore.toFixed(1)} (${bias}), VolΔ ${Number.isFinite(volumeGrowthPct) ? volumeGrowthPct.toFixed(1) : '0.0'}%`
+    );
+
+    return {
+      signalScore: Math.max(0, Math.min(100, signalScore)),
+      bias,
+      volume24h: Number(data.volume24h) || 0,
+      volumePrev24h: Number(data.volumePrev24h) || 0,
+      volumeGrowthPct: Number.isFinite(volumeGrowthPct) ? volumeGrowthPct : 0,
+      trades24h: Number(data.trades24h) || 0,
+      uniqueTraders24h: Number.isFinite(uniqueTraders24h) ? uniqueTraders24h : 0,
+      btcTx24h: Number(data.btcTx24h) || 0,
+      btcTxPrev24h: Number(data.btcTxPrev24h) || 0,
+      btcTxGrowthPct: Number.isFinite(btcTxGrowthPct) ? btcTxGrowthPct : 0,
+      source: String(payload.source || 'dune_sql'),
+      asOf: payload.asOf || null
+    };
+  } catch (e) {
+    console.warn('⚠️ Dune Market Pulse failed:', e.message);
+    markApiDegraded('Dune Market Pulse', `Fallback disabled: ${e.message}`);
+    return null;
+  }
+}
+
 // Helper: Compute Exponential Moving Average
 function computeEMA(data, period) {
   const k = 2 / (period + 1);
@@ -866,6 +909,8 @@ export async function fetchCandlePatterns(symbol, interval = '4h') {
       atr: null,
       swingHigh: null,
       swingLow: null,
+      localResistances: [],
+      localSupports: [],
       patterns: [],
       summary: 'Candle feed temporarily unavailable.'
     };
@@ -1081,6 +1126,156 @@ function normalizeTradeConfidence(value = null) {
   if (raw > 20) return Math.max(0, Math.min(1, raw / 100));
   if (raw > 1) return Math.max(0, Math.min(1, raw / 5));
   return Math.max(0, Math.min(1, raw));
+}
+
+function clampBetween(value, min, max) {
+  return Math.max(min, Math.min(max, value));
+}
+
+function getScalpRiskEnvelope(candleData = null, confidenceValue = null) {
+  const current = toNumber(candleData?.currentPrice);
+  const atr = toNumber(candleData?.atr);
+  const atrPct = (current && atr) ? (atr / current) * 100 : null;
+  const confidence = normalizeTradeConfidence(confidenceValue);
+
+  let minRiskPct = 0.35;
+  let maxRiskPct = 1.10;
+
+  if (atrPct !== null) {
+    if (atrPct >= 4.2) {
+      minRiskPct = 0.75;
+      maxRiskPct = 1.95;
+    } else if (atrPct >= 3.0) {
+      minRiskPct = 0.62;
+      maxRiskPct = 1.65;
+    } else if (atrPct >= 2.0) {
+      minRiskPct = 0.50;
+      maxRiskPct = 1.35;
+    } else if (atrPct <= 0.9) {
+      minRiskPct = 0.25;
+      maxRiskPct = 0.80;
+    }
+  }
+
+  if (confidence >= 0.75) {
+    minRiskPct *= 0.90;
+    maxRiskPct *= 0.90;
+  } else if (confidence <= 0.35) {
+    minRiskPct *= 1.15;
+    maxRiskPct *= 1.15;
+  }
+
+  return {
+    atrPct,
+    minRiskPct: clampBetween(minRiskPct, 0.18, 1.80),
+    maxRiskPct: clampBetween(maxRiskPct, 0.55, 2.40)
+  };
+}
+
+function getScalpTargetMultipliers(confidenceValue = null, atrPct = null) {
+  const confidence = normalizeTradeConfidence(confidenceValue);
+  let mults = [0.62, 0.95, 1.28, 1.65];
+
+  if (confidence >= 0.75) mults = [0.72, 1.08, 1.45, 1.90];
+  else if (confidence <= 0.35) mults = [0.52, 0.82, 1.10, 1.45];
+
+  if (atrPct !== null && atrPct >= 3.5) {
+    mults = mults.map((m, i) => m + [0.04, 0.08, 0.12, 0.18][i]);
+  } else if (atrPct !== null && atrPct <= 1.0) {
+    mults = mults.map((m, i) => Math.max(0.45, m - [0.04, 0.06, 0.08, 0.10][i]));
+  }
+
+  return mults;
+}
+
+function getDirectionalStructureLevels(direction = 'LONG', entryPrice = null, candleData = null) {
+  const side = String(direction).toUpperCase() === 'SHORT' ? 'SHORT' : 'LONG';
+  const entry = toNumber(entryPrice);
+  if (!(entry > 0)) return [];
+
+  const localRes = Array.isArray(candleData?.localResistances) ? candleData.localResistances : [];
+  const localSup = Array.isArray(candleData?.localSupports) ? candleData.localSupports : [];
+  const swingHigh = toNumber(candleData?.swingHigh);
+  const swingLow = toNumber(candleData?.swingLow);
+
+  const rawLevels = side === 'LONG'
+    ? [...localRes, swingHigh]
+    : [...localSup, swingLow];
+
+  const candidates = rawLevels
+    .map(toNumber)
+    .filter(v => v !== null && v > 0)
+    .filter(v => (side === 'LONG' ? v > entry : v < entry))
+    .sort((a, b) => side === 'LONG' ? a - b : b - a);
+
+  const deduped = [];
+  for (const level of candidates) {
+    if (deduped.length === 0) {
+      deduped.push(level);
+      continue;
+    }
+    const prev = deduped[deduped.length - 1];
+    const gapPct = prev > 0 ? (Math.abs(level - prev) / prev) * 100 : 0;
+    if (gapPct >= 0.10) deduped.push(level);
+  }
+  return deduped;
+}
+
+function buildScalpTargetsFromStructure(direction = 'LONG', entryPrice = null, riskDistance = null, candleData = null, confidenceValue = null) {
+  const side = String(direction).toUpperCase() === 'SHORT' ? 'SHORT' : 'LONG';
+  const entry = toNumber(entryPrice);
+  if (!(entry > 0)) return [];
+
+  const envelope = getScalpRiskEnvelope(candleData, confidenceValue);
+  const atr = toNumber(candleData?.atr) ?? Math.max(entry * 0.004, 0.0000001);
+  const minStep = Math.max(atr * 0.12, entry * 0.0012);
+  const safeRisk = Math.max(toNumber(riskDistance) || 0, entry * (envelope.minRiskPct / 100));
+  const multipliers = getScalpTargetMultipliers(confidenceValue, envelope.atrPct);
+  const maxTravel = Math.max(safeRisk * (multipliers[3] + 0.20), entry * 0.0095);
+
+  const directionalLevels = getDirectionalStructureLevels(side, entry, candleData);
+  let levels = directionalLevels.filter(level => {
+    const d = Math.abs(level - entry);
+    return d >= (minStep * 0.75) && d <= (maxTravel * 1.25);
+  });
+
+  if (levels.length === 0 && directionalLevels.length > 0) {
+    const nearestLevel = directionalLevels[0];
+    const nearestDist = Math.abs(nearestLevel - entry);
+    const projectedDist = Math.max(minStep, Math.min(nearestDist, maxTravel));
+    const factors = [0.38, 0.58, 0.78, 0.96];
+    levels = factors.map(f => side === 'LONG'
+      ? entry + (projectedDist * f)
+      : Math.max(0.0000001, entry - (projectedDist * f)));
+  }
+
+  const targets = [];
+  for (const level of levels) {
+    if (targets.length === 4) break;
+    const prev = targets.length ? targets[targets.length - 1] : entry;
+    if (side === 'LONG' && level <= prev) continue;
+    if (side === 'SHORT' && level >= prev) continue;
+    targets.push(level);
+  }
+
+  for (let i = 0; targets.length < 4 && i < multipliers.length; i++) {
+    const raw = side === 'LONG'
+      ? entry + (safeRisk * multipliers[i])
+      : entry - (safeRisk * multipliers[i]);
+    let candidate = raw;
+    if (side === 'LONG') {
+      candidate = Math.min(entry + maxTravel, candidate);
+    } else {
+      candidate = Math.max(0.0000001, Math.max(entry - maxTravel, candidate));
+    }
+
+    const prev = targets.length ? targets[targets.length - 1] : entry;
+    if (side === 'LONG' && candidate <= prev) candidate = prev + minStep;
+    if (side === 'SHORT' && candidate >= prev) candidate = Math.max(0.0000001, prev - minStep);
+    targets.push(candidate);
+  }
+
+  return targets.slice(0, 4);
 }
 
 function deriveScalpLeverageLabel(candleData = null, confidenceValue = null) {
@@ -1467,18 +1662,18 @@ ${trailingBlock}`;
 
   if ((hasPlaceholderTargets && hasPlaceholderStop) || hasInvalidTargets) {
     const entryBase = entryLadderNums[0] ?? refPrice;
-    const atrNum = toNumber(options.candleData?.atr) ?? Math.max(entryBase * 0.012, 0.0001);
+    const atrNum = toNumber(options.candleData?.atr) ?? Math.max(entryBase * 0.0075, 0.0001);
     const repairedStop = direction === 'SHORT'
-      ? entryBase + (0.90 * atrNum)
-      : Math.max(0, entryBase - (0.90 * atrNum));
-    const risk = Math.max(Math.abs(entryBase - repairedStop), atrNum * 0.42);
-    const dirMult = direction === 'SHORT' ? -1 : 1;
-    const repairedTargets = [
-      entryBase + (dirMult * risk * 0.9),
-      entryBase + (dirMult * risk * 1.5),
-      entryBase + (dirMult * risk * 2.1),
-      entryBase + (dirMult * risk * 2.8)
-    ];
+      ? entryBase + (0.58 * atrNum)
+      : Math.max(0, entryBase - (0.58 * atrNum));
+    const risk = Math.max(Math.abs(entryBase - repairedStop), atrNum * 0.28);
+    const repairedTargets = buildScalpTargetsFromStructure(
+      direction,
+      entryBase,
+      risk,
+      options.candleData,
+      options.tradeMeta?.confidence
+    );
 
     targets = repairedTargets.map(v => formatSignalPrice(v, refPrice));
     stop = formatSignalPrice(repairedStop, refPrice);
@@ -1498,10 +1693,10 @@ ${trailingBlock}`;
 
   // If parsing fails, still return a cleaned copy-ready signal without forbidden annotations.
   if (entryLadder.length < 3 || targets.length < 4 || !stop) {
-    const atrNum = toNumber(options.candleData?.atr) ?? Math.max(refPrice * 0.012, 0.0001);
+    const atrNum = toNumber(options.candleData?.atr) ?? Math.max(refPrice * 0.0075, 0.0001);
     const fallbackBase = refPrice;
-    const step1 = atrNum > 0 ? atrNum * 0.32 : Math.max(fallbackBase * 0.006, 0.0000001);
-    const step2 = atrNum > 0 ? atrNum * 0.64 : Math.max(fallbackBase * 0.012, 0.0000002);
+    const step1 = atrNum > 0 ? atrNum * 0.22 : Math.max(fallbackBase * 0.0035, 0.0000001);
+    const step2 = atrNum > 0 ? atrNum * 0.42 : Math.max(fallbackBase * 0.0065, 0.0000002);
     const autoEntryNums = entryLadderNums.length >= 3
       ? entryLadderNums
       : (direction === 'SHORT'
@@ -1510,16 +1705,16 @@ ${trailingBlock}`;
     const autoEntries = autoEntryNums.map(v => formatSignalPrice(v, refPrice));
     const entryBase = autoEntryNums[0] ?? refPrice;
     const autoStopNum = direction === 'SHORT'
-      ? entryBase + (0.90 * atrNum)
-      : Math.max(0.0000001, entryBase - (0.90 * atrNum));
-    const autoRisk = Math.max(Math.abs(entryBase - autoStopNum), atrNum * 0.42);
-    const dirMult = direction === 'SHORT' ? -1 : 1;
-    const autoTargets = [
-      entryBase + (dirMult * autoRisk * 0.9),
-      entryBase + (dirMult * autoRisk * 1.5),
-      entryBase + (dirMult * autoRisk * 2.1),
-      entryBase + (dirMult * autoRisk * 2.8)
-    ].map(v => formatSignalPrice(Math.max(v, 0.0000001), refPrice));
+      ? entryBase + (0.58 * atrNum)
+      : Math.max(0.0000001, entryBase - (0.58 * atrNum));
+    const autoRisk = Math.max(Math.abs(entryBase - autoStopNum), atrNum * 0.28);
+    const autoTargets = buildScalpTargetsFromStructure(
+      direction,
+      entryBase,
+      autoRisk,
+      options.candleData,
+      options.tradeMeta?.confidence
+    ).map(v => formatSignalPrice(Math.max(v, 0.0000001), refPrice));
     const autoStop = formatSignalPrice(autoStopNum, refPrice);
 
     return `#${symbol}/USDT
@@ -1713,7 +1908,7 @@ function buildApiDrivenTradePlan({ symbol = 'BTC', userQuery = '', assetContext 
   const confidence = normalizeTradeConfidence(bias.confidence);
 
   const atr = toNumber(candleData?.atr);
-  const safeAtr = atr && atr > 0 ? atr : Math.max(current * 0.012, current * 0.004);
+  const safeAtr = atr && atr > 0 ? atr : Math.max(current * 0.0075, current * 0.0028);
   const atrPct = (safeAtr / current) * 100;
   const swingHigh = toNumber(candleData?.swingHigh);
   const swingLow = toNumber(candleData?.swingLow);
@@ -1724,19 +1919,19 @@ function buildApiDrivenTradePlan({ symbol = 'BTC', userQuery = '', assetContext 
   const volLow = atrPct <= 1.2;
   const leverageLabel = deriveScalpLeverageLabel(candleData, bias.confidence);
 
-  let offset = direction === 'SHORT' ? 0.08 : -0.08;
+  let offset = direction === 'SHORT' ? 0.06 : -0.06;
   if (direction === 'LONG') {
-    if (change >= 3 && bias.confidence >= 2) offset = -0.04;
-    else if (change <= -0.8 || pos > 0.7) offset = -0.16;
-    else if (bias.confidence < 1) offset = -0.12;
+    if (change >= 3 && bias.confidence >= 2) offset = -0.03;
+    else if (change <= -0.8 || pos > 0.7) offset = -0.11;
+    else if (bias.confidence < 1) offset = -0.08;
   } else {
-    if (change <= -3 && bias.confidence >= 2) offset = 0.04;
-    else if (change >= 0.8 || pos < 0.3) offset = 0.16;
-    else if (bias.confidence < 1) offset = 0.12;
+    if (change <= -3 && bias.confidence >= 2) offset = 0.03;
+    else if (change >= 0.8 || pos < 0.3) offset = 0.11;
+    else if (bias.confidence < 1) offset = 0.08;
   }
 
-  let entryStep1 = volHigh ? 0.35 : (volLow ? 0.22 : 0.28);
-  let entryStep2 = volHigh ? 0.70 : (volLow ? 0.44 : 0.56);
+  let entryStep1 = volHigh ? 0.28 : (volLow ? 0.16 : 0.22);
+  let entryStep2 = volHigh ? 0.52 : (volLow ? 0.30 : 0.40);
   if (confidence >= 0.75) {
     entryStep1 *= 0.9;
     entryStep2 *= 0.9;
@@ -1760,29 +1955,33 @@ function buildApiDrivenTradePlan({ symbol = 'BTC', userQuery = '', assetContext 
     if (entry3 <= entry2) entry3 = entry2 * 1.005;
   }
 
-  let stopMult = volHigh ? 1.00 : (volLow ? 0.72 : 0.85);
+  let stopMult = volHigh ? 0.78 : (volLow ? 0.48 : 0.62);
   if (confidence >= 0.75) stopMult *= 0.92;
   else if (confidence <= 0.35) stopMult *= 1.10;
 
   let stop = direction === 'LONG' ? entry1 - (stopMult * safeAtr) : entry1 + (stopMult * safeAtr);
   if (direction === 'LONG' && swingLow !== null) {
-    stop = Math.min(stop, swingLow - (0.06 * safeAtr));
+    stop = Math.min(stop, swingLow - (0.03 * safeAtr));
   }
   if (direction === 'SHORT' && swingHigh !== null) {
-    stop = Math.max(stop, swingHigh + (0.06 * safeAtr));
+    stop = Math.max(stop, swingHigh + (0.03 * safeAtr));
   }
   if (direction === 'LONG') stop = Math.max(0, stop);
 
   let risk = Math.abs(entry1 - stop);
-  if (!(risk > 0)) risk = Math.max(safeAtr * 0.45, current * 0.0035);
+  const riskEnvelope = getScalpRiskEnvelope(candleData, bias.confidence);
+  const rawRiskPct = (entry1 > 0 && risk > 0) ? ((risk / entry1) * 100) : null;
+  const clampedRiskPct = clampBetween(
+    rawRiskPct ?? ((riskEnvelope.minRiskPct + riskEnvelope.maxRiskPct) / 2),
+    riskEnvelope.minRiskPct,
+    riskEnvelope.maxRiskPct
+  );
+  risk = entry1 * (clampedRiskPct / 100);
+  stop = direction === 'LONG'
+    ? Math.max(0.0000001, entry1 - risk)
+    : entry1 + risk;
 
-  const tpMultipliers = confidence >= 0.75
-    ? [1.0, 1.7, 2.4, 3.2]
-    : (confidence <= 0.35 ? [0.8, 1.3, 1.8, 2.4] : [0.9, 1.5, 2.1, 2.8]);
-
-  const targets = direction === 'LONG'
-    ? tpMultipliers.map(mult => entry1 + (risk * mult))
-    : tpMultipliers.map(mult => entry1 - (risk * mult));
+  const targets = buildScalpTargetsFromStructure(direction, entry1, risk, candleData, bias.confidence);
 
   const minPrice = Math.max(current * 0.02, 0.0000001);
   const sanitizePositive = (n, fallback = current) => {
@@ -1793,7 +1992,7 @@ function buildApiDrivenTradePlan({ symbol = 'BTC', userQuery = '', assetContext 
 
   const sanitizedEntries = [entry1, entry2, entry3].map(v => sanitizePositive(v, current));
   const sanitizedTargets = targets.map(v => sanitizePositive(v, minPrice));
-  const sanitizedStop = sanitizePositive(stop, direction === 'SHORT' ? current * 1.02 : current * 0.98);
+  const sanitizedStop = sanitizePositive(stop, direction === 'SHORT' ? entry1 * 1.008 : entry1 * 0.992);
 
   const planSymbol = String(symbol || '').toUpperCase();
   const planChangePct = toNumber(snap?.changePct) ?? toNumber(candleData?.changePct);
@@ -1836,6 +2035,7 @@ CRITICAL: You are a DUAL-DIRECTIONAL agent. If the Alpha Score is low and the pr
 
 MATHEMATICAL TARGET GENERATION (STRICT): You will be provided with PRE-CALCULATED MANDATORY targets based on live Volatility (ATR) and Risk-Reward constraints in the context (under "MANDATORY LONG/SHORT TARGETS"). 
 CRITICAL: You MUST use the exact Entry, Stop Loss, and TP1-TP4 values provided in the context. Do NOT calculate your own. If the context says the Stop Loss is $3.85, you output $3.85. No exceptions. This ensures all devices (PC and Mobile) show identical signals.
+CRITICAL SCALP RULE: Every signal is SCALPING only. Keep stop-loss tight and set TP1-TP4 using the nearest local structure levels (resistance for LONG, support for SHORT). Never output distant swing targets.
 
 MANDATORY SIGNAL FORMAT (FOLLOW STRICTLY):
 # [SYMBOL]/USDT
@@ -2130,41 +2330,60 @@ export async function fetchDualAI(userQuery, assetContext = '') {
 
       const longStart = deriveAdaptiveStartFromCandle('LONG', p, atr, candleData) ?? p;
       const shortStart = deriveAdaptiveStartFromCandle('SHORT', p, atr, candleData) ?? p;
-      const longEntry2 = longStart - (0.45 * atr);
-      const longEntry3 = longStart - (0.90 * atr);
-      const shortEntry2 = shortStart + (0.45 * atr);
-      const shortEntry3 = shortStart + (0.90 * atr);
+      const longEntry2 = longStart - (0.22 * atr);
+      const longEntry3 = longStart - (0.42 * atr);
+      const shortEntry2 = shortStart + (0.22 * atr);
+      const shortEntry3 = shortStart + (0.42 * atr);
 
-      const longSl = p - (1.5 * atr);
-      const shortSl = p + (1.5 * atr);
-
-      const riskLong = p - longSl;
-      const riskShort = shortSl - p;
+      const longEnvelope = getScalpRiskEnvelope(candleData, tradeMeta?.confidence);
+      const shortEnvelope = getScalpRiskEnvelope(candleData, tradeMeta?.confidence);
+      const longRisk = longStart * (((longEnvelope.minRiskPct + longEnvelope.maxRiskPct) / 2) / 100);
+      const shortRisk = shortStart * (((shortEnvelope.minRiskPct + shortEnvelope.maxRiskPct) / 2) / 100);
+      const longSl = Math.max(0.0000001, longStart - longRisk);
+      const shortSl = shortStart + shortRisk;
+      const longTargets = buildScalpTargetsFromStructure('LONG', longStart, longRisk, candleData, tradeMeta?.confidence);
+      const shortTargets = buildScalpTargetsFromStructure('SHORT', shortStart, shortRisk, candleData, tradeMeta?.confidence);
 
       // Formatting helper to keep decimals sane
       const fmt = (n) => p < 1 ? n.toFixed(5) : p < 10 ? n.toFixed(4) : p < 1000 ? n.toFixed(2) : n.toFixed(1);
+      const resistancePreview = (Array.isArray(candleData?.localResistances) ? candleData.localResistances : [])
+        .map(toNumber)
+        .filter(v => v !== null && v > p)
+        .sort((a, b) => a - b)
+        .slice(0, 4)
+        .map(v => `$${fmt(v)}`);
+      const supportPreview = (Array.isArray(candleData?.localSupports) ? candleData.localSupports : [])
+        .map(toNumber)
+        .filter(v => v !== null && v < p)
+        .sort((a, b) => b - a)
+        .slice(0, 4)
+        .map(v => `$${fmt(v)}`);
+      const resistanceLine = resistancePreview.length ? resistancePreview.join(', ') : 'Unavailable';
+      const supportLine = supportPreview.length ? supportPreview.join(', ') : 'Unavailable';
 
       enhancedContext += `\n\n📈 MARKET STRUCTURE (${candleData.symbol} ${candleData.interval}):
 - Current Price: $${p}
 - Volatility (ATR): $${atr.toFixed(4)}
 - Resistance (Swing High): $${candleData.swingHigh}
 - Support (Swing Low): $${candleData.swingLow}
+- Local Resistances Above Price: ${resistanceLine}
+- Local Supports Below Price: ${supportLine}
 
 🚨 [CRITICAL: IF SIGNAL IS LONG, YOU MUST USE THESE EXACT VALUES IN THE OUTPUT]
 - Entry Ladder (MUST be Start, Lower, Lower): ($${fmt(longStart)}, $${fmt(longEntry2)}, $${fmt(longEntry3)})
 - Stop Loss: $${fmt(longSl)}
-- TP1 (1:1): $${fmt(p + riskLong * 1)}
-- TP2 (1:2): $${fmt(p + riskLong * 2)}
-- TP3 (1:3): $${fmt(p + riskLong * 3)}
-- TP4 (1:4): $${fmt(p + riskLong * 4)}
+- TP1: $${fmt(longTargets[0] ?? (longStart + longRisk * 0.7))}
+- TP2: $${fmt(longTargets[1] ?? (longStart + longRisk * 1.1))}
+- TP3: $${fmt(longTargets[2] ?? (longStart + longRisk * 1.45))}
+- TP4: $${fmt(longTargets[3] ?? (longStart + longRisk * 1.9))}
 
 🚨 [CRITICAL: IF SIGNAL IS SHORT, YOU MUST USE THESE EXACT VALUES IN THE OUTPUT]
 - Entry Ladder (MUST be Start, Higher, Higher): ($${fmt(shortStart)}, $${fmt(shortEntry2)}, $${fmt(shortEntry3)})
 - Stop Loss: $${fmt(shortSl)}
-- TP1 (1:1): $${fmt(p - riskShort * 1)}
-- TP2 (1:2): $${fmt(p - riskShort * 2)}
-- TP3 (1:3): $${fmt(p - riskShort * 3)}
-- TP4 (1:4): $${fmt(p - riskShort * 4)}
+- TP1: $${fmt(shortTargets[0] ?? (shortStart - shortRisk * 0.7))}
+- TP2: $${fmt(shortTargets[1] ?? (shortStart - shortRisk * 1.1))}
+- TP3: $${fmt(shortTargets[2] ?? (shortStart - shortRisk * 1.45))}
+- TP4: $${fmt(shortTargets[3] ?? (shortStart - shortRisk * 1.9))}
 `;
     }
     if (hasDetectedCandlePatterns(candleData)) {
@@ -2234,7 +2453,7 @@ CRITICAL: Use this plan exactly in the final signal format.`;
       ? 'Candlestick feed is temporarily unavailable, so this setup uses live momentum + structure fallback logic.'
       : 'Directional bias is validated by the latest momentum and structure context.'),
     fallbackHints[2] || 'Entry ladder is volatility-adjusted to improve fill quality.',
-    'Targets are calibrated using risk-based progression from the live reference price.',
+    'Targets are anchored to nearby local resistance/support levels with scalp-safe progression.',
     'Stop placement is structure-aware and sized for disciplined risk control.'
   ];
   const apiRationaleFallback = `### ${String(fallbackSymbol || 'COIN').toUpperCase()} Trade Rationales

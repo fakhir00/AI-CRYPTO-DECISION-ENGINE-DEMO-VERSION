@@ -62,6 +62,62 @@ function getMarketStructure(candles) {
   return { swingHigh: maxHigh, swingLow: minLow };
 }
 
+function dedupeLevels(levels = [], minGapPct = 0.14) {
+  const sorted = [...levels]
+    .map(v => Number(v))
+    .filter(v => Number.isFinite(v) && v > 0)
+    .sort((a, b) => a - b);
+
+  const output = [];
+  for (const level of sorted) {
+    if (output.length === 0) {
+      output.push(level);
+      continue;
+    }
+    const prev = output[output.length - 1];
+    const gapPct = prev > 0 ? (Math.abs(level - prev) / prev) * 100 : 0;
+    if (gapPct >= minGapPct) output.push(level);
+  }
+  return output;
+}
+
+function getLocalKeyLevels(candles, pivotRadius = 2, lookback = 80) {
+  if (!Array.isArray(candles) || candles.length < (pivotRadius * 2 + 3)) {
+    return { localResistances: [], localSupports: [] };
+  }
+
+  const series = candles.slice(-Math.max(lookback, 24));
+  const resistanceCandidates = [];
+  const supportCandidates = [];
+
+  for (let i = pivotRadius; i < series.length - pivotRadius; i++) {
+    const c = series[i];
+    let isPivotHigh = true;
+    let isPivotLow = true;
+
+    for (let j = 1; j <= pivotRadius; j++) {
+      if (!(c.high > series[i - j].high && c.high >= series[i + j].high)) isPivotHigh = false;
+      if (!(c.low < series[i - j].low && c.low <= series[i + j].low)) isPivotLow = false;
+      if (!isPivotHigh && !isPivotLow) break;
+    }
+
+    if (isPivotHigh) resistanceCandidates.push(c.high);
+    if (isPivotLow) supportCandidates.push(c.low);
+  }
+
+  // Add recent extremes so near-term scalp levels are always represented.
+  const recent = series.slice(-14);
+  for (const c of recent) {
+    resistanceCandidates.push(c.high);
+    supportCandidates.push(c.low);
+  }
+
+  const localResistances = dedupeLevels(resistanceCandidates, 0.12).slice(-10);
+  const localSupports = dedupeLevels(supportCandidates, 0.12).slice(0, 10);
+
+  return { localResistances, localSupports };
+}
+
 function detectPatterns(candles) {
   const patterns = [];
 
@@ -315,6 +371,8 @@ function parseCandleResult(raw, symbol, interval, source = 'fresh') {
       atr: null,
       swingHigh: null,
       swingLow: null,
+      localResistances: [],
+      localSupports: [],
       patterns: [],
       summary: 'No candlestick data available.'
     };
@@ -333,6 +391,7 @@ function parseCandleResult(raw, symbol, interval, source = 'fresh') {
   const patterns = detectPatterns(candles);
   const atr = calculateATR(candles, 14);
   const structure = getMarketStructure(candles);
+  const localLevels = getLocalKeyLevels(candles);
   const lastClose = candles[candles.length - 1]?.close;
   const currentPrice = Number.isFinite(lastClose) ? lastClose : null;
 
@@ -345,6 +404,8 @@ function parseCandleResult(raw, symbol, interval, source = 'fresh') {
     atr,
     swingHigh: structure.swingHigh,
     swingLow: structure.swingLow,
+    localResistances: localLevels.localResistances,
+    localSupports: localLevels.localSupports,
     patterns,
     summary: patterns.length > 0
       ? patterns.map(p => `${p.name} (${p.type}): ${p.description}`).join(' | ')
@@ -432,6 +493,8 @@ export default async function handler(req, res) {
         atr: null,
         swingHigh: null,
         swingLow: null,
+        localResistances: [],
+        localSupports: [],
         patterns: [],
         summary: 'Candle feed temporarily unavailable.'
       });
@@ -486,6 +549,8 @@ export default async function handler(req, res) {
       atr: null,
       swingHigh: null,
       swingLow: null,
+      localResistances: [],
+      localSupports: [],
       patterns: [],
       summary: 'Candle feed temporarily unavailable.'
     });

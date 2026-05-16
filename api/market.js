@@ -10,7 +10,7 @@ let cachedData = null;
 let cacheTimestamp = 0;
 const CACHE_TTL = 15 * 1000; // 15 seconds (High-Precision Snapshot)
 
-const BINANCE_TOP_N = 50;
+const BINANCE_TOP_N = 30;
 const MIN_QUOTE_VOLUME_USD = 20_000_000;
 const MAX_ABS_CHANGE_PCT = 20;
 const MAX_INTRADAY_RANGE_PCT = 24;
@@ -107,7 +107,7 @@ export default async function handler(req, res) {
     if (!binance24hRes.ok) throw new Error(`Binance HTTP ${binance24hRes.status}`);
     const binance24h = await binance24hRes.json();
 
-    // Binance top-50 USDT pairs by quote volume after quality filtering.
+    // Binance top-30 USDT pairs by quote volume after quality filtering.
     const topBinance = Array.isArray(binance24h)
       ? binance24h
           .filter(t => typeof t?.symbol === 'string' && t.symbol.endsWith('USDT'))
