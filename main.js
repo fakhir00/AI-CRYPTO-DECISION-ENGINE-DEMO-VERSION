@@ -309,7 +309,7 @@ function getScalpRiskReward(asset = null) {
   if (Number.isFinite(direct) && direct > 0) return direct;
 
   const entry = Number(scalp.entry1 ?? scalp.entry);
-  const target = Number(scalp.tp4);
+  const target = Number(scalp.tp2);
   const stop = Number(scalp.sl);
   return sigComputeRiskRewardRatio(entry, target, stop);
 }
@@ -2902,14 +2902,17 @@ function generateSignalForAsset(asset) {
   }
 
   const isBull = scalp.direction === 'BUY';
-  const entry1 = Number(scalp.entry1 ?? scalp.entry) || Number(asset.price) || 0;
-  const entry2 = Number(scalp.entry2) || (isBull ? entry1 * (1 - 0.0008) : entry1 * (1 + 0.0008));
-  const entry3 = Number(scalp.entry3) || (isBull ? entry1 * (1 - 0.0015) : entry1 * (1 + 0.0015));
-  const sl = Number(scalp.sl) || (isBull ? entry1 * (1 - 0.008) : entry1 * (1 + 0.008));
-  const t1 = Number(scalp.tp1) || (isBull ? entry1 * (1 + 0.002) : entry1 * (1 - 0.002));
-  const t2 = Number(scalp.tp2) || (isBull ? entry1 * (1 + 0.0035) : entry1 * (1 - 0.0035));
-  const t3 = Number(scalp.tp3) || (isBull ? entry1 * (1 + 0.005) : entry1 * (1 - 0.005));
-  const t4 = Number(scalp.tp4) || (isBull ? entry1 * (1 + 0.007) : entry1 * (1 - 0.007));
+  const rawEntry = Number(scalp.entry1 ?? scalp.entry) || Number(asset.price) || 0;
+  const hasEntry = Number.isFinite(Number(scalp.entry1 ?? scalp.entry));
+  const entry1 = hasEntry ? rawEntry : (isBull ? rawEntry : rawEntry * (1 + 0.0012));
+  const entry2 = Number(scalp.entry2) || (isBull ? entry1 * (1 - 0.0008) : rawEntry);
+  const entry3 = Number(scalp.entry3) || (isBull ? entry1 * (1 - 0.0018) : rawEntry * (1 - 0.0012));
+  const avgEntry = (entry1 + entry2 + entry3) / 3;
+  const sl = Number(scalp.sl) || (isBull ? avgEntry * (1 - 0.0032) : avgEntry * (1 + 0.0042));
+  const t1 = Number(scalp.tp1) || (isBull ? avgEntry * (1 + 0.0040) : avgEntry * (1 - 0.0040));
+  const t2 = Number(scalp.tp2) || (isBull ? avgEntry * (1 + 0.0068) : avgEntry * (1 - 0.0068));
+  const t3 = Number(scalp.tp3) || (isBull ? avgEntry * (1 + 0.0100) : avgEntry * (1 - 0.0100));
+  const t4 = Number(scalp.tp4) || (isBull ? avgEntry * (1 + 0.0140) : avgEntry * (1 - 0.0140));
 
   const risk = Math.max(Math.abs(entry1 - sl), entry1 * 0.0005);
   const rewardT2 = Math.abs(t2 - entry1);
