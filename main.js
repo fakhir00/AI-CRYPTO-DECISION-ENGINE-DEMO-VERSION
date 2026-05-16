@@ -963,29 +963,41 @@ function sigNoSignal(timeframe, symbol, timestamp, reason, alpha = 50, direction
 function sigEvaluate(symbol, timeframe, snapshot, timestamp, spreadPct = null) {
   if (!snapshot) return sigNoSignal(timeframe, symbol, timestamp, 'DATA_UNAVAILABLE');
 
-  let direction = null;
-  if (snapshot.ema9 > snapshot.ema21) direction = 'BUY';
-  else if (snapshot.ema9 < snapshot.ema21) direction = 'SELL';
-  if (!direction) return sigNoSignal(timeframe, symbol, timestamp, 'EMA_CROSS_FAIL');
-
-  const volumeRatio = timeframe === 'SCALP' ? snapshot.volumeRatio3 : snapshot.volumeRatio5;
-  if (!(Number.isFinite(volumeRatio) && volumeRatio > 0.8)) {
-    const out = sigNoSignal(timeframe, symbol, timestamp, 'VOLUME_FAIL', 50, direction);
+  const breakout = snapshot.breakout || {};
+  const volumeSpikeRatio = Number(breakout.volumeSpikeRatio) || 0;
+  if (!(volumeSpikeRatio >= BREAKOUT_VOLUME_SPIKE_MULTIPLIER)) {
+    const out = sigNoSignal(timeframe, symbol, timestamp, 'VOLUME_SPIKE_FAIL', 50, 'BUY');
     out.patternSummary = snapshot.pattern?.summary || snapshot.pattern?.name || 'NONE';
     out.spreadPct = Number.isFinite(spreadPct) ? spreadPct : null;
     return out;
   }
 
-  if (!(Number.isFinite(spreadPct) && spreadPct < 0.15)) {
-    const out = sigNoSignal(timeframe, symbol, timestamp, 'SPREAD_FAIL', 50, direction);
+  if (!breakout.breakoutConfirmed) {
+    const out = sigNoSignal(timeframe, symbol, timestamp, 'BREAKOUT_FAIL', 50, 'BUY');
     out.patternSummary = snapshot.pattern?.summary || snapshot.pattern?.name || 'NONE';
     out.spreadPct = Number.isFinite(spreadPct) ? spreadPct : null;
     return out;
   }
 
+  if (!breakout.retestConfirmed) {
+    const out = sigNoSignal(timeframe, symbol, timestamp, 'RETEST_FAIL', 50, 'BUY');
+    out.patternSummary = snapshot.pattern?.summary || snapshot.pattern?.name || 'NONE';
+    out.spreadPct = Number.isFinite(spreadPct) ? spreadPct : null;
+    return out;
+  }
+
+  const rsi = Number(snapshot.rsi);
+  if (!(Number.isFinite(rsi) && rsi >= BREAKOUT_RSI_MIN && rsi <= BREAKOUT_RSI_MAX)) {
+    const out = sigNoSignal(timeframe, symbol, timestamp, 'RSI_RANGE_FAIL', 50, 'BUY');
+    out.patternSummary = snapshot.pattern?.summary || snapshot.pattern?.name || 'NONE';
+    out.spreadPct = Number.isFinite(spreadPct) ? spreadPct : null;
+    return out;
+  }
+
+  const direction = 'BUY';
   const technical = sigComputeTechnicalScore(snapshot, direction, timeframe);
   const emaConfluence = sigComputeEmaConfluence(direction, snapshot);
-  const volumeScore = sigComputeVolumeScore(volumeRatio);
+  const volumeScore = sigComputeVolumeScore(volumeSpikeRatio);
 
   // Neutral defaults when external source is unavailable in fallback path.
   const pillars = {
@@ -998,7 +1010,7 @@ function sigEvaluate(symbol, timeframe, snapshot, timestamp, spreadPct = null) {
     alphaSources: 50
   };
   const alpha = sigComputeAlpha(pillars);
-  const levels = sigComputeTradePlan(symbol, direction, snapshot.price, snapshot.atrPct);
+  const levels = sigComputeTradePlan(symbol, direction, snapshot.price, snapshot.atrPct, snapshot);
   const rrRatio = sigComputeRiskRewardRatio(levels.entry1, levels.tp4, levels.sl);
   if (!(rrRatio >= MIN_SIGNAL_RR_RATIO)) {
     const out = sigNoSignal(timeframe, symbol, timestamp, 'RR_FAIL', Math.round(alpha), direction);
