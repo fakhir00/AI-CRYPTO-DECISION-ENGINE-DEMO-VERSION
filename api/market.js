@@ -22,11 +22,6 @@ const STABLECOINS = new Set([
   'SUSD', 'MUSD', 'USD0', 'USDL', 'EURS', 'XAUT'
 ]);
 
-const EXCLUDED_HIGH_RISK_SYMBOLS = new Set([
-  'DOGE', 'SHIB', 'PEPE', 'WIF', 'BONK', 'FLOKI', 'MEME', 'TURBO',
-  'MOG', 'POPCAT', 'PENGU', 'NEIRO', 'BRETT', 'TRUMP'
-]);
-
 function clamp(num, min, max) {
   return Math.max(min, Math.min(max, num));
 }
@@ -68,7 +63,6 @@ function isStablecoinLike(symbol = '', name = '', price = null) {
 function isUnpredictableOrSham(ticker = {}) {
   const base = String(ticker.base || '').toUpperCase();
   if (!base) return true;
-  if (EXCLUDED_HIGH_RISK_SYMBOLS.has(base)) return true;
   if (/^(1000|1000000)/.test(base)) return true;
   if (/(UP|DOWN|BULL|BEAR)$/.test(base)) return true;
 
