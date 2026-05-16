@@ -42,6 +42,21 @@ let OPPORTUNITY_SORT = 'alpha';
 let CURRENT_MARKET_TIMEFRAME = '24H';
 const MAX_TRADABLE_ASSETS = 50;
 const MAX_TOP_OPPORTUNITIES = MAX_TRADABLE_ASSETS;
+const SIGNAL_SCAN_INTERVAL_MS = 60 * 1000;
+const SIGNAL_KLINE_LIMIT = 80;
+const SIGNAL_FETCH_TIMEOUT_MS = 6000;
+const SIGNAL_KLINE_CONCURRENCY = 10;
+const SIGNAL_BINANCE_ENDPOINTS = [
+  'https://api.binance.com/api/v3/klines',
+  'https://api1.binance.com/api/v3/klines',
+  'https://api2.binance.com/api/v3/klines',
+  'https://api3.binance.com/api/v3/klines',
+  'https://data-api.binance.vision/api/v3/klines'
+];
+const SIGNAL_CACHE = {
+  lastScanAt: 0,
+  bySymbol: {}
+};
 const STABLE_SYMBOLS = new Set([
   'USDT', 'USDC', 'DAI', 'BUSD', 'FDUSD', 'TUSD', 'PYUSD', 'USDE', 'USDD',
   'GUSD', 'LUSD', 'EURC', 'FRAX', 'USD1', 'USDS', 'USDP', 'USDB', 'RLUSD',
@@ -121,8 +136,15 @@ async function loadDataCache() {
     
     if (raw) {
       cache = JSON.parse(raw);
+      const hasScalpSignals = Array.isArray(cache?.assets)
+        ? cache.assets.some(a => a?.signals?.scalp?.line)
+        : false;
       // Check local TTL
-      if (Date.now() - cache.timestamp > DATA_CACHE_TTL || (cache.assets && cache.assets.length < 15)) {
+      if (
+        Date.now() - cache.timestamp > DATA_CACHE_TTL
+        || (cache.assets && cache.assets.length < 15)
+        || !hasScalpSignals
+      ) {
         cache = null;
       }
     }
@@ -256,6 +278,629 @@ function getSortedTradeableAssets(sortBy = 'alpha') {
       return parseVolumeBillions(b.vol) - parseVolumeBillions(a.vol);
     }
     return (getUnifiedAlphaScore(b) - getUnifiedAlphaScore(a)) || a.symbol.localeCompare(b.symbol);
+  });
+}
+
+function sigClamp(num, min, max) {
+  return Math.max(min, Math.min(max, num));
+}
+
+function sigAvg(values = []) {
+  const clean = values.map(Number).filter(Number.isFinite);
+  if (!clean.length) return 0;
+  return clean.reduce((s, v) => s + v, 0) / clean.length;
+}
+
+function sigPctPrice(price, pct) {
+  return price * (1 + (pct / 100));
+}
+
+function sigFormatLineNumber(v) {
+  if (!Number.isFinite(v)) return '0';
+  return v >= 1000 ? v.toFixed(2) : v.toFixed(4);
+}
+
+function sigBuildNoSignalLine(timeframe, symbol, timestamp, reason) {
+  return `NO_SIGNAL|${timeframe}|${symbol}/USDT|${timestamp}|${reason}`;
+}
+
+function sigBuildSignalLine(timeframe, symbol, direction, entry, tp1, tp2, sl, patternName, timestamp, alpha) {
+  return `SIGNAL|${timeframe}|${symbol}/USDT|${direction}|${sigFormatLineNumber(entry)}|${sigFormatLineNumber(tp1)}|${sigFormatLineNumber(tp2)}|${sigFormatLineNumber(sl)}|${patternName || 'NONE'}|${timestamp}|${Math.round(alpha)}`;
+}
+
+function sigComputeEmaSeries(values = [], period = 9) {
+  const arr = values.map(Number).filter(Number.isFinite);
+  if (arr.length < period) return [];
+
+  const k = 2 / (period + 1);
+  const out = new Array(arr.length).fill(null);
+  let ema = sigAvg(arr.slice(0, period));
+  out[period - 1] = ema;
+
+  for (let i = period; i < arr.length; i++) {
+    ema = (arr[i] * k) + (ema * (1 - k));
+    out[i] = ema;
+  }
+
+  return out;
+}
+
+function sigComputeRsi(closes = [], period = 14) {
+  const arr = closes.map(Number).filter(Number.isFinite);
+  if (arr.length < period + 1) return null;
+
+  let gains = 0;
+  let losses = 0;
+  for (let i = 1; i <= period; i++) {
+    const delta = arr[i] - arr[i - 1];
+    if (delta >= 0) gains += delta;
+    else losses += Math.abs(delta);
+  }
+
+  let avgGain = gains / period;
+  let avgLoss = losses / period;
+
+  for (let i = period + 1; i < arr.length; i++) {
+    const delta = arr[i] - arr[i - 1];
+    const gain = delta > 0 ? delta : 0;
+    const loss = delta < 0 ? Math.abs(delta) : 0;
+    avgGain = ((avgGain * (period - 1)) + gain) / period;
+    avgLoss = ((avgLoss * (period - 1)) + loss) / period;
+  }
+
+  if (avgLoss === 0) return 100;
+  const rs = avgGain / avgLoss;
+  return 100 - (100 / (1 + rs));
+}
+
+function sigComputeMacdStats(closes = []) {
+  const arr = closes.map(Number).filter(Number.isFinite);
+  if (arr.length < 35) {
+    return {
+      histCurrent: null,
+      histPrevious: null,
+      minHist20: null,
+      maxHist20: null,
+      candlesSinceCross: 10,
+      histSeries: []
+    };
+  }
+
+  const ema12 = sigComputeEmaSeries(arr, 12);
+  const ema26 = sigComputeEmaSeries(arr, 26);
+  const macdSeries = arr.map((_, idx) => {
+    const a = ema12[idx];
+    const b = ema26[idx];
+    if (!Number.isFinite(a) || !Number.isFinite(b)) return null;
+    return a - b;
+  });
+
+  const compactMacd = macdSeries.filter(Number.isFinite);
+  const compactSignal = sigComputeEmaSeries(compactMacd, 9);
+
+  const signalSeries = new Array(macdSeries.length).fill(null);
+  let p = 0;
+  for (let i = 0; i < macdSeries.length; i++) {
+    if (Number.isFinite(macdSeries[i])) {
+      signalSeries[i] = compactSignal[p] ?? null;
+      p += 1;
+    }
+  }
+
+  const histSeries = macdSeries.map((m, i) => {
+    const s = signalSeries[i];
+    if (!Number.isFinite(m) || !Number.isFinite(s)) return null;
+    return m - s;
+  });
+
+  const validHist = histSeries.filter(Number.isFinite);
+  const histCurrent = validHist.length ? validHist[validHist.length - 1] : null;
+  const histPrevious = validHist.length > 1 ? validHist[validHist.length - 2] : null;
+  const last20 = validHist.slice(-20);
+  const minHist20 = last20.length ? Math.min(...last20) : null;
+  const maxHist20 = last20.length ? Math.max(...last20) : null;
+
+  let candlesSinceCross = 10;
+  for (let i = histSeries.length - 1; i > 0; i--) {
+    const cur = histSeries[i];
+    const prev = histSeries[i - 1];
+    if (!Number.isFinite(cur) || !Number.isFinite(prev)) continue;
+    const nowSign = cur >= 0 ? 1 : -1;
+    const prevSign = prev >= 0 ? 1 : -1;
+    if (nowSign !== prevSign) {
+      candlesSinceCross = Math.max(0, histSeries.length - 1 - i);
+      break;
+    }
+  }
+
+  return {
+    histCurrent,
+    histPrevious,
+    minHist20,
+    maxHist20,
+    candlesSinceCross,
+    histSeries
+  };
+}
+
+function sigDetectMacdDivergence(candles = [], histSeries = []) {
+  if (!candles.length || !histSeries.length) return { bullish: false, bearish: false };
+
+  const n = Math.min(candles.length, histSeries.length);
+  if (n < 30) return { bullish: false, bearish: false };
+
+  const priceWindow = candles.slice(-30);
+  const histWindow = histSeries.slice(-30);
+
+  const firstHalf = priceWindow.slice(0, 15);
+  const secondHalf = priceWindow.slice(15);
+  const firstHist = histWindow.slice(0, 15);
+  const secondHist = histWindow.slice(15);
+
+  let firstLow = Infinity;
+  let firstLowIdx = -1;
+  firstHalf.forEach((c, i) => {
+    if (c.low < firstLow) {
+      firstLow = c.low;
+      firstLowIdx = i;
+    }
+  });
+
+  let secondLow = Infinity;
+  let secondLowIdx = -1;
+  secondHalf.forEach((c, i) => {
+    if (c.low < secondLow) {
+      secondLow = c.low;
+      secondLowIdx = i;
+    }
+  });
+
+  let firstHigh = -Infinity;
+  let firstHighIdx = -1;
+  firstHalf.forEach((c, i) => {
+    if (c.high > firstHigh) {
+      firstHigh = c.high;
+      firstHighIdx = i;
+    }
+  });
+
+  let secondHigh = -Infinity;
+  let secondHighIdx = -1;
+  secondHalf.forEach((c, i) => {
+    if (c.high > secondHigh) {
+      secondHigh = c.high;
+      secondHighIdx = i;
+    }
+  });
+
+  const firstLowHist = firstLowIdx >= 0 ? firstHist[firstLowIdx] : null;
+  const secondLowHist = secondLowIdx >= 0 ? secondHist[secondLowIdx] : null;
+  const firstHighHist = firstHighIdx >= 0 ? firstHist[firstHighIdx] : null;
+  const secondHighHist = secondHighIdx >= 0 ? secondHist[secondHighIdx] : null;
+
+  const bullish = (
+    Number.isFinite(firstLow)
+    && Number.isFinite(secondLow)
+    && Number.isFinite(firstLowHist)
+    && Number.isFinite(secondLowHist)
+    && secondLow < firstLow
+    && secondLowHist > firstLowHist
+  );
+
+  const bearish = (
+    Number.isFinite(firstHigh)
+    && Number.isFinite(secondHigh)
+    && Number.isFinite(firstHighHist)
+    && Number.isFinite(secondHighHist)
+    && secondHigh > firstHigh
+    && secondHighHist < firstHighHist
+  );
+
+  return { bullish, bearish };
+}
+
+function sigDetectPattern(candles = [], timeframe = 'SCALP') {
+  if (!Array.isArray(candles) || candles.length < 3) return { name: 'NONE', hasPattern: false, highReliability: false };
+
+  const last = candles[candles.length - 1];
+  const prev = candles[candles.length - 2];
+  const closes = candles.map(c => c.close);
+
+  const lastBull = last.close > last.open;
+  const lastBear = last.close < last.open;
+  const prevBull = prev.close > prev.open;
+  const prevBear = prev.close < prev.open;
+
+  const bullishEngulfing = prevBear && lastBull && last.open < prev.close && last.close > prev.open;
+  const bearishEngulfing = prevBull && lastBear && last.open > prev.close && last.close < prev.open;
+
+  const recent = closes.slice(-12);
+  const movePct = recent.length >= 12 ? ((recent[8] - recent[0]) / recent[0]) * 100 : 0;
+  const pullbackPct = recent.length >= 12 ? ((recent[11] - recent[8]) / recent[8]) * 100 : 0;
+  const bullFlag = movePct > 1.2 && pullbackPct < 0 && pullbackPct > -0.9;
+  const bearFlag = movePct < -1.2 && pullbackPct > 0 && pullbackPct < 0.9;
+
+  if (bullishEngulfing) return { name: 'BULL_ENGULF', hasPattern: true, highReliability: timeframe === 'SCALP' };
+  if (bearishEngulfing) return { name: 'BEAR_ENGULF', hasPattern: true, highReliability: timeframe === 'SCALP' };
+  if (bullFlag) return { name: 'BULL_FLAG', hasPattern: true, highReliability: timeframe === 'SCALP' };
+  if (bearFlag) return { name: 'BEAR_FLAG', hasPattern: true, highReliability: timeframe === 'SCALP' };
+
+  return { name: 'NONE', hasPattern: false, highReliability: false };
+}
+
+function sigBuildSnapshot(candles = [], timeframe = 'SCALP') {
+  if (!Array.isArray(candles) || candles.length < 30) return null;
+
+  const closes = candles.map(c => c.close);
+  const volumes = candles.map(c => c.volume);
+  const ema9Series = sigComputeEmaSeries(closes, 9);
+  const ema21Series = sigComputeEmaSeries(closes, 21);
+
+  if (!ema9Series.length || !ema21Series.length) return null;
+
+  const ema9 = ema9Series[ema9Series.length - 1];
+  const ema21 = ema21Series[ema21Series.length - 1];
+  const ema9Prev = ema9Series[ema9Series.length - 2];
+  const ema21Prev = ema21Series[ema21Series.length - 2];
+
+  const currentVolume = volumes[volumes.length - 1];
+  const avgVol3 = sigAvg(volumes.slice(-4, -1));
+  const avgVol5 = sigAvg(volumes.slice(-6, -1));
+  const volumeRatio3 = avgVol3 > 0 ? (currentVolume / avgVol3) : 0;
+  const volumeRatio5 = avgVol5 > 0 ? (currentVolume / avgVol5) : 0;
+
+  const macd = sigComputeMacdStats(closes);
+  const divergence = sigDetectMacdDivergence(candles, macd.histSeries || []);
+  const pattern = sigDetectPattern(candles, timeframe);
+
+  return {
+    price: closes[closes.length - 1],
+    ema9,
+    ema21,
+    ema9Prev,
+    ema21Prev,
+    rsi: sigComputeRsi(closes, 14),
+    macd,
+    divergence,
+    pattern,
+    volumeRatio3,
+    volumeRatio5
+  };
+}
+
+function sigComputeTechnicalScore(snapshot = {}, direction = 'BUY', timeframe = 'SCALP') {
+  const rsi = Number.isFinite(snapshot.rsi) ? snapshot.rsi : 50;
+  const rsiScore = sigClamp(100 - (Math.abs(rsi - 50) * 2), 0, 100);
+
+  const histCurrent = snapshot.macd?.histCurrent;
+  const histPrevious = snapshot.macd?.histPrevious;
+  const minHist20 = snapshot.macd?.minHist20;
+  const maxHist20 = snapshot.macd?.maxHist20;
+  const candlesSinceCross = Number.isFinite(snapshot.macd?.candlesSinceCross) ? snapshot.macd.candlesSinceCross : 10;
+
+  let strength = 50;
+  if (Number.isFinite(histCurrent) && Number.isFinite(minHist20) && Number.isFinite(maxHist20)) {
+    const range = maxHist20 - minHist20;
+    if (range > 0) strength = ((histCurrent - minHist20) / range) * 100;
+  }
+
+  let directionScore = 50;
+  if (Number.isFinite(histCurrent) && Number.isFinite(histPrevious)) {
+    if (histCurrent > histPrevious) directionScore = 100;
+    else if (histCurrent < histPrevious) directionScore = 0;
+  }
+
+  const recency = sigClamp(100 - (candlesSinceCross * 10), 0, 100);
+  const rawMacd = (strength * 0.4) + (directionScore * 0.3) + (recency * 0.3);
+
+  const divergence = snapshot.divergence || { bullish: false, bearish: false };
+  const divergenceBonus = direction === 'BUY'
+    ? (divergence.bullish ? 10 : 0)
+    : (divergence.bearish ? 10 : 0);
+
+  const macdScore = sigClamp(rawMacd + divergenceBonus, 0, 100);
+
+  const pattern = snapshot.pattern || { hasPattern: false, highReliability: false };
+  let patternScore = pattern.hasPattern ? 100 : 50;
+  if (pattern.highReliability) patternScore = timeframe === 'SCALP' ? 120 : 100;
+  patternScore = sigClamp(patternScore, 0, 100);
+
+  return {
+    score: sigClamp((rsiScore * 0.3) + (macdScore * 0.4) + (patternScore * 0.3), 0, 100),
+    rsiScore,
+    macdScore,
+    patternScore
+  };
+}
+
+function sigComputeEmaConfluence(direction = 'BUY', snapshot = {}) {
+  const price = Number(snapshot.price);
+  const ema9 = Number(snapshot.ema9);
+  const ema21 = Number(snapshot.ema21);
+  const ema9Prev = Number(snapshot.ema9Prev);
+  const ema21Prev = Number(snapshot.ema21Prev);
+
+  if (![price, ema9, ema21].every(Number.isFinite)) return 50;
+
+  if (direction === 'BUY') {
+    const ema9Expanding = Number.isFinite(ema9Prev) ? ema9 > ema9Prev : false;
+    const ema21Expanding = Number.isFinite(ema21Prev) ? ema21 > ema21Prev : false;
+    if (price > ema9 && price > ema21 && ema9Expanding && ema21Expanding) return 100;
+    if (price < ema9 && price < ema21) return 0;
+    return 50;
+  }
+
+  const ema9Contracting = Number.isFinite(ema9Prev) ? ema9 < ema9Prev : false;
+  const ema21Contracting = Number.isFinite(ema21Prev) ? ema21 < ema21Prev : false;
+  if (price < ema9 && price < ema21 && ema9Contracting && ema21Contracting) return 100;
+  if (price > ema9 && price > ema21) return 0;
+  return 50;
+}
+
+function sigComputeVolumeScore(volumeRatio = 0) {
+  if (volumeRatio > 2.0) return 100;
+  if (volumeRatio > 1.5) return 70;
+  if (volumeRatio > 1.2) return 50;
+  return 20;
+}
+
+function sigComputeAlpha(pillars = {}) {
+  const sentiment = Number.isFinite(pillars.sentiment) ? pillars.sentiment : 50;
+  const trending = sentiment > 65 || sentiment < 35;
+
+  const weights = trending
+    ? { technical: 0.22, whale: 0.20, ema: 0.15, volume: 0.08, sentiment: 0.15, news: 0.12, alpha: 0.10 }
+    : { technical: 0.15, whale: 0.15, ema: 0.08, volume: 0.15, sentiment: 0.25, news: 0.15, alpha: 0.12 };
+
+  const raw =
+    (pillars.technical * weights.technical)
+    + (pillars.whale * weights.whale)
+    + (pillars.ema * weights.ema)
+    + (pillars.volume * weights.volume)
+    + (pillars.sentiment * weights.sentiment)
+    + (pillars.news * weights.news)
+    + (pillars.alphaSources * weights.alpha);
+
+  return sigClamp(raw, 0, 100);
+}
+
+function sigComputeTpSl(timeframe = 'SCALP', symbol = 'BTC', direction = 'BUY', entry = 0) {
+  const isMajor = symbol === 'BTC' || symbol === 'ETH';
+  let tp1Pct;
+  let tp2Pct;
+  let slPct;
+
+  if (timeframe === 'SCALP') {
+    if (isMajor) {
+      tp1Pct = 0.25; tp2Pct = 0.40; slPct = 0.15;
+    } else {
+      tp1Pct = 0.35; tp2Pct = 0.50; slPct = 0.20;
+    }
+  } else if (isMajor) {
+    tp1Pct = 1.0; tp2Pct = 1.8; slPct = 0.6;
+  } else {
+    tp1Pct = 1.5; tp2Pct = 2.5; slPct = 0.8;
+  }
+
+  if (direction === 'BUY') {
+    return {
+      tp1: sigPctPrice(entry, tp1Pct),
+      tp2: sigPctPrice(entry, tp2Pct),
+      sl: sigPctPrice(entry, -slPct)
+    };
+  }
+
+  return {
+    tp1: sigPctPrice(entry, -tp1Pct),
+    tp2: sigPctPrice(entry, -tp2Pct),
+    sl: sigPctPrice(entry, slPct)
+  };
+}
+
+function sigNoSignal(timeframe, symbol, timestamp, reason, alpha = 50, direction = null) {
+  return {
+    status: 'NO_SIGNAL',
+    reason,
+    alpha: Math.round(alpha),
+    direction,
+    line: sigBuildNoSignalLine(timeframe, symbol, timestamp, reason)
+  };
+}
+
+function sigEvaluate(symbol, timeframe, snapshot, timestamp) {
+  if (!snapshot) return sigNoSignal(timeframe, symbol, timestamp, 'DATA_UNAVAILABLE');
+
+  let direction = null;
+  if (snapshot.ema9 > snapshot.ema21) direction = 'BUY';
+  else if (snapshot.ema9 < snapshot.ema21) direction = 'SELL';
+  if (!direction) return sigNoSignal(timeframe, symbol, timestamp, 'EMA_CROSS_FAIL');
+
+  const volumeRatio = timeframe === 'SCALP' ? snapshot.volumeRatio3 : snapshot.volumeRatio5;
+  if (!(Number.isFinite(volumeRatio) && volumeRatio > 0.5)) {
+    return sigNoSignal(timeframe, symbol, timestamp, 'VOLUME_FAIL', 50, direction);
+  }
+
+  const technical = sigComputeTechnicalScore(snapshot, direction, timeframe);
+  const emaConfluence = sigComputeEmaConfluence(direction, snapshot);
+  const volumeScore = sigComputeVolumeScore(volumeRatio);
+
+  // Neutral defaults when external source is unavailable in fallback path.
+  const pillars = {
+    technical: technical.score,
+    whale: 50,
+    ema: emaConfluence,
+    volume: volumeScore,
+    sentiment: Number.isFinite(LIVE_SENTIMENT?.score) ? LIVE_SENTIMENT.score : 50,
+    news: 50,
+    alphaSources: 50
+  };
+  const alpha = sigComputeAlpha(pillars);
+  const levels = sigComputeTpSl(timeframe, symbol, direction, snapshot.price);
+  const patternName = snapshot.pattern?.name || 'NONE';
+
+  return {
+    status: 'SIGNAL',
+    direction,
+    reason: null,
+    alpha: Math.round(alpha),
+    pattern: patternName,
+    entry: snapshot.price,
+    tp1: levels.tp1,
+    tp2: levels.tp2,
+    sl: levels.sl,
+    line: sigBuildSignalLine(
+      timeframe,
+      symbol,
+      direction,
+      snapshot.price,
+      levels.tp1,
+      levels.tp2,
+      levels.sl,
+      patternName,
+      timestamp,
+      alpha
+    )
+  };
+}
+
+async function sigFetchKlines(symbol, interval, limit = SIGNAL_KLINE_LIMIT) {
+  const cleanSymbol = String(symbol || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+  if (!cleanSymbol) return null;
+
+  for (const base of SIGNAL_BINANCE_ENDPOINTS) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), SIGNAL_FETCH_TIMEOUT_MS);
+    try {
+      const url = `${base}?symbol=${encodeURIComponent(cleanSymbol)}USDT&interval=${encodeURIComponent(interval)}&limit=${limit}`;
+      const res = await fetch(url, {
+        headers: { accept: 'application/json' },
+        signal: controller.signal
+      });
+      if (!res.ok) continue;
+      const raw = await res.json();
+      if (!Array.isArray(raw) || raw.length === 0) continue;
+      return raw.map(k => ({
+        open: Number(k[1]),
+        high: Number(k[2]),
+        low: Number(k[3]),
+        close: Number(k[4]),
+        volume: Number(k[5])
+      })).filter(c => Number.isFinite(c.close) && Number.isFinite(c.volume));
+    } catch {
+      // Try next endpoint.
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  return null;
+}
+
+async function sigMapWithConcurrency(items, concurrency, mapper) {
+  const out = new Array(items.length);
+  let idx = 0;
+
+  async function worker() {
+    while (true) {
+      const current = idx;
+      idx += 1;
+      if (current >= items.length) break;
+      try {
+        out[current] = await mapper(items[current], current);
+      } catch {
+        out[current] = null;
+      }
+    }
+  }
+
+  const n = Math.max(1, Math.min(concurrency, items.length));
+  await Promise.all(Array.from({ length: n }, () => worker()));
+  return out;
+}
+
+async function hydrateAssetsWithSignals(assetList = []) {
+  if (!Array.isArray(assetList) || assetList.length === 0) return assetList;
+
+  const now = Date.now();
+  const symbols = [...new Set(assetList
+    .map(a => String(a?.symbol || '').toUpperCase())
+    .filter(Boolean))];
+  const incomingBySymbol = new Map(assetList.map(a => [String(a?.symbol || '').toUpperCase(), a]));
+
+  // If server already returned usable signals, trust and cache them.
+  let serverSignalCount = 0;
+  assetList.forEach((asset) => {
+    const symbol = String(asset?.symbol || '').toUpperCase();
+    const scalp = asset?.signals?.scalp;
+    if (symbol && scalp?.line) {
+      SIGNAL_CACHE.bySymbol[symbol] = { scalp };
+      serverSignalCount += 1;
+    }
+  });
+
+  const stale = (now - SIGNAL_CACHE.lastScanAt) >= SIGNAL_SCAN_INTERVAL_MS;
+  const missingSymbols = symbols.filter((symbol) => {
+    const incoming = incomingBySymbol.get(symbol);
+    const hasIncoming = incoming?.signals?.scalp?.line;
+    if (hasIncoming) return false;
+    const cached = SIGNAL_CACHE.bySymbol[symbol];
+    return !(cached?.scalp?.line && !stale);
+  });
+
+  if (missingSymbols.length > 0) {
+    const tasks = [];
+    missingSymbols.forEach((symbol) => {
+      tasks.push({ symbol, timeframe: 'SCALP', interval: '1m' });
+    });
+
+    const fetched = await sigMapWithConcurrency(tasks, SIGNAL_KLINE_CONCURRENCY, async (task) => {
+      const candles = await sigFetchKlines(task.symbol, task.interval, SIGNAL_KLINE_LIMIT);
+      return { ...task, candles };
+    });
+
+    const grouped = {};
+    fetched.forEach((item) => {
+      if (!item?.symbol || !item?.timeframe) return;
+      if (!grouped[item.symbol]) grouped[item.symbol] = {};
+      grouped[item.symbol][item.timeframe] = item.candles || null;
+    });
+
+    const timestampIso = new Date().toISOString();
+    missingSymbols.forEach((symbol) => {
+      const scalpCandles = grouped[symbol]?.SCALP || null;
+      const scalpSnapshot = sigBuildSnapshot(scalpCandles || [], 'SCALP');
+
+      SIGNAL_CACHE.bySymbol[symbol] = {
+        scalp: sigEvaluate(symbol, 'SCALP', scalpSnapshot, timestampIso)
+      };
+    });
+
+    SIGNAL_CACHE.lastScanAt = now;
+  } else if (serverSignalCount > 0) {
+    SIGNAL_CACHE.lastScanAt = now;
+  }
+
+  return assetList.map((asset) => {
+    const symbol = String(asset?.symbol || '').toUpperCase();
+    const cached = SIGNAL_CACHE.bySymbol[symbol];
+    if (!cached) return asset;
+
+    const mergedSignals = {
+      scalp: asset?.signals?.scalp?.line ? asset.signals.scalp : cached.scalp
+    };
+
+    const scoreFromSignals = Math.round(Number(mergedSignals.scalp?.alpha) || 50);
+    const chosenPattern = mergedSignals.scalp?.pattern && mergedSignals.scalp.pattern !== 'NONE'
+      ? mergedSignals.scalp.pattern
+      : asset.reason;
+
+    return {
+      ...asset,
+      signals: mergedSignals,
+      opportunityScore: scoreFromSignals,
+      score: scoreFromSignals,
+      reason: chosenPattern || asset.reason
+    };
   });
 }
 
@@ -409,10 +1054,7 @@ function applyDirectionalBiasToAssets(assetList = []) {
   const emaMap = window._liveEmaData || {};
   return assetList.map(asset => {
     const scalpSignal = asset?.signals?.scalp;
-    const daySignal = asset?.signals?.day;
-    const preferredSignal = daySignal?.status === 'SIGNAL'
-      ? daySignal
-      : (scalpSignal?.status === 'SIGNAL' ? scalpSignal : null);
+    const preferredSignal = scalpSignal?.status === 'SIGNAL' ? scalpSignal : null;
 
     const emaInfo = emaMap[asset.symbol];
     const computedBias = classifyDirectionalBias(asset, emaInfo);
@@ -574,8 +1216,8 @@ async function initApp() {
   // Verify Supabase Connectivity
   testSupabase();
 
-  // Real-time market data polling (every 20 seconds for high-precision accuracy)
-  setInterval(syncLiveApis, 20000);
+  // Real-time market scan polling (every 60 seconds, aligned with SCALP engine)
+  setInterval(syncLiveApis, SIGNAL_SCAN_INTERVAL_MS);
   
   // UI Visual Heartbeat (flashes text)
   setInterval(simulateMarketTick, 3000);
@@ -933,6 +1575,8 @@ async function syncLiveApis() {
     }
 
     if (assets.length > 0) {
+      if (statusEl) statusEl.textContent = 'Running SCALP signal scan...';
+      assets = await hydrateAssetsWithSignals(assets);
       assets = applyDirectionalBiasToAssets(assets);
       assets = enforceTopAssetUniverse(assets);
     }
@@ -1409,7 +2053,6 @@ function renderOpportunitiesPage() {
   tbody.innerHTML = visibleRows.map((asset, i) => {
     const displayScore = getUnifiedAlphaScore(asset);
     const scalpSignal = asset?.signals?.scalp || null;
-    const daySignal = asset?.signals?.day || null;
 
     return `
     <tr>
@@ -1429,7 +2072,6 @@ function renderOpportunitiesPage() {
 
       <td><span class="text-muted" style="font-size: 0.8rem">${asset.reason || 'Analyzing Technicals...'}</span></td>
       <td>${renderSignalCell(scalpSignal)}</td>
-      <td>${renderSignalCell(daySignal)}</td>
       <td><button class="action-btn">Analyze</button></td>
     </tr>
   `}).join('');
@@ -1438,10 +2080,23 @@ function renderOpportunitiesPage() {
     btn.addEventListener('click', (e) => {
       const row = e.target.closest('tr');
       const symbol = row.querySelector('.live-price').dataset.symbol;
+      const selectedAsset = assets.find(a => a.symbol === symbol);
+      const scalpSignal = selectedAsset?.signals?.scalp;
       
       navigateToPage('ai-research'); // Switch to AI Research Analyst Page
       setTimeout(() => {
-         triggerMcp(`Generate a strict quantitative algorithmic trade setup for ${symbol} using the provided market structure and candlestick patterns.`);
+        if (scalpSignal?.status === 'SIGNAL') {
+          triggerMcp(
+            `Generate a SCALP-only trade plan for ${symbol}/USDT. `
+            + `Use these mandatory algorithmic values exactly: `
+            + `direction=${scalpSignal.direction}, `
+            + `entry=${scalpSignal.entry}, tp1=${scalpSignal.tp1}, tp2=${scalpSignal.tp2}, sl=${scalpSignal.sl}, `
+            + `alpha=${scalpSignal.alpha}, line="${scalpSignal.line}". `
+            + `Output 3 entries around the provided entry and keep tight scalp risk management.`
+          );
+        } else {
+          triggerMcp(`No valid SCALP signal exists for ${symbol}/USDT right now. Explain why and what must change before entry.`);
+        }
       }, 100);
     });
   });
@@ -1847,117 +2502,69 @@ function formatPrice(num) {
 // ============================================================
 
 function generateSignalForAsset(asset) {
-  const p = asset.price;
-  const score = asset.score || 50;
-  const sym = asset.symbol;
-  const reasonText = String(asset.reason || '');
-  const bearishSetupHint = (asset.change <= -2.2) || /(bear|breakdown|distribution|top|contraction|rejection)/i.test(reasonText);
-  const bullishSetupHint = (asset.change >= 2.2) || /(bull|breakout|accumulation|ascending|squeeze|reversal)/i.test(reasonText);
-  
-  // ═══ GATE 1: WAIT PROTOCOL ═══
-  // Normally wait below threshold, but allow strong directional setups through.
-  const directionalOverride = (asset.bias === 'bearish' && bearishSetupHint) || (asset.bias === 'bullish' && bullishSetupHint);
-  if (score < 60 && !directionalOverride) {
-      return {
-          type: 'WAIT',
-          isBull: null,
-          strength: { label: 'NO TRADE ZONE', cls: 'text-muted' },
-          exchanges: ['Binance', 'Bybit'],
-          leverage: 'None',
-          entry1: 0, entry2: 0, entry3: 0,
-          t1: 0, t2: 0, t3: 0, t4: 0, sl: 0, rrRatio: '0.0',
-          waitReason: 'Alpha score below institutional threshold. Wait for confluence.'
-      };
+  const scalp = asset?.signals?.scalp;
+  const score = Number(asset?.opportunityScore ?? asset?.score ?? 50);
+
+  if (!scalp || scalp.status !== 'SIGNAL') {
+    return {
+      type: 'WAIT',
+      isBull: null,
+      strength: { label: 'NO TRADE ZONE', cls: 'text-muted' },
+      exchanges: ['Binance'],
+      leverage: 'None',
+      entry1: 0, entry2: 0, entry3: 0,
+      t1: 0, t2: 0, t3: 0, t4: 0, sl: 0, rrRatio: '0.0',
+      waitReason: `SCALP gate failed: ${scalp?.reason || 'DATA_UNAVAILABLE'}`
+    };
   }
 
-  let bias = asset.bias || 'neutral';
-  if (bias === 'neutral') {
-    if (bearishSetupHint && !bullishSetupHint) bias = 'bearish';
-    else if (bullishSetupHint && !bearishSetupHint) bias = 'bullish';
-  }
-  const isBull = bias === 'bullish';
-  const isBear = bias === 'bearish';
-  
-  // ═══ GATE 2: BIAS PROTOCOL ═══
-  if (bias === 'neutral' || (!isBull && !isBear)) {
-      return {
-          type: 'WAIT',
-          isBull: null,
-          strength: { label: 'NEUTRAL ZONE', cls: 'text-muted' },
-          exchanges: ['Binance'],
-          leverage: 'None',
-          entry1: 0, entry2: 0, entry3: 0,
-          t1: 0, t2: 0, t3: 0, t4: 0, sl: 0, rrRatio: '0.0',
-          waitReason: 'Market bias is neutral. Institutional algorithms are in "Wait and See" mode.'
-      };
-  }
-  
-  // Use live ATR if available, otherwise use a percentage-based proxy
-  const emaInfo = window._liveEmaData ? window._liveEmaData[sym] : null;
-  const atr = emaInfo ? emaInfo.atr : p * 0.035; // fallback: 3.5% of price
-  const atrPct = atr / p; 
-  
-  // v4.0 GEOMETRY (SCALING OUT) — Backtested: 78%+ WR & High Profitability
-  // T1 (50% TP): 1.5 ATR | T2 (50% TP): 4.0 ATR | SL: 1.0 ATR
-  let entry1, entry2, entry3;
-  const momentum = Number.isFinite(asset.change) ? asset.change : 0;
-  const conviction = Number.isFinite(score) ? score : 50;
-  if (isBull) {
-    let startOffsetAtr = -0.15;
-    if (momentum >= 4 && conviction >= 80) startOffsetAtr = -0.08;
-    else if (momentum <= -1) startOffsetAtr = -0.30;
-    else if (conviction < 70) startOffsetAtr = -0.22;
+  const isBull = scalp.direction === 'BUY';
+  const entry1 = Number(scalp.entry) || Number(asset.price) || 0;
+  const sl = Number(scalp.sl) || (entry1 * (isBull ? 0.998 : 1.002));
+  const t1 = Number(scalp.tp1) || (entry1 * (isBull ? 1.0025 : 0.9975));
+  const t2 = Number(scalp.tp2) || (entry1 * (isBull ? 1.004 : 0.996));
 
-    entry1 = Math.max(0, p + (startOffsetAtr * atr));
-    entry2 = Math.max(0, entry1 - (0.45 * atr));
-    entry3 = Math.max(0, entry1 - (0.90 * atr));
+  const risk = Math.max(Math.abs(entry1 - sl), entry1 * 0.0005);
+  const entryStep = risk * 0.5;
+  const entry2 = isBull ? Math.max(0, entry1 - entryStep) : (entry1 + entryStep);
+  const entry3 = isBull ? Math.max(0, entry1 - (entryStep * 2)) : (entry1 + (entryStep * 2));
 
-    if (entry2 >= entry1) entry2 = Math.max(0, entry1 * 0.995);
-    if (entry3 >= entry2) entry3 = Math.max(0, entry2 * 0.995);
-  } else {
-    let startOffsetAtr = 0.15;
-    if (momentum <= -4 && conviction >= 80) startOffsetAtr = 0.08;
-    else if (momentum >= 1) startOffsetAtr = 0.30;
-    else if (conviction < 70) startOffsetAtr = 0.22;
+  const extension = Math.abs(t2 - entry1);
+  const t3 = isBull ? (t2 + (extension * 0.6)) : (t2 - (extension * 0.6));
+  const t4 = isBull ? (t2 + extension) : (t2 - extension);
 
-    entry1 = p + (startOffsetAtr * atr);
-    entry2 = entry1 + (0.45 * atr);
-    entry3 = entry1 + (0.90 * atr);
+  const rewardT2 = Math.abs(t2 - entry1);
+  const rrRatio = risk > 0 ? (rewardT2 / risk).toFixed(1) : '2.0';
+  const atrPct = entry1 > 0 ? (risk / entry1) : 0;
 
-    if (entry2 <= entry1) entry2 = entry1 * 1.005;
-    if (entry3 <= entry2) entry3 = entry2 * 1.005;
-  }
-  
-  // Dynamic targets: Scaling out logic
-  const dir = isBull ? 1 : -1;
-  const t1 = p * (1 + dir * atrPct * 1.5);   // Take 50% Profit, Move SL to Breakeven
-  const t2 = p * (1 + dir * atrPct * 2.5);   
-  const t3 = p * (1 + dir * atrPct * 3.5);   
-  const t4 = p * (1 + dir * atrPct * 4.0);   // Take 50% Profit Runner
-
-  // SL: 1.0 ATR — tighter SL to maximize profitability
-  const sl = isBull ? p * (1 - atrPct * 1.0) : p * (1 + atrPct * 1.0);
-  
-  // Risk/Reward ratio calculation (calculating Max R:R using T4 to satisfy >= 2:1 requirement)
-  const riskPerUnit = Math.abs(p - sl);
-  const rewardT4 = Math.abs(t4 - p);
-  const rrRatio = riskPerUnit > 0 ? (rewardT4 / riskPerUnit).toFixed(1) : '2.6';
-
-  const exchanges = ['Binance', 'Bybit', 'OKX'];
-  
-  // v3.1 Dynamic Leverage — max capped at 5x
-  // Backtesting proved only 1x-5x range is consistently profitable
   let levNum;
-  if (atrPct > 0.05) levNum = '2x-3x';        // >5% ATR: high risk, low leverage
-  else if (atrPct > 0.03) levNum = '3x-5x';   // 3-5% ATR: moderate risk
-  else levNum = '4x-5x';                       // <3% ATR: max 5x
-  
-  const leverage = `${levNum} ${isBull ? 'Cross' : 'Isolated'}`;
-  const type = score > 85 ? 'SWING' : 'DAY';
-  const strength = score >= 85 ? { label: 'STRONG CONVICTION', cls: 'text-green' }
-                 : { label: 'MEDIUM CONVICTION', cls: 'text-primary' };
+  if (atrPct > 0.01) levNum = '2x-3x';
+  else if (atrPct > 0.006) levNum = '3x-4x';
+  else levNum = '4x-5x';
 
-  return { entry1, entry2, entry3, t1, t2, t3, t4, sl, exchanges, leverage, strength, isBull, type, rrRatio, atrPct };
+  const strength = score >= 80
+    ? { label: 'HIGH CONVICTION', cls: 'text-green' }
+    : score >= 65
+      ? { label: 'MEDIUM CONVICTION', cls: 'text-primary' }
+      : { label: 'LOW CONVICTION', cls: 'text-warning' };
+
+  return {
+    entry1,
+    entry2,
+    entry3,
+    t1,
+    t2,
+    t3,
+    t4,
+    sl,
+    exchanges: ['Binance'],
+    leverage: `${levNum} Cross`,
+    strength,
+    isBull,
+    type: 'SCALP',
+    rrRatio,
+    atrPct
+  };
 }
 
 function renderProSignals() {

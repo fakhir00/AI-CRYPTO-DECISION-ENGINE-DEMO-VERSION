@@ -1,7 +1,7 @@
 // ═══════════════════════════════════════════════════════════════
 // NEXUS Server-Side Market Data — Single Source of Truth
 // ═══════════════════════════════════════════════════════════════
-// Fetches Binance market universe + deterministic SCALP/DAY signal snapshots.
+// Fetches Binance market universe + deterministic SCALP-only signal snapshots.
 // Cached for 60s so every client sees the same scan window.
 
 let cachedData = null;
@@ -729,7 +729,6 @@ export default async function handler(req, res) {
     const klinePairs = [];
     topBinance.forEach((t) => {
       klinePairs.push({ symbol: t.base, timeframe: 'SCALP', interval: '1m' });
-      klinePairs.push({ symbol: t.base, timeframe: 'DAY', interval: '15m' });
     });
 
     const klineResults = await mapWithConcurrency(klinePairs, KLINE_CONCURRENCY, async (task) => {
@@ -749,15 +748,9 @@ export default async function handler(req, res) {
 
     const assets = topBinance.map((t, idx) => {
       const scalpSnapshot = snapshotMap.get(`${t.base}_SCALP`) || null;
-      const daySnapshot = snapshotMap.get(`${t.base}_DAY`) || null;
-
       const scalpSignal = evaluateSignal(t.base, 'SCALP', scalpSnapshot, timestampIso);
-      const daySignal = evaluateSignal(t.base, 'DAY', daySnapshot, timestampIso);
-
-      const combinedAlpha = Math.round(((Number(scalpSignal.alpha) || 50) + (Number(daySignal.alpha) || 50)) / 2);
-      const preferred = daySignal.status === 'SIGNAL'
-        ? daySignal
-        : (scalpSignal.status === 'SIGNAL' ? scalpSignal : daySignal);
+      const combinedAlpha = Math.round(Number(scalpSignal.alpha) || 50);
+      const preferred = scalpSignal;
 
       const bias = preferred.direction === 'BUY'
         ? 'bullish'
@@ -781,8 +774,7 @@ export default async function handler(req, res) {
         total_volume: t.quoteVolume,
         scanTimestamp: timestampIso,
         signals: {
-          scalp: scalpSignal,
-          day: daySignal
+          scalp: scalpSignal
         }
       };
     });
@@ -805,6 +797,7 @@ export default async function handler(req, res) {
           maxIntradayRangePct: MAX_INTRADAY_RANGE_PCT
         },
         mandatoryChecks: {
+          mode: 'SCALP_ONLY',
           emaState: 'EMA9 above EMA21 = BUY, below = SELL',
           volumeRatioThreshold: 0.5,
           spreadCheck: 'disabled'
