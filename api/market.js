@@ -15,7 +15,7 @@ const MAX_INTRADAY_RANGE_PCT = 24;
 const KLINE_LIMIT = 80;
 const FETCH_TIMEOUT_MS = 6000;
 const KLINE_CONCURRENCY = 12;
-const MIN_SIGNAL_RR_RATIO = 1.5;
+const MIN_SIGNAL_RR_RATIO = 1.0;
 const BREAKOUT_VOLUME_SPIKE_MULTIPLIER = 2.0;
 const BREAKOUT_RSI_MIN = 60;
 const BREAKOUT_RSI_MAX = 75;
@@ -1065,7 +1065,7 @@ export default async function handler(req, res) {
           volumeSpike: 'Breakout candle >= 2x avg volume of prior 5 candles',
           retest: 'Latest candle retests breakout level and closes above it',
           rsiRange: '60-75',
-          minRiskReward: '1:1.5 (TP2 vs SL, prefer 1:2)'
+          minRiskReward: '1:1.0 (TP2 vs SL)'
         }
       }
     });
