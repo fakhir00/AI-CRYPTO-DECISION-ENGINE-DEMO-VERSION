@@ -572,7 +572,7 @@ export async function fetchTechnicalSignals(symbols = []) {
         .catch(() => null)
     );
     const kline15mPromises = normalizedSymbols.map(sym =>
-      fetch(`https://api.binance.com/api/v3/klines?symbol=${sym}USDT&interval=15m&limit=140`)
+      fetch(`https://api.binance.com/api/v3/klines?symbol=${sym}USDT&interval=15m&limit=260`)
         .then(r => r.json())
         .catch(() => null)
     );
@@ -632,6 +632,7 @@ export async function fetchTechnicalSignals(symbols = []) {
       const macd1m = computeMACDSnapshot(closes1m);
       const emaTrend1m = computeEMAConfluenceSnapshot(closes1m, 9, 21);
       const emaTrend15m = computeEMAConfluenceSnapshot(closes15m, 9, 21);
+      const ema200_15m = closes15m.length >= 200 ? computeEMA(closes15m, 200) : null;
       const localRsi15m = computeRSI(closes15m, 14);
       const localRsi1m = computeRSI(closes1m, 14);
       const localVolumeSpike15m = computeVolumeSpikeRatio(volumes15m, 20);
@@ -657,6 +658,7 @@ export async function fetchTechnicalSignals(symbols = []) {
         rsiSource: 'binance_local',
         ema1m: emaTrend1m,
         ema15m: emaTrend15m,
+        ema200_15m: Number.isFinite(ema200_15m) ? ema200_15m : null,
         volumeSpikeRatio1m: localVolumeSpike1m,
         volumeSpikeRatio15m: localVolumeSpike15m,
         volumeVsAvg1m3,

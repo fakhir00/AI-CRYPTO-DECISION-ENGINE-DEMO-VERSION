@@ -2242,97 +2242,58 @@ function generateSignalForAsset(asset) {
 
   const evaluateCandidate = (type) => {
     const isScalp = type === 'SCALP';
-    const macd = isScalp ? indicator?.macd1m : indicator?.macd15m;
     const rsi = Number(isScalp ? indicator?.rsi1m : indicator?.rsi15m);
     const emaSnap = isScalp ? indicator?.ema1m : indicator?.ema15m;
     const volumeRatioMandatory = Number(isScalp ? indicator?.volumeVsAvg1m3 : indicator?.volumeVsAvg15m5);
+    const ema200_15m = Number(indicator?.ema200_15m);
     const atr = Number(indicator?.atr);
     const atrSafe = Number.isFinite(atr) && atr > 0 ? atr : price * (isScalp ? 0.0026 : 0.0044);
     const atrPct = atrSafe / price;
-
-    if (!macd || !Number.isFinite(macd.line) || !Number.isFinite(macd.signal) || !Number.isFinite(macd.histogram)) {
-      return buildWait(`${type}: MACD data unavailable.`);
-    }
-
-    let side = null;
-    if (macd.line > macd.signal) side = 'BUY';
-    if (macd.line < macd.signal) side = 'SELL';
-    if (!side) return buildWait(`${type}: MACD core trigger failed.`);
-
-    if (isScalp && utcHour >= 0 && utcHour < 6) return buildWait('SCALP rest period active (00-06 UTC).');
-    if (!isScalp && (utcHour >= 22 || utcHour < 8)) return buildWait('DAY rest period active (22-08 UTC).');
+    const spreadPct = Number(spread?.spreadPct);
 
     if (!emaSnap) {
       return buildWait(`${type}: EMA snapshot unavailable.`);
     }
-    const crossBars = side === 'BUY'
-      ? Number(emaSnap.crossBarsAgoBullish)
-      : Number(emaSnap.crossBarsAgoBearish);
+
     const crossLimit = isScalp ? 2 : 3;
-    if (!Number.isFinite(crossBars) || crossBars > crossLimit) {
+    const bullCrossBars = Number(emaSnap.crossBarsAgoBullish);
+    const bearCrossBars = Number(emaSnap.crossBarsAgoBearish);
+    const bullCrossValid = Number.isFinite(bullCrossBars) && bullCrossBars <= crossLimit;
+    const bearCrossValid = Number.isFinite(bearCrossBars) && bearCrossBars <= crossLimit;
+
+    if (!bullCrossValid && !bearCrossValid) {
       return buildWait(`${type}: EMA 9/21 cross recency failed.`);
     }
 
-    const volumeGateThreshold = isScalp ? 1.5 : 1.2;
+    let side = null;
+    if (bullCrossValid && !bearCrossValid) side = 'BUY';
+    if (!bullCrossValid && bearCrossValid) side = 'SELL';
+    if (bullCrossValid && bearCrossValid) {
+      side = bullCrossBars <= bearCrossBars ? 'BUY' : 'SELL';
+    }
+
+    const volumeGateThreshold = isScalp ? 1.0 : 0.8;
     if (!Number.isFinite(volumeRatioMandatory) || volumeRatioMandatory <= volumeGateThreshold) {
       return buildWait(`${type}: Volume gate failed (${Number.isFinite(volumeRatioMandatory) ? volumeRatioMandatory.toFixed(2) : 'N/A'}x).`);
     }
 
     const pattern = classifyPattern(type, side);
-    if (!pattern.valid) return buildWait(`${type}: No valid last-candle chart pattern.`);
-
-    const spreadPct = Number(spread?.spreadPct);
-    const spreadThreshold = isScalp ? 0.05 : 0.08;
-    if (!Number.isFinite(spreadPct) || spreadPct >= spreadThreshold) {
-      return buildWait(`${type}: Spread gate failed (${Number.isFinite(spreadPct) ? spreadPct.toFixed(3) : 'N/A'}%).`);
-    }
-
-    const fundingRate = Number(funding?.rate);
-    if (!Number.isFinite(fundingRate) || fundingRate < -0.0002 || fundingRate > 0.0005) {
-      return buildWait(`${type}: Funding risk gate failed (${Number.isFinite(fundingRate) ? (fundingRate * 100).toFixed(4) : 'N/A'}%).`);
-    }
-
-    if (hasMajorNewsWithinMinutes(isScalp ? 30 : 60)) {
-      return buildWait(`${type}: Major news cooldown active.`);
-    }
 
     const isBull = side === 'BUY';
-    const rsiScore = Number.isFinite(rsi) ? clamp(100 - (Math.abs(rsi - 50) * 2), 0, 100) : 50;
-    const macdScore = computeMacdScore(macd, side);
-    const patternScoreRaw = pattern.highReliability ? 120 : 100;
-    const technicalScore = clamp((rsiScore * 0.3) + (macdScore * 0.4) + (patternScoreRaw * 0.3), 0, 100);
-    const whaleScore = computeWhaleActivityScore(side);
-    const emaConfluenceScore = computeEmaConfluenceScore(type, side);
-    const volumeScore = computeVolumeScore(volumeRatioMandatory);
+    let rawAlpha = 50;
+    if (Number.isFinite(volumeRatioMandatory) && volumeRatioMandatory > 1.5) rawAlpha += 10;
+    if (pattern.valid) rawAlpha += 15;
+    if (Number.isFinite(rsi) && rsi >= 40 && rsi <= 60) rawAlpha += 10;
 
-    const marketSentimentRaw = Number.isFinite(Number(LIVE_SENTIMENT?.score)) ? clamp(Number(LIVE_SENTIMENT.score), 0, 100) : 50;
-    const sentimentScore = side === 'BUY' ? marketSentimentRaw : (100 - marketSentimentRaw);
-    const newsBase = computeNewsSentimentBase();
-    const newsScore = side === 'BUY' ? newsBase : (100 - newsBase);
-    const alphaSourcesScore = computeAlphaSourcesScore(side);
+    if (Number.isFinite(ema200_15m)) {
+      if ((isBull && price > ema200_15m) || (!isBull && price < ema200_15m)) rawAlpha += 10;
+    }
 
-    const regime = (marketSentimentRaw > 65 || marketSentimentRaw < 35) ? 'TRENDING' : 'RANGING';
-    const weights = regime === 'TRENDING'
-      ? { technical: 0.22, whale: 0.20, ema: 0.15, volume: 0.08, sentiment: 0.15, news: 0.12, alphaSources: 0.10 }
-      : { technical: 0.15, whale: 0.15, ema: 0.08, volume: 0.15, sentiment: 0.25, news: 0.15, alphaSources: 0.12 };
+    if (Number.isFinite(spreadPct) && spreadPct > 0.1) rawAlpha -= 10;
 
-    const rawAlpha =
-      (technicalScore * weights.technical) +
-      (whaleScore * weights.whale) +
-      (emaConfluenceScore * weights.ema) +
-      (volumeScore * weights.volume) +
-      (sentimentScore * weights.sentiment) +
-      (newsScore * weights.news) +
-      (alphaSourcesScore * weights.alphaSources);
-
-    const alpha = clamp(Math.round(rawAlpha), 0, 100);
-    const threshold = isScalp ? 65 : 70;
-    if (alpha < threshold) return buildWait(`${type}: Alpha ${alpha} below threshold ${threshold}.`);
+    const alpha = clamp(Math.round(Math.max(40, rawAlpha)), 0, 100);
 
     const structure = getStructureLevels(type, side, price);
-    if (!structure.hasUsableTargets) {
-      return buildWait(`${type}: Local ${isBull ? 'resistance' : 'support'} targets unavailable.`);
-    }
 
     const riskAtrMult = isScalp ? 0.38 : 0.72;
     const risk = atrSafe * riskAtrMult;
@@ -2372,7 +2333,7 @@ function generateSignalForAsset(asset) {
       formatPrice(t1),
       formatPrice(t2),
       formatPrice(sl),
-      pattern.name,
+      'NONE',
       timestampUtc,
       String(alpha)
     ].join('|');
@@ -2381,7 +2342,7 @@ function generateSignalForAsset(asset) {
       type,
       isBull,
       side,
-      pattern: pattern.name,
+      pattern: 'NONE',
       strength: alpha >= 85 ? { label: 'HIGH CONVICTION', cls: 'text-green' } : { label: 'CONFIRMED', cls: 'text-primary' },
       exchanges: ['Binance Futures'],
       leverage,
@@ -2398,16 +2359,14 @@ function generateSignalForAsset(asset) {
       alpha,
       signalText,
       timestampUtc,
-      gateSummary: `${type} gates passed (MACD, EMA cross, Volume, Pattern, Spread, Funding, News cooldown).`,
+      gateSummary: `${type} gates passed (EMA cross recency + relaxed volume).`,
       pillarScores: {
-        regime,
-        technical: Math.round(technicalScore),
-        whale: Math.round(whaleScore),
-        emaConfluence: Math.round(emaConfluenceScore),
-        volume: Math.round(volumeScore),
-        sentiment: Math.round(sentimentScore),
-        news: Math.round(newsScore),
-        alphaSources: Math.round(alphaSourcesScore)
+        base: 50,
+        volume: Number.isFinite(volumeRatioMandatory) && volumeRatioMandatory > 1.5 ? 10 : 0,
+        pattern: pattern.valid ? 15 : 0,
+        rsi: Number.isFinite(rsi) && rsi >= 40 && rsi <= 60 ? 10 : 0,
+        ema200: Number.isFinite(ema200_15m) && ((isBull && price > ema200_15m) || (!isBull && price < ema200_15m)) ? 10 : 0,
+        spreadPenalty: Number.isFinite(spreadPct) && spreadPct > 0.1 ? -10 : 0
       },
       waitReason: ''
     };
