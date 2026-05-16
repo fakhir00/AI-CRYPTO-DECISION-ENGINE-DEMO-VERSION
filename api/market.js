@@ -274,59 +274,157 @@ function detectMacdDivergence(candles = [], histSeries = []) {
 }
 
 function detectPattern(candles = [], timeframe = 'SCALP') {
-  if (!Array.isArray(candles) || candles.length < 3) return { name: 'NONE', hasPattern: false, highReliability: false };
-
-  const last = candles[candles.length - 1];
-  const prev = candles[candles.length - 2];
-  const closes = candles.map(c => c.close);
-
-  const lastBull = last.close > last.open;
-  const lastBear = last.close < last.open;
-  const prevBull = prev.close > prev.open;
-  const prevBear = prev.close < prev.open;
-
-  const bullishEngulfing = prevBear && lastBull && last.open < prev.close && last.close > prev.open;
-  const bearishEngulfing = prevBull && lastBear && last.open > prev.close && last.close < prev.open;
-
-  const recent = closes.slice(-12);
-  const movePct = recent.length >= 12 ? ((recent[8] - recent[0]) / recent[0]) * 100 : 0;
-  const pullbackPct = recent.length >= 12 ? ((recent[11] - recent[8]) / recent[8]) * 100 : 0;
-  const bullFlag = movePct > 1.2 && pullbackPct < 0 && pullbackPct > -0.9;
-  const bearFlag = movePct < -1.2 && pullbackPct > 0 && pullbackPct < 0.9;
-
-  if (bullishEngulfing) {
+  if (!Array.isArray(candles) || candles.length < 4) {
     return {
-      name: 'BULL_ENGULF',
-      hasPattern: true,
-      highReliability: timeframe === 'SCALP'
+      name: 'NONE',
+      hasPattern: false,
+      highReliability: false,
+      list: [],
+      summary: 'NONE'
     };
   }
 
-  if (bearishEngulfing) {
+  const pushPattern = (arr, name, type, reliability, candleIndex) => {
+    arr.push({ name, type, reliability, candleIndex });
+  };
+
+  const patterns = [];
+  const start = Math.max(2, candles.length - 20);
+
+  for (let i = start; i < candles.length; i++) {
+    const prev2 = candles[i - 2];
+    const prev = candles[i - 1];
+    const cur = candles[i];
+
+    if (!prev2 || !prev || !cur) continue;
+
+    const body = Math.abs(cur.close - cur.open);
+    const prevBody = Math.abs(prev.close - prev.open);
+    const prev2Body = Math.abs(prev2.close - prev2.open);
+    const rng = Math.max(0, cur.high - cur.low);
+    const upperWick = cur.high - Math.max(cur.open, cur.close);
+    const lowerWick = Math.min(cur.open, cur.close) - cur.low;
+
+    const bull = cur.close > cur.open;
+    const bear = cur.close < cur.open;
+    const prevBull = prev.close > prev.open;
+    const prevBear = prev.close < prev.open;
+    const prev2Bull = prev2.close > prev2.open;
+    const prev2Bear = prev2.close < prev2.open;
+
+    if (rng > 0 && body / rng < 0.1) {
+      pushPattern(patterns, 'DOJI', 'neutral', 'low', i);
+    }
+
+    if (rng > 0 && body / rng > 0.82) {
+      if (bull) pushPattern(patterns, 'BULL_MARUBOZU', 'bullish', 'medium', i);
+      if (bear) pushPattern(patterns, 'BEAR_MARUBOZU', 'bearish', 'medium', i);
+    }
+
+    if (lowerWick > body * 2 && upperWick < body * 0.6) {
+      if (bull) pushPattern(patterns, 'HAMMER', 'bullish', 'medium', i);
+      if (bear) pushPattern(patterns, 'HANGING_MAN', 'bearish', 'medium', i);
+    }
+
+    if (upperWick > body * 2 && lowerWick < body * 0.6) {
+      if (bear) pushPattern(patterns, 'SHOOTING_STAR', 'bearish', 'medium', i);
+      if (bull) pushPattern(patterns, 'INVERTED_HAMMER', 'bullish', 'medium', i);
+    }
+
+    if (prevBear && bull && cur.open < prev.close && cur.close > prev.open) {
+      pushPattern(patterns, 'BULL_ENGULF', 'bullish', 'high', i);
+    }
+
+    if (prevBull && bear && cur.open > prev.close && cur.close < prev.open) {
+      pushPattern(patterns, 'BEAR_ENGULF', 'bearish', 'high', i);
+    }
+
+    if (prevBear && bull && cur.open > prev.close && cur.close < prev.open && body < prevBody * 0.65) {
+      pushPattern(patterns, 'BULL_HARAMI', 'bullish', 'medium', i);
+    }
+
+    if (prevBull && bear && cur.open < prev.close && cur.close > prev.open && body < prevBody * 0.65) {
+      pushPattern(patterns, 'BEAR_HARAMI', 'bearish', 'medium', i);
+    }
+
+    if (
+      prev2Bear
+      && prev2Body > Math.max(0, (prev2.high - prev2.low)) * 0.45
+      && prevBody < prev2Body * 0.4
+      && bull
+      && cur.close > ((prev2.open + prev2.close) / 2)
+    ) {
+      pushPattern(patterns, 'MORNING_STAR', 'bullish', 'high', i);
+    }
+
+    if (
+      prev2Bull
+      && prev2Body > Math.max(0, (prev2.high - prev2.low)) * 0.45
+      && prevBody < prev2Body * 0.4
+      && bear
+      && cur.close < ((prev2.open + prev2.close) / 2)
+    ) {
+      pushPattern(patterns, 'EVENING_STAR', 'bearish', 'high', i);
+    }
+
+    if (
+      i >= 2
+      && prev2Bull
+      && prevBull
+      && bull
+      && cur.close > prev.close
+      && prev.close > prev2.close
+    ) {
+      pushPattern(patterns, 'THREE_WHITE_SOLDIERS', 'bullish', 'high', i);
+    }
+
+    if (
+      i >= 2
+      && prev2Bear
+      && prevBear
+      && bear
+      && cur.close < prev.close
+      && prev.close < prev2.close
+    ) {
+      pushPattern(patterns, 'THREE_BLACK_CROWS', 'bearish', 'high', i);
+    }
+  }
+
+  const recentUnique = [];
+  const seen = new Set();
+  for (let i = patterns.length - 1; i >= 0; i--) {
+    const p = patterns[i];
+    if (!p?.name || seen.has(p.name)) continue;
+    seen.add(p.name);
+    recentUnique.push(p);
+    if (recentUnique.length >= 3) break;
+  }
+
+  if (!recentUnique.length) {
     return {
-      name: 'BEAR_ENGULF',
-      hasPattern: true,
-      highReliability: timeframe === 'SCALP'
+      name: 'NONE',
+      hasPattern: false,
+      highReliability: false,
+      list: [],
+      summary: 'NONE'
     };
   }
 
-  if (bullFlag) {
-    return {
-      name: 'BULL_FLAG',
-      hasPattern: true,
-      highReliability: timeframe === 'SCALP'
-    };
-  }
+  const reliabilityOrder = { high: 3, medium: 2, low: 1 };
+  const primary = [...recentUnique].sort((a, b) => {
+    const ra = reliabilityOrder[a.reliability] || 0;
+    const rb = reliabilityOrder[b.reliability] || 0;
+    if (rb !== ra) return rb - ra;
+    return b.candleIndex - a.candleIndex;
+  })[0];
 
-  if (bearFlag) {
-    return {
-      name: 'BEAR_FLAG',
-      hasPattern: true,
-      highReliability: timeframe === 'SCALP'
-    };
-  }
-
-  return { name: 'NONE', hasPattern: false, highReliability: false };
+  return {
+    name: primary.name,
+    hasPattern: true,
+    highReliability: primary.reliability === 'high' && timeframe === 'SCALP',
+    list: recentUnique.map(p => p.name),
+    summary: recentUnique.map(p => p.name).join(', ')
+  };
 }
 
 function computeTechnicalScore(snapshot = {}, direction = 'BUY', timeframe = 'SCALP') {
@@ -592,6 +690,7 @@ function evaluateSignal(symbol, timeframe, snapshot, timestampIso) {
       status: 'NO_SIGNAL',
       reason: 'DATA_UNAVAILABLE',
       alpha: 50,
+      patternSummary: 'NONE',
       line: buildNoSignalLine(timeframe, symbol, timestampIso, 'DATA_UNAVAILABLE')
     };
   }
@@ -605,6 +704,7 @@ function evaluateSignal(symbol, timeframe, snapshot, timestampIso) {
       status: 'NO_SIGNAL',
       reason: 'EMA_CROSS_FAIL',
       alpha: 50,
+      patternSummary: 'NONE',
       line: buildNoSignalLine(timeframe, symbol, timestampIso, 'EMA_CROSS_FAIL')
     };
   }
@@ -616,6 +716,7 @@ function evaluateSignal(symbol, timeframe, snapshot, timestampIso) {
       reason: 'VOLUME_FAIL',
       alpha: 50,
       direction,
+      patternSummary: snapshot.pattern?.summary || snapshot.pattern?.name || 'NONE',
       line: buildNoSignalLine(timeframe, symbol, timestampIso, 'VOLUME_FAIL')
     };
   }
@@ -647,6 +748,7 @@ function evaluateSignal(symbol, timeframe, snapshot, timestampIso) {
 
   const levels = computeTpSl(timeframe, symbol, direction, snapshot.price);
   const patternName = snapshot.pattern?.name || 'NONE';
+  const patternSummary = snapshot.pattern?.summary || patternName;
 
   return {
     status: 'SIGNAL',
@@ -657,6 +759,7 @@ function evaluateSignal(symbol, timeframe, snapshot, timestampIso) {
     tp2: levels.tp2,
     sl: levels.sl,
     pattern: patternName,
+    patternSummary,
     alpha: Math.round(alpha),
     regime: alphaMeta.regime,
     pillars: {
@@ -767,7 +870,8 @@ export default async function handler(req, res) {
         opportunityScore: combinedAlpha,
         confidence: Math.min(99, combinedAlpha),
         bias,
-        reason: preferred.pattern && preferred.pattern !== 'NONE' ? preferred.pattern : 'NONE',
+        patternDetected: preferred.patternSummary || preferred.pattern || 'NONE',
+        reason: preferred.patternSummary || preferred.pattern || 'NONE',
         vol: '$' + (t.quoteVolume / 1e9).toFixed(1) + 'B',
         market_cap_rank: idx + 1,
         market_cap: 0,
