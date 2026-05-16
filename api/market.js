@@ -1,7 +1,7 @@
 // ═══════════════════════════════════════════════════════════════
 // NEXUS Server-Side Market Data — Single Source of Truth
 // ═══════════════════════════════════════════════════════════════
-// Fetches Binance market universe + deterministic SCALP-only signal snapshots.
+// Fetches Binance market universe + deterministic 15m breakout signal snapshots.
 // Cached for 60s so every client sees the same scan window.
 
 let cachedData = null;
@@ -16,6 +16,10 @@ const KLINE_LIMIT = 80;
 const FETCH_TIMEOUT_MS = 6000;
 const KLINE_CONCURRENCY = 12;
 const MIN_SIGNAL_RR_RATIO = 1.0;
+const BREAKOUT_VOLUME_SPIKE_MULTIPLIER = 2.0;
+const BREAKOUT_RSI_MIN = 60;
+const BREAKOUT_RSI_MAX = 75;
+const BREAKOUT_RETEST_TOLERANCE_PCT = 0.35;
 
 const STABLECOINS = new Set([
   'USDT', 'USDC', 'DAI', 'BUSD', 'FDUSD', 'TUSD', 'PYUSD', 'USDE', 'USDD',
@@ -534,30 +538,31 @@ function computeAlphaFromPillars(pillars = {}) {
   };
 }
 
-function computeScalpTradePlan(symbol = 'BTC', direction = 'BUY', entry = 0, atrPct = 0) {
-  const isMajor = symbol === 'BTC' || symbol === 'ETH';
+function computeScalpTradePlan(symbol = 'BTC', direction = 'BUY', entry = 0, atrPct = 0, snapshot = null) {
+  const breakoutLevel = Number(snapshot?.breakout?.breakoutLevel);
+  const retestLow = Number(snapshot?.breakout?.retestLow);
+  const keyLow = Number(snapshot?.breakout?.recentKeyLow);
 
-  const entry2 = direction === 'BUY'
-    ? entry * (1 - 0.0008)
-    : entry * (1 + 0.0008);
-  const entry3 = direction === 'BUY'
-    ? entry * (1 - 0.0015)
-    : entry * (1 + 0.0015);
-
-  const tp1Pct = isMajor ? 0.0020 : 0.0030;
-  const tp2Pct = isMajor ? 0.0035 : 0.0050;
-  const tp3Pct = isMajor ? 0.0050 : 0.0070;
-  const tp4Pct = isMajor ? 0.0070 : 0.0100;
-  const slPct = isMajor ? 0.0080 : 0.0120;
+  const entry2 = Number.isFinite(breakoutLevel) && breakoutLevel > 0
+    ? Math.min(entry, breakoutLevel * 1.0015)
+    : entry * 0.996;
+  const entry3 = Number.isFinite(retestLow) && retestLow > 0
+    ? Math.min(entry2, retestLow * 1.0015)
+    : entry * 0.992;
 
   const dir = direction === 'BUY' ? 1 : -1;
-  const tp1 = entry * (1 + (dir * tp1Pct));
-  const tp2 = entry * (1 + (dir * tp2Pct));
-  const tp3 = entry * (1 + (dir * tp3Pct));
-  const tp4 = entry * (1 + (dir * tp4Pct));
-  const sl = direction === 'BUY'
-    ? entry * (1 - slPct)
-    : entry * (1 + slPct);
+  const tp1 = entry * (1 + (dir * 0.020));
+  const tp2 = entry * (1 + (dir * 0.030));
+  const tp3 = entry * (1 + (dir * 0.040));
+  const tp4 = entry * (1 + (dir * 0.050));
+
+  let sl = direction === 'BUY'
+    ? entry * 0.985
+    : entry * 1.015;
+  if (direction === 'BUY' && Number.isFinite(keyLow) && keyLow > 0) {
+    const belowKeyLow = keyLow * 0.9985;
+    if (belowKeyLow < entry) sl = belowKeyLow;
+  }
 
   let leverage = '8X-12X';
   if (atrPct > 0.5) leverage = '5X-8X';
@@ -672,6 +677,52 @@ async function mapWithConcurrency(items, concurrency, mapper) {
   return out;
 }
 
+function detectBreakoutRetest(candles = []) {
+  if (!Array.isArray(candles) || candles.length < 12) {
+    return {
+      volumeSpikeRatio: 0,
+      breakoutLevel: null,
+      breakoutConfirmed: false,
+      retestConfirmed: false,
+      recentKeyLow: null,
+      retestLow: null
+    };
+  }
+
+  const n = candles.length;
+  const breakout = candles[n - 2];
+  const retest = candles[n - 1];
+  const preBreakout = candles.slice(n - 7, n - 2);
+
+  const preBreakoutVolAvg = avg(preBreakout.map(c => c.volume));
+  const volumeSpikeRatio = preBreakoutVolAvg > 0 ? (breakout.volume / preBreakoutVolAvg) : 0;
+  const breakoutLevel = preBreakout.length ? Math.max(...preBreakout.map(c => c.high)) : null;
+
+  const breakoutConfirmed = Number.isFinite(breakoutLevel)
+    && breakout.close > breakoutLevel
+    && breakout.high > breakoutLevel
+    && volumeSpikeRatio >= BREAKOUT_VOLUME_SPIKE_MULTIPLIER;
+
+  const tolerance = Number.isFinite(breakoutLevel)
+    ? breakoutLevel * (BREAKOUT_RETEST_TOLERANCE_PCT / 100)
+    : 0;
+  const retestConfirmed = breakoutConfirmed
+    && Number.isFinite(breakoutLevel)
+    && retest.low <= (breakoutLevel + tolerance)
+    && retest.close >= breakoutLevel;
+
+  const recentKeyLow = Math.min(...candles.slice(-8).map(c => c.low));
+
+  return {
+    volumeSpikeRatio,
+    breakoutLevel,
+    breakoutConfirmed,
+    retestConfirmed,
+    recentKeyLow: Number.isFinite(recentKeyLow) ? recentKeyLow : null,
+    retestLow: Number.isFinite(retest.low) ? retest.low : null
+  };
+}
+
 function buildTimeframeSnapshot(candles = [], timeframe = 'SCALP') {
   if (!Array.isArray(candles) || candles.length < 30) return null;
 
@@ -697,6 +748,7 @@ function buildTimeframeSnapshot(candles = [], timeframe = 'SCALP') {
   const divergence = detectMacdDivergence(candles, macd.histSeries || []);
   const pattern = detectPattern(candles, timeframe);
   const atrPct = computeAtrPercent(candles, 14);
+  const breakout = detectBreakoutRetest(candles);
 
   return {
     price: closes[closes.length - 1],
@@ -709,6 +761,7 @@ function buildTimeframeSnapshot(candles = [], timeframe = 'SCALP') {
     divergence,
     pattern,
     atrPct,
+    breakout,
     volumeRatio3,
     volumeRatio5,
     currentVolume,
@@ -729,46 +782,58 @@ function evaluateSignal(symbol, timeframe, snapshot, timestampIso, spreadPct = n
     };
   }
 
-  let direction = null;
-  if (snapshot.ema9 > snapshot.ema21) direction = 'BUY';
-  else if (snapshot.ema9 < snapshot.ema21) direction = 'SELL';
-
-  if (!direction) {
+  const breakout = snapshot.breakout || {};
+  const volumeSpikeRatio = Number(breakout.volumeSpikeRatio) || 0;
+  if (!(volumeSpikeRatio >= BREAKOUT_VOLUME_SPIKE_MULTIPLIER)) {
     return {
       status: 'NO_SIGNAL',
-      reason: 'EMA_CROSS_FAIL',
+      reason: 'VOLUME_SPIKE_FAIL',
       alpha: 50,
-      patternSummary: 'NONE',
-      spreadPct,
-      line: buildNoSignalLine(timeframe, symbol, timestampIso, 'EMA_CROSS_FAIL')
-    };
-  }
-
-  const volumeRatio = timeframe === 'SCALP' ? snapshot.volumeRatio3 : snapshot.volumeRatio5;
-  if (!(Number.isFinite(volumeRatio) && volumeRatio > 0.8)) {
-    return {
-      status: 'NO_SIGNAL',
-      reason: 'VOLUME_FAIL',
-      alpha: 50,
-      direction,
+      direction: 'BUY',
       patternSummary: snapshot.pattern?.summary || snapshot.pattern?.name || 'NONE',
       spreadPct,
-      line: buildNoSignalLine(timeframe, symbol, timestampIso, 'VOLUME_FAIL')
+      line: buildNoSignalLine(timeframe, symbol, timestampIso, 'VOLUME_SPIKE_FAIL')
     };
   }
 
-  if (!(Number.isFinite(spreadPct) && spreadPct < 0.15)) {
+  if (!breakout.breakoutConfirmed) {
     return {
       status: 'NO_SIGNAL',
-      reason: 'SPREAD_FAIL',
+      reason: 'BREAKOUT_FAIL',
       alpha: 50,
-      direction,
+      direction: 'BUY',
       patternSummary: snapshot.pattern?.summary || snapshot.pattern?.name || 'NONE',
       spreadPct,
-      line: buildNoSignalLine(timeframe, symbol, timestampIso, 'SPREAD_FAIL')
+      line: buildNoSignalLine(timeframe, symbol, timestampIso, 'BREAKOUT_FAIL')
     };
   }
 
+  if (!breakout.retestConfirmed) {
+    return {
+      status: 'NO_SIGNAL',
+      reason: 'RETEST_FAIL',
+      alpha: 50,
+      direction: 'BUY',
+      patternSummary: snapshot.pattern?.summary || snapshot.pattern?.name || 'NONE',
+      spreadPct,
+      line: buildNoSignalLine(timeframe, symbol, timestampIso, 'RETEST_FAIL')
+    };
+  }
+
+  const rsi = Number(snapshot.rsi);
+  if (!(Number.isFinite(rsi) && rsi >= BREAKOUT_RSI_MIN && rsi <= BREAKOUT_RSI_MAX)) {
+    return {
+      status: 'NO_SIGNAL',
+      reason: 'RSI_RANGE_FAIL',
+      alpha: 50,
+      direction: 'BUY',
+      patternSummary: snapshot.pattern?.summary || snapshot.pattern?.name || 'NONE',
+      spreadPct,
+      line: buildNoSignalLine(timeframe, symbol, timestampIso, 'RSI_RANGE_FAIL')
+    };
+  }
+
+  const direction = 'BUY';
   const technicalMeta = computeTechnicalScore(snapshot, direction, timeframe);
   const technicalScore = technicalMeta.score;
 
@@ -779,7 +844,7 @@ function evaluateSignal(symbol, timeframe, snapshot, timestampIso, spreadPct = n
   const alphaSourcesScore = 50;
 
   const emaConfluenceScore = computeEmaConfluenceScore(direction, snapshot);
-  const volumeScore = computeVolumeScore(volumeRatio);
+  const volumeScore = computeVolumeScore(volumeSpikeRatio);
 
   const pillars = {
     technical: technicalScore,
@@ -794,7 +859,7 @@ function evaluateSignal(symbol, timeframe, snapshot, timestampIso, spreadPct = n
   const alphaMeta = computeAlphaFromPillars(pillars);
   const alpha = alphaMeta.alpha;
 
-  const levels = computeScalpTradePlan(symbol, direction, snapshot.price, snapshot.atrPct);
+  const levels = computeScalpTradePlan(symbol, direction, snapshot.price, snapshot.atrPct, snapshot);
   const rrRatio = computeRiskRewardRatio(levels.entry1, levels.tp4, levels.sl);
   if (!(rrRatio >= MIN_SIGNAL_RR_RATIO)) {
     return {
@@ -916,7 +981,7 @@ export default async function handler(req, res) {
 
     const klinePairs = [];
     topBinance.forEach((t) => {
-      klinePairs.push({ symbol: t.base, timeframe: 'SCALP', interval: '1m' });
+      klinePairs.push({ symbol: t.base, timeframe: 'SCALP', interval: '15m' });
     });
 
     const klineResults = await mapWithConcurrency(klinePairs, KLINE_CONCURRENCY, async (task) => {
@@ -988,10 +1053,10 @@ export default async function handler(req, res) {
           maxIntradayRangePct: MAX_INTRADAY_RANGE_PCT
         },
         mandatoryChecks: {
-          mode: 'SCALP_ONLY',
-          emaState: 'EMA9 above EMA21 = BUY, below = SELL',
-          volumeRatioThreshold: 0.8,
-          spreadCheck: '< 0.15%',
+          mode: 'BREAKOUT_15M',
+          volumeSpike: 'Breakout candle >= 2x avg volume of prior 5 candles',
+          retest: 'Latest candle retests breakout level and closes above it',
+          rsiRange: '60-75',
           minRiskReward: '1:1.0 (TP4 vs SL)'
         }
       }

@@ -47,6 +47,10 @@ const SIGNAL_KLINE_LIMIT = 80;
 const SIGNAL_FETCH_TIMEOUT_MS = 6000;
 const SIGNAL_KLINE_CONCURRENCY = 10;
 const MIN_SIGNAL_RR_RATIO = 1.0;
+const BREAKOUT_VOLUME_SPIKE_MULTIPLIER = 2.0;
+const BREAKOUT_RSI_MIN = 60;
+const BREAKOUT_RSI_MAX = 75;
+const BREAKOUT_RETEST_TOLERANCE_PCT = 0.35;
 const SIGNAL_BINANCE_ENDPOINTS = [
   'https://api.binance.com/api/v3/klines',
   'https://api1.binance.com/api/v3/klines',
@@ -684,6 +688,52 @@ function sigDetectPattern(candles = [], timeframe = 'SCALP') {
   };
 }
 
+function sigDetectBreakoutRetest(candles = []) {
+  if (!Array.isArray(candles) || candles.length < 12) {
+    return {
+      volumeSpikeRatio: 0,
+      breakoutLevel: null,
+      breakoutConfirmed: false,
+      retestConfirmed: false,
+      recentKeyLow: null,
+      retestLow: null
+    };
+  }
+
+  const n = candles.length;
+  const breakout = candles[n - 2];
+  const retest = candles[n - 1];
+  const preBreakout = candles.slice(n - 7, n - 2);
+
+  const preBreakoutVolAvg = sigAvg(preBreakout.map(c => c.volume));
+  const volumeSpikeRatio = preBreakoutVolAvg > 0 ? (breakout.volume / preBreakoutVolAvg) : 0;
+  const breakoutLevel = preBreakout.length ? Math.max(...preBreakout.map(c => c.high)) : null;
+
+  const breakoutConfirmed = Number.isFinite(breakoutLevel)
+    && breakout.close > breakoutLevel
+    && breakout.high > breakoutLevel
+    && volumeSpikeRatio >= BREAKOUT_VOLUME_SPIKE_MULTIPLIER;
+
+  const tolerance = Number.isFinite(breakoutLevel)
+    ? breakoutLevel * (BREAKOUT_RETEST_TOLERANCE_PCT / 100)
+    : 0;
+  const retestConfirmed = breakoutConfirmed
+    && Number.isFinite(breakoutLevel)
+    && retest.low <= (breakoutLevel + tolerance)
+    && retest.close >= breakoutLevel;
+
+  const recentKeyLow = Math.min(...candles.slice(-8).map(c => c.low));
+
+  return {
+    volumeSpikeRatio,
+    breakoutLevel,
+    breakoutConfirmed,
+    retestConfirmed,
+    recentKeyLow: Number.isFinite(recentKeyLow) ? recentKeyLow : null,
+    retestLow: Number.isFinite(retest.low) ? retest.low : null
+  };
+}
+
 function sigBuildSnapshot(candles = [], timeframe = 'SCALP') {
   if (!Array.isArray(candles) || candles.length < 30) return null;
 
@@ -709,6 +759,7 @@ function sigBuildSnapshot(candles = [], timeframe = 'SCALP') {
   const divergence = sigDetectMacdDivergence(candles, macd.histSeries || []);
   const pattern = sigDetectPattern(candles, timeframe);
   const atrPct = sigComputeAtrPercent(candles, 14);
+  const breakout = sigDetectBreakoutRetest(candles);
 
   return {
     price: closes[closes.length - 1],
@@ -721,6 +772,7 @@ function sigBuildSnapshot(candles = [], timeframe = 'SCALP') {
     divergence,
     pattern,
     atrPct,
+    breakout,
     volumeRatio3,
     volumeRatio5
   };
@@ -842,30 +894,31 @@ function sigComputeAlpha(pillars = {}) {
   return sigClamp(raw, 0, 100);
 }
 
-function sigComputeTradePlan(symbol = 'BTC', direction = 'BUY', entry = 0, atrPct = 0) {
-  const isMajor = symbol === 'BTC' || symbol === 'ETH';
+function sigComputeTradePlan(symbol = 'BTC', direction = 'BUY', entry = 0, atrPct = 0, snapshot = null) {
+  const breakoutLevel = Number(snapshot?.breakout?.breakoutLevel);
+  const retestLow = Number(snapshot?.breakout?.retestLow);
+  const keyLow = Number(snapshot?.breakout?.recentKeyLow);
 
-  const entry2 = direction === 'BUY'
-    ? entry * (1 - 0.0008)
-    : entry * (1 + 0.0008);
-  const entry3 = direction === 'BUY'
-    ? entry * (1 - 0.0015)
-    : entry * (1 + 0.0015);
-
-  const tp1Pct = isMajor ? 0.0020 : 0.0030;
-  const tp2Pct = isMajor ? 0.0035 : 0.0050;
-  const tp3Pct = isMajor ? 0.0050 : 0.0070;
-  const tp4Pct = isMajor ? 0.0070 : 0.0100;
-  const slPct = isMajor ? 0.0080 : 0.0120;
+  const entry2 = Number.isFinite(breakoutLevel) && breakoutLevel > 0
+    ? Math.min(entry, breakoutLevel * 1.0015)
+    : entry * 0.996;
+  const entry3 = Number.isFinite(retestLow) && retestLow > 0
+    ? Math.min(entry2, retestLow * 1.0015)
+    : entry * 0.992;
 
   const dir = direction === 'BUY' ? 1 : -1;
-  const tp1 = entry * (1 + (dir * tp1Pct));
-  const tp2 = entry * (1 + (dir * tp2Pct));
-  const tp3 = entry * (1 + (dir * tp3Pct));
-  const tp4 = entry * (1 + (dir * tp4Pct));
-  const sl = direction === 'BUY'
-    ? entry * (1 - slPct)
-    : entry * (1 + slPct);
+  const tp1 = entry * (1 + (dir * 0.020));
+  const tp2 = entry * (1 + (dir * 0.030));
+  const tp3 = entry * (1 + (dir * 0.040));
+  const tp4 = entry * (1 + (dir * 0.050));
+
+  let sl = direction === 'BUY'
+    ? entry * 0.985
+    : entry * 1.015;
+  if (direction === 'BUY' && Number.isFinite(keyLow) && keyLow > 0) {
+    const belowKeyLow = keyLow * 0.9985;
+    if (belowKeyLow < entry) sl = belowKeyLow;
+  }
 
   let leverage = '8X-12X';
   if (atrPct > 0.5) leverage = '5X-8X';
