@@ -6,7 +6,6 @@ const DUNE_BASE_URL = 'https://api.dune.com/api/v1';
 const CACHE_TTL_MS = 2 * 60 * 1000; // 2 minutes
 const EXEC_TIMEOUT_MS = 18 * 1000;  // bounded to keep UI responsive
 const POLL_INTERVAL_MS = 900;
-const DUNE_FALLBACK_API_KEY = 'oisWtTIfQ7fLOSHZcoSx1Sns76TKoVkQ';
 
 let cachedPayload = null;
 let cacheTimestamp = 0;
@@ -137,7 +136,7 @@ export default async function handler(req, res) {
     });
   }
 
-  const apiKey = process.env.DUNE_API_KEY || process.env.VITE_DUNE_API_KEY || DUNE_FALLBACK_API_KEY;
+  const apiKey = process.env.DUNE_API_KEY || process.env.VITE_DUNE_API_KEY;
   if (!apiKey) {
     return res.status(200).json({
       source: 'disabled',
