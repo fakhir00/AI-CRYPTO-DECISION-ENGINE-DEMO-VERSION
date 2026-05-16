@@ -1910,17 +1910,17 @@ Signal Type: Regular (${directionLabel})
 
 Leverage: ${leverageLabel}
 
-Entry :
+Stop Prices :
+1) ${formattedStop}
+
+Buy Prices (Entry) :
 (${formattedEntries[0]}, ${formattedEntries[1]}, ${formattedEntries[2]})
 
-Take-Profit Targets:
+Sell Prices (Take-Profit) :
 1) ${formattedTargets[0]}
 2) ${formattedTargets[1]}
 3) ${formattedTargets[2]}
 4) ${formattedTargets[3]}
-
-Stop Targets:
-1) ${formattedStop}
 
 ${trailingBlock}`;
     }
@@ -2071,17 +2071,17 @@ Signal Type: Regular (${directionLabel})
 
 Leverage: ${leverageLabel}
 
-Entry :
+Stop Prices :
+1) ${autoStop}
+
+Buy Prices (Entry) :
 (${autoEntries[0]}, ${autoEntries[1]}, ${autoEntries[2]})
 
-Take-Profit Targets:
+Sell Prices (Take-Profit) :
 1) ${autoTargets[0]}
 2) ${autoTargets[1]}
 3) ${autoTargets[2]}
 4) ${autoTargets[3]}
-
-Stop Targets:
-1) ${autoStop}
 
 ${trailingBlock}`;
   }
@@ -2094,17 +2094,17 @@ Signal Type: Regular (${directionLabel})
 
 Leverage: ${leverageLabel}
 
-Entry :
+Stop Prices :
+1) ${stop}
+
+Buy Prices (Entry) :
 (${entryLadder[0]}, ${entryLadder[1]}, ${entryLadder[2]})
 
-Take-Profit Targets:
+Sell Prices (Take-Profit) :
 1) ${targets[0]}
 2) ${targets[1]}
 3) ${targets[2]}
 4) ${targets[3]}
-
-Stop Targets:
-1) ${stop}
 
 ${trailingBlock}`;
 }
@@ -2385,17 +2385,17 @@ Signal Type: Regular ([Long/Short])
 
 Leverage: Cross (4X-12X, volatility-adjusted)
 
-Entry :
+Stop Prices :
+1) [Price]
+
+Buy Prices (Entry) :
 ([Price 1], [Price 2], [Price 3])
 
-Take-Profit Targets:
+Sell Prices (Take-Profit) :
 1) [Price]
 2) [Price]
 3) [Price]
 4) [Price]
-
-Stop Targets:
-1) [Price]
 
 Trailing Configuration:
 Stop: Percent Below Highest ([X]%)
@@ -2567,7 +2567,7 @@ Your specialization:
 CRITICAL: You must ALWAYS provide 5 "Quantitative Rationales" explaining the data-driven basis for the trade. Ensure Risk:Reward ratio is emphasized.
 
 When the user asks for a signal or trade setup, output in this exact HTML format:
-📪 #[COIN]/USDT<br><br>Direction: <strong style="color:var(--green)">[LONG]</strong> or <strong style="color:var(--red)">[SHORT]</strong><br>Leverage: Cross (2X-5X)<br><br>Entry: ([Price], [Price], [Price])<br><br>Target 1: [Price]<br>Target 2: [Price]<br>Target 3: [Price]<br>Target 4: [Price]<br><br>Stop loss: [Price]<br><br>Risk:Reward Ratio: 1:[Value]<br><br>⚡ NEXUS Pro Autotrade Signals<br><br><strong>5 Quantitative Rationales:</strong><br>1. [Rationale 1]<br>2. [Rationale 2]<br>3. [Rationale 3]<br>4. [Rationale 4]<br>5. [Rationale 5]
+📪 #[COIN]/USDT<br><br>Direction: <strong style="color:var(--green)">[LONG]</strong> or <strong style="color:var(--red)">[SHORT]</strong><br>Leverage: Cross (2X-5X)<br><br>Stop Prices: [Price]<br><br>Buy Prices (Entry): ([Price], [Price], [Price])<br><br>Sell Prices (Take-Profit):<br>1. [Price]<br>2. [Price]<br>3. [Price]<br>4. [Price]<br><br>Risk:Reward Ratio: 1:[Value]<br><br>⚡ NEXUS Pro Autotrade Signals<br><br><strong>5 Quantitative Rationales:</strong><br>1. [Rationale 1]<br>2. [Rationale 2]<br>3. [Rationale 3]<br>4. [Rationale 4]<br>5. [Rationale 5]
 
 For analysis queries, provide structured output with: Price targets, Probability scores, Key risk factors, and a clear BUY/SELL/HOLD recommendation. Use markdown formatting.`
           },
@@ -2709,20 +2709,14 @@ export async function fetchDualAI(userQuery, assetContext = '') {
 - Local Supports Below Price: ${supportLine}
 
 🚨 [CRITICAL: IF SIGNAL IS LONG, YOU MUST USE THESE EXACT VALUES IN THE OUTPUT]
-- Entry Ladder (MUST be Start, Lower, Lower): ($${fmt(longStart)}, $${fmt(longEntry2)}, $${fmt(longEntry3)})
-- Stop Loss: $${fmt(longSl)}
-- TP1: $${fmt(longTargets[0] ?? (longStart + longRisk * 0.7))}
-- TP2: $${fmt(longTargets[1] ?? (longStart + longRisk * 1.1))}
-- TP3: $${fmt(longTargets[2] ?? (longStart + longRisk * 1.45))}
-- TP4: $${fmt(longTargets[3] ?? (longStart + longRisk * 1.9))}
+- Stop Prices: $${fmt(longSl)}
+- Buy Prices (Entry) (MUST be Start, Lower, Lower): ($${fmt(longStart)}, $${fmt(longEntry2)}, $${fmt(longEntry3)})
+- Sell Prices (Take-Profit): ($${fmt(longTargets[0] ?? (longStart + longRisk * 0.7))}, $${fmt(longTargets[1] ?? (longStart + longRisk * 1.1))}, $${fmt(longTargets[2] ?? (longStart + longRisk * 1.45))}, $${fmt(longTargets[3] ?? (longStart + longRisk * 1.9))})
 
 🚨 [CRITICAL: IF SIGNAL IS SHORT, YOU MUST USE THESE EXACT VALUES IN THE OUTPUT]
-- Entry Ladder (MUST be Start, Higher, Higher): ($${fmt(shortStart)}, $${fmt(shortEntry2)}, $${fmt(shortEntry3)})
-- Stop Loss: $${fmt(shortSl)}
-- TP1: $${fmt(shortTargets[0] ?? (shortStart - shortRisk * 0.7))}
-- TP2: $${fmt(shortTargets[1] ?? (shortStart - shortRisk * 1.1))}
-- TP3: $${fmt(shortTargets[2] ?? (shortStart - shortRisk * 1.45))}
-- TP4: $${fmt(shortTargets[3] ?? (shortStart - shortRisk * 1.9))}
+- Stop Prices: $${fmt(shortSl)}
+- Buy Prices (Entry) (MUST be Start, Higher, Higher): ($${fmt(shortStart)}, $${fmt(shortEntry2)}, $${fmt(shortEntry3)})
+- Sell Prices (Take-Profit): ($${fmt(shortTargets[0] ?? (shortStart - shortRisk * 0.7))}, $${fmt(shortTargets[1] ?? (shortStart - shortRisk * 1.1))}, $${fmt(shortTargets[2] ?? (shortStart - shortRisk * 1.45))}, $${fmt(shortTargets[3] ?? (shortStart - shortRisk * 1.9))})
 `;
     }
     if (hasDetectedCandlePatterns(candleData)) {
