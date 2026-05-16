@@ -46,6 +46,7 @@ const SIGNAL_SCAN_INTERVAL_MS = 60 * 1000;
 const SIGNAL_KLINE_LIMIT = 80;
 const SIGNAL_FETCH_TIMEOUT_MS = 6000;
 const SIGNAL_KLINE_CONCURRENCY = 10;
+const MIN_SIGNAL_RR_RATIO = 1.5;
 const SIGNAL_BINANCE_ENDPOINTS = [
   'https://api.binance.com/api/v3/klines',
   'https://api1.binance.com/api/v3/klines',
@@ -295,6 +296,24 @@ function getSortedTradeableAssets(sortBy = 'alpha') {
     }
     return (getUnifiedAlphaScore(b) - getUnifiedAlphaScore(a)) || a.symbol.localeCompare(b.symbol);
   });
+}
+
+function getScalpRiskReward(asset = null) {
+  const scalp = asset?.signals?.scalp;
+  if (!scalp || scalp.status !== 'SIGNAL') return 0;
+  const direct = Number(scalp.rrRatio);
+  if (Number.isFinite(direct) && direct > 0) return direct;
+
+  const entry = Number(scalp.entry1 ?? scalp.entry);
+  const target = Number(scalp.tp4);
+  const stop = Number(scalp.sl);
+  return sigComputeRiskRewardRatio(entry, target, stop);
+}
+
+function hasQualifyingScalpTrade(asset = null) {
+  const scalp = asset?.signals?.scalp;
+  if (!scalp || scalp.status !== 'SIGNAL') return false;
+  return getScalpRiskReward(asset) >= MIN_SIGNAL_RR_RATIO;
 }
 
 function sigClamp(num, min, max) {
@@ -865,6 +884,17 @@ function sigComputeTradePlan(symbol = 'BTC', direction = 'BUY', entry = 0, atrPc
   };
 }
 
+function sigComputeRiskRewardRatio(entry = 0, target = 0, stopLoss = 0) {
+  const e = Number(entry);
+  const t = Number(target);
+  const sl = Number(stopLoss);
+  if (!(e > 0) || !Number.isFinite(t) || !Number.isFinite(sl)) return 0;
+  const risk = Math.abs(e - sl);
+  const reward = Math.abs(t - e);
+  if (!(risk > 0)) return 0;
+  return reward / risk;
+}
+
 function sigNoSignal(timeframe, symbol, timestamp, reason, alpha = 50, direction = null) {
   return {
     status: 'NO_SIGNAL',
@@ -916,6 +946,14 @@ function sigEvaluate(symbol, timeframe, snapshot, timestamp, spreadPct = null) {
   };
   const alpha = sigComputeAlpha(pillars);
   const levels = sigComputeTradePlan(symbol, direction, snapshot.price, snapshot.atrPct);
+  const rrRatio = sigComputeRiskRewardRatio(levels.entry1, levels.tp4, levels.sl);
+  if (!(rrRatio >= MIN_SIGNAL_RR_RATIO)) {
+    const out = sigNoSignal(timeframe, symbol, timestamp, 'RR_FAIL', Math.round(alpha), direction);
+    out.patternSummary = snapshot.pattern?.summary || snapshot.pattern?.name || 'NONE';
+    out.spreadPct = Number.isFinite(spreadPct) ? spreadPct : null;
+    out.rrRatio = Number(rrRatio.toFixed(2));
+    return out;
+  }
   const patternName = snapshot.pattern?.name || 'NONE';
   const patternSummary = snapshot.pattern?.summary || patternName;
 
@@ -936,6 +974,7 @@ function sigEvaluate(symbol, timeframe, snapshot, timestamp, spreadPct = null) {
     tp4: levels.tp4,
     sl: levels.sl,
     leverage: levels.leverage,
+    rrRatio: Number(rrRatio.toFixed(2)),
     spreadPct: Number.isFinite(spreadPct) ? spreadPct : null,
     atrPct: snapshot.atrPct,
     line: sigBuildSignalLine(
@@ -2247,7 +2286,8 @@ function typeWriterEffect(element, lines, speed = 20) {
 function renderOpportunitiesPage() {
   const tbody = document.getElementById('opportunities-table-body');
   const sorted = getSortedTradeableAssets(OPPORTUNITY_SORT);
-  const visibleRows = sorted.slice(0, MAX_TOP_OPPORTUNITIES);
+  const qualifyingTrades = sorted.filter(hasQualifyingScalpTrade);
+  const visibleRows = qualifyingTrades.slice(0, MAX_TOP_OPPORTUNITIES);
 
   const renderSignalCell = (signal = null) => {
     if (!signal) {
@@ -2271,6 +2311,7 @@ function renderOpportunitiesPage() {
       const tp4 = Number(signal.tp4);
       const sl = Number(signal.sl);
       const lev = signal.leverage || 'N/A';
+      const rr = Number(signal.rrRatio);
       return `
         <div style="display:flex;flex-direction:column;gap:0.25rem;">
           <span class="badge ${dirIsBuy ? 'sig-long' : 'sig-short'}" style="font-size: 0.62rem; padding: 0.15rem 0.45rem; width: fit-content;">
@@ -2285,6 +2326,9 @@ function renderOpportunitiesPage() {
           <span class="text-muted" style="font-size: 0.64rem; line-height: 1.25; font-family: var(--font-mono);">
             SL: ${formatPrice(sl)} | Lev: ${lev}
           </span>
+          <span class="text-muted" style="font-size: 0.64rem; line-height: 1.25; font-family: var(--font-mono);">
+            RR: ${(Number.isFinite(rr) ? rr.toFixed(2) : '0.00')}
+          </span>
           <span class="text-muted" style="font-size: 0.64rem; line-height: 1.25; font-family: var(--font-mono); word-break: break-all;">${line}</span>
         </div>
       `;
@@ -2298,6 +2342,17 @@ function renderOpportunitiesPage() {
       </div>
     `;
   };
+
+  if (!visibleRows.length) {
+    tbody.innerHTML = `
+      <tr>
+        <td colspan="8" style="text-align:center;padding:1.25rem;color:var(--text-muted);">
+          No SCALP trades currently meet minimum risk/reward 1:1.5.
+        </td>
+      </tr>
+    `;
+    return;
+  }
   
   tbody.innerHTML = visibleRows.map((asset, i) => {
     const displayScore = getUnifiedAlphaScore(asset);

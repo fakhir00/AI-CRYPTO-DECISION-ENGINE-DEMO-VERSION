@@ -15,6 +15,7 @@ const MAX_INTRADAY_RANGE_PCT = 24;
 const KLINE_LIMIT = 80;
 const FETCH_TIMEOUT_MS = 6000;
 const KLINE_CONCURRENCY = 12;
+const MIN_SIGNAL_RR_RATIO = 1.5;
 
 const STABLECOINS = new Set([
   'USDT', 'USDC', 'DAI', 'BUSD', 'FDUSD', 'TUSD', 'PYUSD', 'USDE', 'USDD',
@@ -575,6 +576,17 @@ function computeScalpTradePlan(symbol = 'BTC', direction = 'BUY', entry = 0, atr
   };
 }
 
+function computeRiskRewardRatio(entry = 0, target = 0, stopLoss = 0) {
+  const e = Number(entry);
+  const t = Number(target);
+  const sl = Number(stopLoss);
+  if (!(e > 0) || !Number.isFinite(t) || !Number.isFinite(sl)) return 0;
+  const risk = Math.abs(e - sl);
+  const reward = Math.abs(t - e);
+  if (!(risk > 0)) return 0;
+  return reward / risk;
+}
+
 function computeAtrPercent(candles = [], period = 14) {
   if (!Array.isArray(candles) || candles.length < period + 1) return 0;
   let trSum = 0;
@@ -783,6 +795,19 @@ function evaluateSignal(symbol, timeframe, snapshot, timestampIso, spreadPct = n
   const alpha = alphaMeta.alpha;
 
   const levels = computeScalpTradePlan(symbol, direction, snapshot.price, snapshot.atrPct);
+  const rrRatio = computeRiskRewardRatio(levels.entry1, levels.tp4, levels.sl);
+  if (!(rrRatio >= MIN_SIGNAL_RR_RATIO)) {
+    return {
+      status: 'NO_SIGNAL',
+      reason: 'RR_FAIL',
+      alpha: Math.round(alpha),
+      direction,
+      patternSummary: snapshot.pattern?.summary || snapshot.pattern?.name || 'NONE',
+      spreadPct,
+      rrRatio: Number(rrRatio.toFixed(2)),
+      line: buildNoSignalLine(timeframe, symbol, timestampIso, 'RR_FAIL')
+    };
+  }
   const patternName = snapshot.pattern?.name || 'NONE';
   const patternSummary = snapshot.pattern?.summary || patternName;
 
@@ -800,6 +825,7 @@ function evaluateSignal(symbol, timeframe, snapshot, timestampIso, spreadPct = n
     tp4: levels.tp4,
     sl: levels.sl,
     leverage: levels.leverage,
+    rrRatio: Number(rrRatio.toFixed(2)),
     pattern: patternName,
     patternSummary,
     alpha: Math.round(alpha),
@@ -965,7 +991,8 @@ export default async function handler(req, res) {
           mode: 'SCALP_ONLY',
           emaState: 'EMA9 above EMA21 = BUY, below = SELL',
           volumeRatioThreshold: 0.8,
-          spreadCheck: '< 0.15%'
+          spreadCheck: '< 0.15%',
+          minRiskReward: '1:1.5 (TP4 vs SL)'
         }
       }
     });
