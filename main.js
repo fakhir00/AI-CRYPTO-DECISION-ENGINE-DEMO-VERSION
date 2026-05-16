@@ -2415,7 +2415,7 @@ function generateSignalForAsset(asset, options = {}) {
       type,
       isBull,
       side,
-      pattern: 'NONE',
+      pattern: pattern.valid ? pattern.name : 'NONE',
       strength: alpha >= 85 ? { label: 'HIGH CONVICTION', cls: 'text-green' } : { label: 'CONFIRMED', cls: 'text-primary' },
       exchanges: ['Binance Futures'],
       leverage,
