@@ -1495,8 +1495,13 @@ function renderOpportunitiesPage() {
             </div>
           </div>
         ` : `
-          <div style="font-family: var(--font-mono); font-size: 0.64rem; line-height: 1.35; color: #cfd8ff; max-width: 360px; white-space: normal;">
-            ${(Array.isArray(sig.signalLines) ? sig.signalLines : [sig.signalText]).filter(Boolean).join('<br/>')}
+          <div>
+            <span class="bias-badge ${sig.isBull ? 'bias-bullish' : 'bias-bearish'}" style="font-size: 0.65rem; padding: 0.2rem 0.5rem;">
+              ${sig.isBull ? 'LONG' : 'SHORT'}
+            </span>
+            <div style="font-size:0.64rem; color:var(--text-muted); margin-top:0.25rem; max-width: 280px; line-height:1.35;">
+              ${sig.type} | Alpha ${sig.alpha ?? displayScore}
+            </div>
           </div>
         `}
       </td>
@@ -1773,6 +1778,7 @@ function setupAiResearchChat() {
   if (!input || !btn || !history) return;
   let isSubmitting = false;
   const SIGNAL_INTENT_RE = /\b(signal|scalp|day|entry|entries|tp|target|stop|sl|setup|long|short|buy|sell|trade)\b/i;
+  const ANALYZE_RICH_RE = /\bstrict\s+quantitative\s+algorithmic\s+trade\s+setup\b|\bprovided\s+market\s+structure\s+and\s+candlestick\s+patterns\b/i;
   const extractRequestedSymbols = (text = '') => {
     const upper = String(text || '').toUpperCase();
     const symbols = new Set();
@@ -1846,8 +1852,11 @@ function setupAiResearchChat() {
     history.scrollTop = history.scrollHeight;
 
     try {
-      // Force simplified deterministic signal mode in chat when user asks for signals.
-      if (SIGNAL_INTENT_RE.test(val)) {
+      // Keep rich "Analyze" output path for opportunity drill-down prompts.
+      const forceRichAnalyze = ANALYZE_RICH_RE.test(val);
+
+      // Deterministic line mode for explicit signal-scanner requests.
+      if (SIGNAL_INTENT_RE.test(val) && !forceRichAnalyze) {
         const requested = extractRequestedSymbols(val);
         const signalLines = [];
         const waitRows = [];
@@ -2035,9 +2044,9 @@ function generateSignalForAsset(asset, options = {}) {
   const price = Number(asset?.price);
   if (!(price > 0)) {
     return {
-      type: 'NO_SIGNAL',
+      type: 'WAIT',
       isBull: null,
-      strength: { label: 'NO SIGNAL', cls: 'text-muted' },
+      strength: { label: 'WAIT', cls: 'text-muted' },
       exchanges: ['Binance'],
       leverage: 'None',
       entry1: 0, entry2: 0, entry3: 0,
@@ -2051,9 +2060,9 @@ function generateSignalForAsset(asset, options = {}) {
   const activeUniverse = getTopUniverseSymbols(MAX_TRADABLE_ASSETS);
   if (enforceScanUniverse && !activeUniverse.includes(symbol)) {
     return {
-      type: 'NO_SIGNAL',
+      type: 'WAIT',
       isBull: null,
-      strength: { label: 'NO SIGNAL', cls: 'text-muted' },
+      strength: { label: 'WAIT', cls: 'text-muted' },
       exchanges: ['Binance'],
       leverage: 'None',
       entry1: 0, entry2: 0, entry3: 0,
@@ -2071,17 +2080,17 @@ function generateSignalForAsset(asset, options = {}) {
   const dominanceData = window._liveGlobalMarketData || null;
   const utcHour = new Date().getUTCHours();
 
-  const buildNoSignal = (signalType, reason) => {
+  const buildWait = (reason, signalType = 'SCAN') => {
     const ts = new Date().toISOString();
-    const reasonText = `${signalType}:${reason}`;
+    const reasonText = String(reason || 'CONDITIONS_NOT_MET');
     const line = `NO_SIGNAL|${symbol}/USDT|${ts}|${reasonText}`;
     return {
-      type: 'NO_SIGNAL',
+      type: 'WAIT',
       signalType,
       isBull: null,
       side: null,
       pattern: 'NONE',
-      strength: { label: 'NO SIGNAL', cls: 'text-muted' },
+      strength: { label: 'WAIT', cls: 'text-muted' },
       exchanges: ['Binance'],
       leverage: 'None',
       entry1: 0, entry2: 0, entry3: 0,
@@ -2437,98 +2446,143 @@ function generateSignalForAsset(asset, options = {}) {
     const isScalp = type === 'SCALP';
     const rsi = Number(isScalp ? indicator?.rsi1m : indicator?.rsi15m);
     const emaSnap = isScalp ? indicator?.ema1m : indicator?.ema15m;
+    const macd = isScalp ? indicator?.macd1m : indicator?.macd15m;
     const volumeRatioMandatory = Number(isScalp ? indicator?.volumeVsAvg1m3 : indicator?.volumeVsAvg15m5);
-    const ema200_15m = Number(indicator?.ema200_15m);
-    const atr = Number(indicator?.atr);
-    const atrSafe = Number.isFinite(atr) && atr > 0 ? atr : price * (isScalp ? 0.0026 : 0.0044);
-    const atrPct = atrSafe / price;
     const spreadPct = Number(spread?.spreadPct);
 
-    if (!emaSnap) {
-      return buildWait(`${type}: EMA snapshot unavailable.`);
-    }
+    if (!emaSnap) return buildWait(`${type}:EMA_CROSS_FAIL`, type);
 
-    const crossLimit = isScalp ? 2 : 3;
+    // Relaxed mandatory gates
+    const crossLimit = isScalp ? 3 : 5;
     const bullCrossBars = Number(emaSnap.crossBarsAgoBullish);
     const bearCrossBars = Number(emaSnap.crossBarsAgoBearish);
     const bullCrossValid = Number.isFinite(bullCrossBars) && bullCrossBars <= crossLimit;
     const bearCrossValid = Number.isFinite(bearCrossBars) && bearCrossBars <= crossLimit;
-
-    const ema9Now = Number(emaSnap.ema9);
-    const ema21Now = Number(emaSnap.ema21);
-    const bullishTrendAligned = Number.isFinite(ema9Now) && Number.isFinite(ema21Now) && ema9Now > ema21Now;
-    const bearishTrendAligned = Number.isFinite(ema9Now) && Number.isFinite(ema21Now) && ema9Now < ema21Now;
-
     let side = null;
     if (bullCrossValid && !bearCrossValid) side = 'BUY';
     if (!bullCrossValid && bearCrossValid) side = 'SELL';
-    if (bullCrossValid && bearCrossValid) {
-      side = bullCrossBars <= bearCrossBars ? 'BUY' : 'SELL';
-    }
-    if (!side && bullishTrendAligned) side = 'BUY';
-    if (!side && bearishTrendAligned) side = 'SELL';
+    if (bullCrossValid && bearCrossValid) side = bullCrossBars <= bearCrossBars ? 'BUY' : 'SELL';
+    if (!side) return buildWait(`${type}:EMA_CROSS_FAIL`, type);
 
-    // Final fail-safe for flat/crossless moments: infer direction from price vs EMA9.
-    if (!side && Number.isFinite(ema9Now)) {
-      side = price >= ema9Now ? 'BUY' : 'SELL';
-    }
-
-    if (!side) {
-      return buildWait(`${type}: EMA alignment unavailable.`);
-    }
-
-    const volumeGateThreshold = isScalp ? 1.0 : 0.8;
+    const volumeGateThreshold = isScalp ? 0.8 : 0.7;
     if (!Number.isFinite(volumeRatioMandatory) || volumeRatioMandatory <= volumeGateThreshold) {
-      return buildWait(`${type}: Volume gate failed (${Number.isFinite(volumeRatioMandatory) ? volumeRatioMandatory.toFixed(2) : 'N/A'}x).`);
+      return buildWait(`${type}:VOLUME_FAIL`, type);
+    }
+    if (!Number.isFinite(spreadPct) || spreadPct >= 0.15) {
+      return buildWait(`${type}:SPREAD_FAIL`, type);
     }
 
+    // Pillars
     const pattern = classifyPattern(type, side);
+    const patternScore = pattern.valid ? (pattern.highReliability ? 120 : 100) : 50;
+    const rsiScore = Number.isFinite(rsi) ? clamp(100 - (Math.abs(rsi - 50) * 2), 0, 100) : 50;
+    const macdScore = computeMacdScore(macd, side);
+    const technicalScore = clamp((rsiScore * 0.3) + (macdScore * 0.4) + (patternScore * 0.3), 0, 100);
+    const whaleScore = computeWhaleActivityScore(side);
+    const emaConfluenceScore = computeEmaConfluenceScore(type, side);
+    const volumeScore = computeVolumeScore(volumeRatioMandatory);
+    const sentimentBase = Number.isFinite(Number(LIVE_SENTIMENT?.score)) ? clamp(Number(LIVE_SENTIMENT.score), 0, 100) : 50;
+    const sentimentScore = side === 'BUY' ? sentimentBase : (100 - sentimentBase);
+    const newsBase = computeNewsSentimentBase();
+    const newsScore = side === 'BUY' ? newsBase : (100 - newsBase);
+    const alphaSourcesScore = computeAlphaSourcesScore(side);
+    const regime = (sentimentBase > 65 || sentimentBase < 35) ? 'TRENDING' : 'RANGING';
 
-    const isBull = side === 'BUY';
-    let rawAlpha = 50;
-    if (Number.isFinite(volumeRatioMandatory) && volumeRatioMandatory > 1.5) rawAlpha += 10;
-    if (pattern.valid) rawAlpha += 15;
-    if (Number.isFinite(rsi) && rsi >= 40 && rsi <= 60) rawAlpha += 10;
+    const weights = regime === 'TRENDING'
+      ? { technical: 0.22, whale: 0.20, ema: 0.15, volume: 0.08, sentiment: 0.15, news: 0.12, alphaSources: 0.10 }
+      : { technical: 0.15, whale: 0.15, ema: 0.08, volume: 0.15, sentiment: 0.25, news: 0.15, alphaSources: 0.12 };
+    const rawAlpha =
+      (technicalScore * weights.technical) +
+      (whaleScore * weights.whale) +
+      (emaConfluenceScore * weights.ema) +
+      (volumeScore * weights.volume) +
+      (sentimentScore * weights.sentiment) +
+      (newsScore * weights.news) +
+      (alphaSourcesScore * weights.alphaSources);
+    const alpha = clamp(Math.round(rawAlpha), 0, 100);
 
-    if (Number.isFinite(ema200_15m)) {
-      if ((isBull && price > ema200_15m) || (!isBull && price < ema200_15m)) rawAlpha += 10;
-    }
-
-    if (Number.isFinite(spreadPct) && spreadPct > 0.1) rawAlpha -= 10;
-
-    const alpha = clamp(Math.round(Math.max(40, rawAlpha)), 0, 100);
+    const pillars = {
+      Technical: technicalScore,
+      Whale: whaleScore,
+      EMAConfluence: emaConfluenceScore,
+      Volume: volumeScore,
+      Sentiment: sentimentScore,
+      News: newsScore,
+      AlphaSources: alphaSourcesScore
+    };
+    const poorCount = Object.values(pillars).filter(v => Number(v) < 40).length;
+    if (poorCount >= 3) return buildWait(`${type}:TOO_MANY_POOR_PILLARS`, type);
+    if (technicalScore < 45) return buildWait(`${type}:PILLAR_FLOOR_FAIL:Technical`, type);
+    const emaFloor = regime === 'TRENDING' ? 50 : 40;
+    if (emaConfluenceScore < emaFloor) return buildWait(`${type}:PILLAR_FLOOR_FAIL:EMA`, type);
+    const volumeFloor = isScalp ? 40 : 35;
+    if (volumeScore < volumeFloor) return buildWait(`${type}:PILLAR_FLOOR_FAIL:Volume`, type);
+    const alphaThreshold = isScalp ? 65 : 70;
+    if (alpha < alphaThreshold) return buildWait(`${type}:ALPHA_BELOW_THRESHOLD`, type);
 
     const structure = getStructureLevels(type, side, price);
+    const isBull = side === 'BUY';
+    const atr = Number(indicator?.atr);
+    const atrSafe = Number.isFinite(atr) && atr > 0 ? atr : price * (isScalp ? 0.0026 : 0.0044);
+    const atrPct = atrSafe / price;
 
-    const riskAtrMult = isScalp ? 0.38 : 0.72;
-    const risk = atrSafe * riskAtrMult;
+    // Entry ladder: keep scalp entries close and directional.
     const entry1 = price;
-    const [, entry2, entry3] = deriveEntryLadder({ type, side, entry: entry1, atrSafe, structure });
-    const [t1, t2, t3, t4] = deriveTargetsFromStructure({
-      type,
-      side,
-      entry: entry1,
-      risk,
-      atrSafe,
-      structure
-    });
-    let sl = isBull ? Math.max(0.0000001, entry1 - risk) : entry1 + risk;
+    let entry2 = isBull ? (entry1 * (1 - 0.0008)) : (entry1 * (1 + 0.0008));
+    let entry3 = isBull ? (entry1 * (1 - 0.0015)) : (entry1 * (1 + 0.0015));
+    if (isBull && Array.isArray(structure?.entrySupports) && structure.entrySupports.length > 0) {
+      entry2 = Number(structure.entrySupports[0]) || entry2;
+      entry3 = Number(structure.entrySupports[1] || (entry2 * (1 - 0.0008))) || entry3;
+    }
+    if (!isBull && Array.isArray(structure?.entryResistances) && structure.entryResistances.length > 0) {
+      entry2 = Number(structure.entryResistances[0]) || entry2;
+      entry3 = Number(structure.entryResistances[1] || (entry2 * (1 + 0.0008))) || entry3;
+    }
+
+    // Fixed TP/SL profile from requested rules.
+    const isMajor = symbol === 'BTC' || symbol === 'ETH';
+    const cfg = isScalp
+      ? (isMajor ? { tp1: 0.25, tp2: 0.40, sl: 0.15, tp3: 0.60, tp4: 0.80 } : { tp1: 0.35, tp2: 0.50, sl: 0.20, tp3: 0.75, tp4: 1.05 })
+      : (isMajor ? { tp1: 1.0, tp2: 1.8, sl: 0.6, tp3: 2.5, tp4: 3.3 } : { tp1: 1.5, tp2: 2.5, sl: 0.8, tp3: 3.4, tp4: 4.6 });
+    const dir = isBull ? 1 : -1;
+    const pctToPrice = (pct) => entry1 * (1 + (dir * pct / 100));
+    const baseTargets = [pctToPrice(cfg.tp1), pctToPrice(cfg.tp2), pctToPrice(cfg.tp3), pctToPrice(cfg.tp4)];
+    const structuralTargets = (isBull ? (structure?.resistanceAbove || []) : (structure?.supportBelow || []))
+      .filter(v => Number.isFinite(Number(v)) && Number(v) > 0)
+      .map(Number)
+      .slice(0, 4);
+    const targets = [];
+    for (let i = 0; i < 4; i++) {
+      const candidate = Number.isFinite(structuralTargets[i]) ? structuralTargets[i] : baseTargets[i];
+      if (!targets.length) {
+        targets.push(candidate);
+        continue;
+      }
+      const prev = targets[targets.length - 1];
+      if (isBull) targets.push(Math.max(candidate, prev * 1.0006));
+      else targets.push(Math.min(candidate, prev * 0.9994));
+    }
+    const [t1, t2, t3, t4] = targets;
+
+    let sl = entry1 * (1 - (dir * cfg.sl / 100));
     if (isBull && Array.isArray(structure?.entrySupports) && structure.entrySupports[0] > 0) {
-      sl = Math.max(0.0000001, Math.min(sl, Number(structure.entrySupports[0])));
+      const structuralStop = Number(structure.entrySupports[0]) * 0.999;
+      if (Number.isFinite(structuralStop) && structuralStop > 0) sl = Math.max(sl, structuralStop);
     }
     if (!isBull && Array.isArray(structure?.entryResistances) && structure.entryResistances[0] > 0) {
-      sl = Math.max(sl, Number(structure.entryResistances[0]));
+      const structuralStop = Number(structure.entryResistances[0]) * 1.001;
+      if (Number.isFinite(structuralStop) && structuralStop > 0) sl = Math.min(sl, structuralStop);
     }
+    sl = Math.max(0.0000001, sl);
 
     const riskPerUnit = Math.abs(entry1 - sl);
     const reward = Math.abs(t2 - entry1);
     const rrRatio = riskPerUnit > 0 ? (reward / riskPerUnit).toFixed(2) : '0.00';
 
-    const leverage = atrPct > 0.03
-      ? (isScalp ? 'Cross 5x' : 'Cross 4x')
-      : (isScalp ? 'Cross 10x' : 'Cross 6x');
+    const leverage = isScalp ? 'Cross 10x' : 'Cross 6x';
 
     const timestampUtc = new Date().toISOString();
+    const patternName = pattern.valid ? pattern.name : 'NONE';
     const signalText = [
       'SIGNAL',
       type,
@@ -2538,7 +2592,7 @@ function generateSignalForAsset(asset, options = {}) {
       formatPrice(t1),
       formatPrice(t2),
       formatPrice(sl),
-      'NONE',
+      patternName,
       timestampUtc,
       String(alpha)
     ].join('|');
@@ -2547,7 +2601,7 @@ function generateSignalForAsset(asset, options = {}) {
       type,
       isBull,
       side,
-      pattern: pattern.valid ? pattern.name : 'NONE',
+      pattern: patternName,
       strength: alpha >= 85 ? { label: 'HIGH CONVICTION', cls: 'text-green' } : { label: 'CONFIRMED', cls: 'text-primary' },
       exchanges: ['Binance Futures'],
       leverage,
@@ -2563,15 +2617,18 @@ function generateSignalForAsset(asset, options = {}) {
       atrPct,
       alpha,
       signalText,
+      signalLines: [signalText],
       timestampUtc,
-      gateSummary: `${type} gates passed (EMA cross recency + relaxed volume).`,
+      gateSummary: `${type} mandatory gates passed.`,
       pillarScores: {
-        base: 50,
-        volume: Number.isFinite(volumeRatioMandatory) && volumeRatioMandatory > 1.5 ? 10 : 0,
-        pattern: pattern.valid ? 15 : 0,
-        rsi: Number.isFinite(rsi) && rsi >= 40 && rsi <= 60 ? 10 : 0,
-        ema200: Number.isFinite(ema200_15m) && ((isBull && price > ema200_15m) || (!isBull && price < ema200_15m)) ? 10 : 0,
-        spreadPenalty: Number.isFinite(spreadPct) && spreadPct > 0.1 ? -10 : 0
+        regime,
+        technical: Math.round(technicalScore),
+        whale: Math.round(whaleScore),
+        emaConfluence: Math.round(emaConfluenceScore),
+        volume: Math.round(volumeScore),
+        sentiment: Math.round(sentimentScore),
+        news: Math.round(newsScore),
+        alphaSources: Math.round(alphaSourcesScore)
       },
       waitReason: ''
     };
@@ -2582,14 +2639,16 @@ function generateSignalForAsset(asset, options = {}) {
 
   const candidates = [day, scalp].filter(s => s.type !== 'WAIT');
   if (!candidates.length) {
+    const mergedLines = [scalp?.signalText, day?.signalText].filter(Boolean);
     return {
       ...buildWait(`${day.waitReason} | ${scalp.waitReason}`),
-      type: 'WAIT'
+      type: 'WAIT',
+      signalLines: mergedLines.length ? mergedLines : undefined
     };
   }
   candidates.sort((a, b) => (b.alpha - a.alpha) || (a.type === 'DAY' ? -1 : 1));
   const best = candidates[0];
-  best.signalLines = candidates.map(c => c.signalText);
+  best.signalLines = [scalp?.signalText, day?.signalText].filter(Boolean);
   return best;
 }
 

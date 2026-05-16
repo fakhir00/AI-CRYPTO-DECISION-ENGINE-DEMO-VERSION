@@ -2251,94 +2251,87 @@ function buildApiDrivenTradePlan({ symbol = 'BTC', userQuery = '', assetContext 
 
   const bias = evaluateDirectionalBias(snap, candleData, userQuery);
   const direction = bias.direction;
-  const confidence = normalizeTradeConfidence(bias.confidence);
-
-  const atr = toNumber(candleData?.atr);
-  const safeAtr = atr && atr > 0 ? atr : Math.max(current * 0.0075, current * 0.0028);
-  const atrPct = (safeAtr / current) * 100;
-  const swingHigh = toNumber(candleData?.swingHigh);
-  const swingLow = toNumber(candleData?.swingLow);
-  const range = (swingHigh !== null && swingLow !== null && swingHigh > swingLow) ? (swingHigh - swingLow) : 0;
-  const pos = range > 0 ? (current - swingLow) / range : 0.5;
-  const change = toNumber(snap?.changePct) ?? 0;
-  const volHigh = atrPct >= 3.5;
-  const volLow = atrPct <= 1.2;
+  const isLong = direction !== 'SHORT';
+  const isMajor = ['BTC', 'ETH'].includes(String(symbol || '').toUpperCase());
   const leverageLabel = deriveScalpLeverageLabel(candleData, bias.confidence);
 
-  let offset = direction === 'SHORT' ? 0.06 : -0.06;
-  if (direction === 'LONG') {
-    if (change >= 3 && bias.confidence >= 2) offset = -0.03;
-    else if (change <= -0.8 || pos > 0.7) offset = -0.11;
-    else if (bias.confidence < 1) offset = -0.08;
+  // Scalp-first execution profile from latest rule set.
+  const scalpCfg = isMajor
+    ? { tp1: 0.25, tp2: 0.40, tp3: 0.60, tp4: 0.80, sl: 0.15 }
+    : { tp1: 0.35, tp2: 0.50, tp3: 0.75, tp4: 1.05, sl: 0.20 };
+  const dir = isLong ? 1 : -1;
+
+  const localSupports = (Array.isArray(candleData?.localSupports) ? candleData.localSupports : [])
+    .map(toNumber)
+    .filter(v => v !== null && v > 0 && v < current)
+    .sort((a, b) => b - a);
+  const localResistances = (Array.isArray(candleData?.localResistances) ? candleData.localResistances : [])
+    .map(toNumber)
+    .filter(v => v !== null && v > 0 && v > current)
+    .sort((a, b) => a - b);
+  const maxEntryDistPct = 0.45;
+
+  const entry1 = current;
+  let entry2 = isLong ? entry1 * (1 - 0.0008) : entry1 * (1 + 0.0008);
+  let entry3 = isLong ? entry1 * (1 - 0.0015) : entry1 * (1 + 0.0015);
+  if (isLong && localSupports.length > 0) {
+    const s1 = localSupports[0];
+    const s2 = localSupports[1] ?? (s1 * 0.9992);
+    if (((entry1 - s1) / entry1) * 100 <= maxEntryDistPct) entry2 = s1;
+    if (((entry1 - s2) / entry1) * 100 <= (maxEntryDistPct * 1.25)) entry3 = s2;
+  }
+  if (!isLong && localResistances.length > 0) {
+    const r1 = localResistances[0];
+    const r2 = localResistances[1] ?? (r1 * 1.0008);
+    if (((r1 - entry1) / entry1) * 100 <= maxEntryDistPct) entry2 = r1;
+    if (((r2 - entry1) / entry1) * 100 <= (maxEntryDistPct * 1.25)) entry3 = r2;
+  }
+  if (isLong) {
+    if (!(entry2 < entry1)) entry2 = entry1 * 0.9992;
+    if (!(entry3 < entry2)) entry3 = entry2 * 0.9992;
   } else {
-    if (change <= -3 && bias.confidence >= 2) offset = 0.03;
-    else if (change >= 0.8 || pos < 0.3) offset = 0.11;
-    else if (bias.confidence < 1) offset = 0.08;
+    if (!(entry2 > entry1)) entry2 = entry1 * 1.0008;
+    if (!(entry3 > entry2)) entry3 = entry2 * 1.0008;
   }
 
-  let entryStep1 = volHigh ? 0.28 : (volLow ? 0.16 : 0.22);
-  let entryStep2 = volHigh ? 0.52 : (volLow ? 0.30 : 0.40);
-  if (confidence >= 0.75) {
-    entryStep1 *= 0.9;
-    entryStep2 *= 0.9;
-  } else if (confidence <= 0.35) {
-    entryStep1 *= 1.1;
-    entryStep2 *= 1.1;
+  const pctToPrice = (pct) => entry1 * (1 + ((dir * pct) / 100));
+  const baseTargets = [pctToPrice(scalpCfg.tp1), pctToPrice(scalpCfg.tp2), pctToPrice(scalpCfg.tp3), pctToPrice(scalpCfg.tp4)];
+  const structureTargets = getDirectionalStructureLevels(direction, entry1, candleData)
+    .filter(level => {
+      const distPct = Math.abs((level - entry1) / entry1) * 100;
+      return distPct <= (isMajor ? 2.2 : 3.0);
+    })
+    .slice(0, 4);
+
+  const mergedTargets = [];
+  for (let i = 0; i < 4; i++) {
+    const candidate = Number.isFinite(structureTargets[i]) ? structureTargets[i] : baseTargets[i];
+    if (!mergedTargets.length) {
+      mergedTargets.push(candidate);
+      continue;
+    }
+    const prev = mergedTargets[mergedTargets.length - 1];
+    if (isLong) mergedTargets.push(Math.max(candidate, prev * 1.0006));
+    else mergedTargets.push(Math.min(candidate, prev * 0.9994));
   }
 
-  let entry1 = current + (offset * safeAtr);
-  let entry2 = direction === 'LONG' ? entry1 - (entryStep1 * safeAtr) : entry1 + (entryStep1 * safeAtr);
-  let entry3 = direction === 'LONG' ? entry1 - (entryStep2 * safeAtr) : entry1 + (entryStep2 * safeAtr);
-
-  if (direction === 'LONG') {
-    entry1 = Math.max(0, entry1);
-    entry2 = Math.max(0, entry2);
-    entry3 = Math.max(0, entry3);
-    if (entry2 >= entry1) entry2 = Math.max(0, entry1 * 0.995);
-    if (entry3 >= entry2) entry3 = Math.max(0, entry2 * 0.995);
-  } else {
-    if (entry2 <= entry1) entry2 = entry1 * 1.005;
-    if (entry3 <= entry2) entry3 = entry2 * 1.005;
+  let stop = entry1 * (1 - ((dir * scalpCfg.sl) / 100));
+  if (isLong && localSupports.length > 0) {
+    stop = Math.max(stop, localSupports[0] * 0.999);
   }
-
-  let stopMult = volHigh ? 0.78 : (volLow ? 0.48 : 0.62);
-  if (confidence >= 0.75) stopMult *= 0.92;
-  else if (confidence <= 0.35) stopMult *= 1.10;
-
-  let stop = direction === 'LONG' ? entry1 - (stopMult * safeAtr) : entry1 + (stopMult * safeAtr);
-  if (direction === 'LONG' && swingLow !== null) {
-    stop = Math.min(stop, swingLow - (0.03 * safeAtr));
+  if (!isLong && localResistances.length > 0) {
+    stop = Math.min(stop, localResistances[0] * 1.001);
   }
-  if (direction === 'SHORT' && swingHigh !== null) {
-    stop = Math.max(stop, swingHigh + (0.03 * safeAtr));
-  }
-  if (direction === 'LONG') stop = Math.max(0, stop);
+  stop = Math.max(0.0000001, stop);
 
-  let risk = Math.abs(entry1 - stop);
-  const riskEnvelope = getScalpRiskEnvelope(candleData, bias.confidence);
-  const rawRiskPct = (entry1 > 0 && risk > 0) ? ((risk / entry1) * 100) : null;
-  const clampedRiskPct = clampBetween(
-    rawRiskPct ?? ((riskEnvelope.minRiskPct + riskEnvelope.maxRiskPct) / 2),
-    riskEnvelope.minRiskPct,
-    riskEnvelope.maxRiskPct
-  );
-  risk = entry1 * (clampedRiskPct / 100);
-  stop = direction === 'LONG'
-    ? Math.max(0.0000001, entry1 - risk)
-    : entry1 + risk;
-
-  const targets = buildScalpTargetsFromStructure(direction, entry1, risk, candleData, bias.confidence);
-
-  const minPrice = Math.max(current * 0.02, 0.0000001);
   const sanitizePositive = (n, fallback = current) => {
     const x = toNumber(n);
     if (!(x > 0)) return fallback;
     return x;
   };
-
   const sanitizedEntries = [entry1, entry2, entry3].map(v => sanitizePositive(v, current));
-  const sanitizedTargets = targets.map(v => sanitizePositive(v, minPrice));
-  const sanitizedStop = sanitizePositive(stop, direction === 'SHORT' ? entry1 * 1.008 : entry1 * 0.992);
+  const sanitizedTargets = mergedTargets.map(v => sanitizePositive(v, entry1));
+  const sanitizedStop = sanitizePositive(stop, isLong ? entry1 * 0.9985 : entry1 * 1.0015);
 
   const planSymbol = String(symbol || '').toUpperCase();
   const planChangePct = toNumber(snap?.changePct) ?? toNumber(candleData?.changePct);
