@@ -7,6 +7,7 @@ import { supabase } from './lib/supabase.js';
 // --- Navigation & Setup ---
 const NAV_ITEMS = [
   { id: 'dashboard', label: 'Dashboard Overview', icon: 'grid' },
+  { id: 'quant-feed', label: 'Quant V6.0 Live Feed', icon: 'terminal', beta: true },
   { id: 'opportunities', label: 'Top Opportunities', icon: 'trending-up' },
   { id: 'trading', label: 'Nexus Trading View', icon: 'monitor' },
   { id: 'ai-research', label: 'AI Research Analyst', icon: 'cpu' },
@@ -567,6 +568,54 @@ async function initApp() {
   
   // UI Visual Heartbeat (flashes text)
   setInterval(simulateMarketTick, 3000);
+
+  // Nexus Quant V6.0 Scanner (Runs every 60 seconds)
+  startNexusQuantScanner();
+  setInterval(startNexusQuantScanner, 60000);
+}
+
+async function startNexusQuantScanner() {
+  const pairs = ['BTC', 'ETH', 'SOL', 'BNB'];
+  const feedContainer = document.getElementById('quant-live-feed-content');
+  if (!feedContainer) return;
+
+  const timestamp = new Date().toLocaleTimeString();
+  console.log(`[${timestamp}] NEXUS QUANT V6.0: Starting scan...`);
+
+  for (const pair of pairs) {
+    // Scan SCALP (1m)
+    const scalpSignal = await import('./api.js').then(m => m.evaluateNexusSignal(pair, 'SCALP'));
+    appendQuantSignal(scalpSignal);
+    
+    // Scan DAY (15m)
+    const daySignal = await import('./api.js').then(m => m.evaluateNexusSignal(pair, 'DAY'));
+    appendQuantSignal(daySignal);
+  }
+}
+
+function appendQuantSignal(signalString) {
+  const container = document.getElementById('quant-live-feed-content');
+  if (!container) return;
+
+  const isSignal = signalString.startsWith('SIGNAL');
+  const line = document.createElement('div');
+  line.className = `quant-feed-line ${isSignal ? 'is-signal' : 'is-no-signal'}`;
+  
+  // Format the output for better readability while keeping the raw string feel
+  const parts = signalString.split('|');
+  const type = parts[0];
+  
+  line.innerHTML = `
+    <span class="feed-timestamp">[${new Date().toLocaleTimeString()}]</span>
+    <span class="feed-raw-string">${signalString}</span>
+  `;
+
+  container.prepend(line);
+  
+  // Keep only last 50 lines
+  while (container.children.length > 50) {
+    container.removeChild(container.lastChild);
+  }
 }
 
 async function testSupabase() {
@@ -614,7 +663,8 @@ async function initCharts(timeframe = '24H') {
   }
 
   // Use BTC as the "Market Sentiment Proxy" for the dashboard trendline
-  const dataPoints = await fetchChartData('BTC', interval, limit) || Array(limit).fill(64000);
+  const chartData = await fetchChartData('BTC', interval, limit);
+  const dataPoints = chartData ? chartData.map(c => c.close) : Array(limit).fill(64000);
 
   mainMarketChart = new Chart(ctxMain, {
     type: 'line',
