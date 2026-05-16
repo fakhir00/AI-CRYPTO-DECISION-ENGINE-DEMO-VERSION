@@ -1508,24 +1508,90 @@ function buildDirectionalEntryLadder(direction = 'LONG', rawEntries = [], candle
   if (unique.length >= 3) {
     return unique
       .slice(0, 3)
-      .sort((a, b) => side === 'LONG' ? a - b : b - a);
+      .sort((a, b) => side === 'LONG' ? b - a : a - b);
   }
 
-  const minStep = Math.max(base * 0.0008, 0.0000001);
-  const maxStep = Math.max(base * 0.0015, minStep);
+  const minStep = Math.max(base * 0.0050, 0.0000001);
+  const maxStep = Math.max(base * 0.0100, minStep);
   const adaptiveStep = atr && atr > 0
-    ? clampBetween(atr * 0.18, minStep, maxStep)
-    : Math.max(base * 0.0010, minStep);
+    ? clampBetween(atr * 0.35, minStep, maxStep)
+    : Math.max(base * 0.0065, minStep);
 
   if (side === 'SHORT') {
-    return [base + (2 * adaptiveStep), base + adaptiveStep, base];
+    return [base, base + adaptiveStep, base + (2 * adaptiveStep)];
   }
 
   return [
-    Math.max(0.0000001, base - (2 * adaptiveStep)),
+    base,
     Math.max(0.0000001, base - adaptiveStep),
-    base
+    Math.max(0.0000001, base - (2 * adaptiveStep))
   ];
+}
+
+function getFibRetracementLevels(candleData = null) {
+  const swingHigh = toNumber(candleData?.swingHigh);
+  const swingLow = toNumber(candleData?.swingLow);
+  if (swingHigh === null || swingLow === null || !(swingHigh > swingLow)) return [];
+  const range = swingHigh - swingLow;
+  return [0.382, 0.5, 0.618].map(r => swingHigh - (range * r));
+}
+
+function deriveKeyLevelMeta(direction = 'LONG', candleData = null, fallbackLevel = null) {
+  const side = String(direction).toUpperCase() === 'SHORT' ? 'SHORT' : 'LONG';
+  const current = toNumber(candleData?.currentPrice);
+  const atr = toNumber(candleData?.atr);
+  const swingHigh = toNumber(candleData?.swingHigh);
+  const swingLow = toNumber(candleData?.swingLow);
+  const fibLevels = getFibRetracementLevels(candleData);
+
+  const localSupportObjs = (Array.isArray(candleData?.localSupports) ? candleData.localSupports : [])
+    .map(toNumber)
+    .filter(v => v !== null && v > 0)
+    .map(price => ({ price, source: 'local' }));
+  const localResistanceObjs = (Array.isArray(candleData?.localResistances) ? candleData.localResistances : [])
+    .map(toNumber)
+    .filter(v => v !== null && v > 0)
+    .map(price => ({ price, source: 'local' }));
+  const fibObjs = fibLevels.map(price => ({ price, source: 'fibonacci' }));
+  const swingObjs = [
+    swingLow !== null ? { price: swingLow, source: 'swing' } : null,
+    swingHigh !== null ? { price: swingHigh, source: 'swing' } : null
+  ].filter(Boolean);
+
+  const rawLevels = side === 'LONG'
+    ? [...localSupportObjs, ...fibObjs, ...swingObjs]
+    : [...localResistanceObjs, ...fibObjs, ...swingObjs];
+  const levels = rawLevels
+    .filter(({ price }) => Number.isFinite(price) && price > 0)
+    .filter(({ price }) => {
+      if (current === null) return true;
+      return side === 'LONG' ? price <= current : price >= current;
+    })
+    .sort((a, b) => side === 'LONG' ? b.price - a.price : a.price - b.price);
+
+  const firstLevel = levels[0]?.price ?? null;
+  const keyLevel = firstLevel ?? toNumber(fallbackLevel) ?? current ?? 0;
+  const levelType = side === 'LONG' ? 'support' : 'resistance';
+
+  const tolerancePct = clampBetween(
+    ((atr !== null && current) ? ((atr / current) * 100) * 0.35 : 0.2),
+    0.12,
+    0.55
+  );
+  const nearby = rawLevels.filter(({ price }) => {
+    if (!(keyLevel > 0) || !(price > 0)) return false;
+    return ((Math.abs(price - keyLevel) / keyLevel) * 100) <= tolerancePct;
+  });
+  const confluence = new Set(nearby.map(l => l.source)).size;
+  const strength = (nearby.length >= 3 || confluence >= 2)
+    ? 'Strong'
+    : (nearby.length >= 2 ? 'Normal' : 'Weak');
+
+  return {
+    keyLevel,
+    levelType,
+    levelStrength: strength
+  };
 }
 
 function buildCanonicalSignalText(rawSignalText = '', fallbackSymbol = 'BTC', options = {}) {
@@ -1539,13 +1605,16 @@ function buildCanonicalSignalText(rawSignalText = '', fallbackSymbol = 'BTC', op
   const forcedPlan = options.forcedPlan || null;
   const direction = forcedPlan?.direction || parseSignalDirection(cleaned);
   const directionLabel = direction === 'SHORT' ? 'Short' : 'Long';
-  const leverageLabel = forcedPlan?.leverageLabel || deriveScalpLeverageLabel(options.candleData, options.tradeMeta?.confidence);
+  const planKeyMeta = deriveKeyLevelMeta(direction, options.candleData, forcedPlan?.entries?.[0] ?? null);
+  const keyLevelNum = toNumber(forcedPlan?.keyLevel) ?? planKeyMeta.keyLevel;
+  const keyLevelType = forcedPlan?.keyLevelType || planKeyMeta.levelType;
+  const keyLevelStrength = forcedPlan?.levelStrength || planKeyMeta.levelStrength;
 
   if (forcedPlan && Array.isArray(forcedPlan.entries) && Array.isArray(forcedPlan.targets) && forcedPlan.targets.length >= 4) {
     const entryNums = forcedPlan.entries
       .slice(0, 3)
       .map(toNumber)
-      .sort((a, b) => direction === 'SHORT' ? b - a : a - b);
+      .sort((a, b) => direction === 'SHORT' ? a - b : b - a);
     const targetNums = forcedPlan.targets.slice(0, 4).map(toNumber);
     const stopNum = toNumber(forcedPlan.stop);
     const forcedPlanValid =
@@ -1560,21 +1629,15 @@ function buildCanonicalSignalText(rawSignalText = '', fallbackSymbol = 'BTC', op
       const formattedEntries = entryNums.map(v => formatSignalPrice(v, options.candleData?.currentPrice || v));
       const formattedTargets = targetNums.map(v => formatSignalPrice(v, options.candleData?.currentPrice || v));
       const formattedStop = formatSignalPrice(stopNum, options.candleData?.currentPrice || stopNum);
-      const avgEntry = entryNums.reduce((sum, n) => sum + n, 0) / entryNums.length;
-      const trailingConfig = getDynamicTrailingConfig(direction, avgEntry, stopNum, options.candleData, {
-        confidence: options.tradeMeta?.confidence ?? forcedPlan?.confidence,
-        changePct: options.tradeMeta?.changePct,
-        patternBias: options.tradeMeta?.patternBias
-      });
-      const trailingBlock = buildTrailingConfigurationBlock(trailingConfig);
+      const formattedKeyLevel = formatSignalPrice(keyLevelNum, options.candleData?.currentPrice || keyLevelNum || entryNums[0]);
 
       return `#${symbol}/USDT
 
-Exchanges: Binance Futures
+Key Level: ${formattedKeyLevel} (${keyLevelType})
+
+Level Strength: ${keyLevelStrength}
 
 Signal Type: Regular (${directionLabel})
-
-Leverage: ${leverageLabel}
 
 Entry :
 (${formattedEntries[0]}, ${formattedEntries[1]}, ${formattedEntries[2]})
@@ -1583,12 +1646,11 @@ Take-Profit Targets:
 1) ${formattedTargets[0]}
 2) ${formattedTargets[1]}
 3) ${formattedTargets[2]}
-4) ${formattedTargets[3]}
 
 Stop Targets:
 1) ${formattedStop}
 
-${trailingBlock}`;
+Risk-Reward: 1:2`;
     }
   }
 
@@ -1694,34 +1756,28 @@ ${trailingBlock}`;
     stop = stop ? formatSignalPrice(stop, refPrice) : stop;
   }
 
-  const avgEntry = entryLadderNums.length ? (entryLadderNums.reduce((sum, n) => sum + n, 0) / entryLadderNums.length) : null;
-  const stopNum = toNumber(stop);
-  const trailingConfig = getDynamicTrailingConfig(direction, avgEntry, stopNum, options.candleData, {
-    confidence: options.tradeMeta?.confidence ?? forcedPlan?.confidence,
-    changePct: options.tradeMeta?.changePct,
-    patternBias: options.tradeMeta?.patternBias
-  });
-  const trailingBlock = buildTrailingConfigurationBlock(trailingConfig);
+  const fallbackKeyMeta = deriveKeyLevelMeta(direction, options.candleData, entryLadderNums[0] ?? null);
+  const formattedKeyLevel = formatSignalPrice(fallbackKeyMeta.keyLevel, refPrice);
 
   // If parsing fails, still return a cleaned copy-ready signal without forbidden annotations.
   if (entryLadder.length < 3 || targets.length < 4 || !stop) {
     const atrNum = toNumber(options.candleData?.atr) ?? Math.max(refPrice * 0.0075, 0.0001);
     const fallbackBase = refPrice;
-    const minStep = Math.max(fallbackBase * 0.0008, 0.0000001);
-    const maxStep = Math.max(fallbackBase * 0.0015, minStep);
+    const minStep = Math.max(fallbackBase * 0.0050, 0.0000001);
+    const maxStep = Math.max(fallbackBase * 0.0100, minStep);
     const ladderStep = atrNum > 0
-      ? clampBetween(atrNum * 0.18, minStep, maxStep)
-      : Math.max(fallbackBase * 0.0010, minStep);
+      ? clampBetween(atrNum * 0.35, minStep, maxStep)
+      : Math.max(fallbackBase * 0.0065, minStep);
     const autoEntryNums = entryLadderNums.length >= 3
       ? entryLadderNums
       : (direction === 'SHORT'
-        ? [fallbackBase + (2 * ladderStep), fallbackBase + ladderStep, fallbackBase]
-        : [Math.max(0.0000001, fallbackBase - (2 * ladderStep)), Math.max(0.0000001, fallbackBase - ladderStep), fallbackBase]);
+        ? [fallbackBase, fallbackBase + ladderStep, fallbackBase + (2 * ladderStep)]
+        : [fallbackBase, Math.max(0.0000001, fallbackBase - ladderStep), Math.max(0.0000001, fallbackBase - (2 * ladderStep))]);
     const autoEntries = autoEntryNums.map(v => formatSignalPrice(v, refPrice));
     const entryBase = autoEntryNums.length
       ? (autoEntryNums.reduce((sum, n) => sum + n, 0) / autoEntryNums.length)
       : refPrice;
-    const autoRiskPct = 0.42 / 100;
+    const autoRiskPct = 0.75 / 100;
     const autoStopNum = direction === 'SHORT'
       ? entryBase * (1 + autoRiskPct)
       : Math.max(0.0000001, entryBase * (1 - autoRiskPct));
@@ -1735,13 +1791,13 @@ ${trailingBlock}`;
     ).map(v => formatSignalPrice(Math.max(v, 0.0000001), refPrice));
     const autoStop = formatSignalPrice(autoStopNum, refPrice);
 
-    return `#${symbol}/USDT
+      return `#${symbol}/USDT
 
-Exchanges: Binance Futures
+Key Level: ${formattedKeyLevel} (${fallbackKeyMeta.levelType})
+
+Level Strength: ${fallbackKeyMeta.levelStrength}
 
 Signal Type: Regular (${directionLabel})
-
-Leverage: ${leverageLabel}
 
 Entry :
 (${autoEntries[0]}, ${autoEntries[1]}, ${autoEntries[2]})
@@ -1750,21 +1806,20 @@ Take-Profit Targets:
 1) ${autoTargets[0]}
 2) ${autoTargets[1]}
 3) ${autoTargets[2]}
-4) ${autoTargets[3]}
 
 Stop Targets:
 1) ${autoStop}
 
-${trailingBlock}`;
+Risk-Reward: 1:2`;
   }
 
   return `#${symbol}/USDT
 
-Exchanges: Binance Futures
+Key Level: ${formattedKeyLevel} (${fallbackKeyMeta.levelType})
+
+Level Strength: ${fallbackKeyMeta.levelStrength}
 
 Signal Type: Regular (${directionLabel})
-
-Leverage: ${leverageLabel}
 
 Entry :
 (${entryLadder[0]}, ${entryLadder[1]}, ${entryLadder[2]})
@@ -1773,12 +1828,11 @@ Take-Profit Targets:
 1) ${targets[0]}
 2) ${targets[1]}
 3) ${targets[2]}
-4) ${targets[3]}
 
 Stop Targets:
 1) ${stop}
 
-${trailingBlock}`;
+Risk-Reward: 1:2`;
 }
 
 function extractTradeRationales(text = '', symbol = 'COIN') {
@@ -1926,85 +1980,46 @@ function buildApiDrivenTradePlan({ symbol = 'BTC', userQuery = '', assetContext 
   const confidence = normalizeTradeConfidence(bias.confidence);
 
   const atr = toNumber(candleData?.atr);
-  const safeAtr = atr && atr > 0 ? atr : Math.max(current * 0.0075, current * 0.0028);
+  const safeAtr = atr && atr > 0 ? atr : Math.max(current * 0.008, current * 0.0035);
   const atrPct = (safeAtr / current) * 100;
-  const swingHigh = toNumber(candleData?.swingHigh);
-  const swingLow = toNumber(candleData?.swingLow);
-  const range = (swingHigh !== null && swingLow !== null && swingHigh > swingLow) ? (swingHigh - swingLow) : 0;
-  const pos = range > 0 ? (current - swingLow) / range : 0.5;
-  const change = toNumber(snap?.changePct) ?? 0;
-  const volHigh = atrPct >= 3.5;
-  const volLow = atrPct <= 1.2;
   const leverageLabel = deriveScalpLeverageLabel(candleData, bias.confidence);
+  const keyMeta = deriveKeyLevelMeta(direction, candleData, current);
+  const entry1Base = keyMeta.keyLevel > 0 ? keyMeta.keyLevel : current;
 
-  let offset = direction === 'SHORT' ? 0.06 : -0.06;
+  let entryStepPct = clampBetween(0.55 + (atrPct * 0.10), 0.50, 1.00);
+  if (confidence >= 0.75) entryStepPct = Math.max(0.50, entryStepPct - 0.08);
+  else if (confidence <= 0.35) entryStepPct = Math.min(1.00, entryStepPct + 0.08);
+  const entryStepPct2 = clampBetween(entryStepPct + 0.05, 0.50, 1.00);
+
+  let orderedEntries;
   if (direction === 'LONG') {
-    if (change >= 3 && bias.confidence >= 2) offset = -0.03;
-    else if (change <= -0.8 || pos > 0.7) offset = -0.11;
-    else if (bias.confidence < 1) offset = -0.08;
+    const entry1 = entry1Base;
+    const entry2 = Math.max(0.0000001, entry1 * (1 - (entryStepPct / 100)));
+    const entry3 = Math.max(0.0000001, entry2 * (1 - (entryStepPct2 / 100)));
+    orderedEntries = [entry1, entry2, entry3];
   } else {
-    if (change <= -3 && bias.confidence >= 2) offset = 0.03;
-    else if (change >= 0.8 || pos < 0.3) offset = 0.11;
-    else if (bias.confidence < 1) offset = 0.08;
+    const entry1 = entry1Base;
+    const entry2 = entry1 * (1 + (entryStepPct / 100));
+    const entry3 = entry2 * (1 + (entryStepPct2 / 100));
+    orderedEntries = [entry1, entry2, entry3];
   }
-
-  let entryStepAtr = volHigh ? 0.24 : (volLow ? 0.12 : 0.18);
-  if (confidence >= 0.75) {
-    entryStepAtr *= 0.9;
-  } else if (confidence <= 0.35) {
-    entryStepAtr *= 1.1;
-  }
-
-  const entryAnchor = Math.max(0.0000001, current + (offset * safeAtr));
-  const minEntryStep = Math.max(current * 0.0008, 0.0000001);
-  const maxEntryStep = Math.max(current * 0.0015, minEntryStep);
-  const ladderStep = clampBetween(entryStepAtr * safeAtr, minEntryStep, maxEntryStep);
-
-  let lowEntry;
-  let midEntry;
-  let highEntry;
-  if (direction === 'LONG') {
-    highEntry = entryAnchor;
-    midEntry = Math.max(0.0000001, highEntry - ladderStep);
-    lowEntry = Math.max(0.0000001, midEntry - ladderStep);
-  } else {
-    lowEntry = entryAnchor;
-    midEntry = lowEntry + ladderStep;
-    highEntry = midEntry + ladderStep;
-  }
-
-  const orderedEntries = direction === 'LONG'
-    ? [lowEntry, midEntry, highEntry]
-    : [highEntry, midEntry, lowEntry];
   const avgEntry = orderedEntries.reduce((sum, n) => sum + n, 0) / orderedEntries.length;
 
-  let stopMult = volHigh ? 0.65 : (volLow ? 0.52 : 0.58);
-  if (confidence >= 0.75) stopMult *= 0.95;
-  else if (confidence <= 0.35) stopMult *= 1.05;
+  let stopPct = clampBetween(entryStepPct + 0.10, 0.50, 1.00);
+  if (confidence >= 0.75) stopPct = Math.max(0.50, stopPct - 0.05);
+  else if (confidence <= 0.35) stopPct = Math.min(1.00, stopPct + 0.05);
 
-  let stop = direction === 'LONG' ? avgEntry - (stopMult * safeAtr) : avgEntry + (stopMult * safeAtr);
-  if (direction === 'LONG' && swingLow !== null) {
-    stop = Math.min(stop, swingLow - (0.03 * safeAtr));
-  }
-  if (direction === 'SHORT' && swingHigh !== null) {
-    stop = Math.max(stop, swingHigh + (0.03 * safeAtr));
-  }
-  if (direction === 'LONG') stop = Math.max(0, stop);
+  const entry3 = orderedEntries[2];
+  let stop = direction === 'LONG'
+    ? Math.max(0.0000001, entry3 * (1 - (stopPct / 100)))
+    : entry3 * (1 + (stopPct / 100));
 
-  let risk = Math.abs(avgEntry - stop);
-  const riskEnvelope = getScalpRiskEnvelope(candleData, bias.confidence);
-  const rawRiskPct = (avgEntry > 0 && risk > 0) ? ((risk / avgEntry) * 100) : null;
-  const clampedRiskPct = clampBetween(
-    rawRiskPct ?? ((riskEnvelope.minRiskPct + riskEnvelope.maxRiskPct) / 2),
-    riskEnvelope.minRiskPct,
-    riskEnvelope.maxRiskPct
-  );
-  risk = avgEntry * (clampedRiskPct / 100);
-  stop = direction === 'LONG'
-    ? Math.max(0.0000001, avgEntry - risk)
-    : avgEntry + risk;
-
-  const targets = buildScalpTargetsFromStructure(direction, avgEntry, risk, candleData, bias.confidence);
+  const risk = Math.max(Math.abs(avgEntry - stop), avgEntry * 0.0005);
+  const tp1 = direction === 'LONG' ? (avgEntry + (risk * 2)) : (avgEntry - (risk * 2));
+  const tp2 = direction === 'LONG' ? (tp1 + risk) : (tp1 - risk);
+  const tp3 = direction === 'LONG' ? (tp2 + risk) : (tp2 - risk);
+  const tp4 = direction === 'LONG' ? (tp3 + risk) : (tp3 - risk);
+  const targets = [tp1, tp2, tp3, tp4];
 
   const minPrice = Math.max(current * 0.02, 0.0000001);
   const sanitizePositive = (n, fallback = current) => {
@@ -2015,7 +2030,7 @@ function buildApiDrivenTradePlan({ symbol = 'BTC', userQuery = '', assetContext 
 
   const sanitizedEntries = orderedEntries.map(v => sanitizePositive(v, current));
   const sanitizedTargets = targets.map(v => sanitizePositive(v, minPrice));
-  const sanitizedStop = sanitizePositive(stop, direction === 'SHORT' ? avgEntry * 1.0042 : avgEntry * 0.9958);
+  const sanitizedStop = sanitizePositive(stop, direction === 'SHORT' ? avgEntry * 1.0075 : avgEntry * 0.9925);
 
   const planSymbol = String(symbol || '').toUpperCase();
   const planChangePct = toNumber(snap?.changePct) ?? toNumber(candleData?.changePct);
@@ -2026,6 +2041,10 @@ function buildApiDrivenTradePlan({ symbol = 'BTC', userQuery = '', assetContext 
     entries: sanitizedEntries,
     targets: sanitizedTargets,
     stop: sanitizedStop,
+    keyLevel: keyMeta.keyLevel,
+    keyLevelType: keyMeta.levelType,
+    levelStrength: keyMeta.levelStrength,
+    riskRewardLabel: '1:2',
     leverageLabel,
     confidence: bias.confidence,
     changePct: planChangePct,
@@ -2057,17 +2076,17 @@ Your core decision-making is based on the NEXUS High-Probability Framework.
 CRITICAL: You are a DUAL-DIRECTIONAL agent. If the Alpha Score is low and the price change is negative, you MUST prefer SHORT setups. If the market is chopping sideways, stay NEUTRAL and advise against trading. Do not force Longs in a Bearish market. Never "guess" a direction—if the data is bearish, the signal MUST be SHORT.
 
 MATHEMATICAL TARGET GENERATION (STRICT): You will be provided with PRE-CALCULATED MANDATORY targets based on live Volatility (ATR) and Risk-Reward constraints in the context (under "MANDATORY LONG/SHORT TARGETS"). 
-CRITICAL: You MUST use the exact Entry, Stop Loss, and TP1-TP4 values provided in the context. Do NOT calculate your own. If the context says the Stop Loss is $3.85, you output $3.85. No exceptions. This ensures all devices (PC and Mobile) show identical signals.
-CRITICAL SCALP RULE: Every signal is SCALPING only. Keep stop-loss tight and set TP1-TP4 using the nearest local structure levels (resistance for LONG, support for SHORT). Never output distant swing targets.
+CRITICAL: You MUST use the exact Entry, Stop Loss, and TP1-TP3 values provided in the context. Do NOT calculate your own. If the context says the Stop Loss is $3.85, you output $3.85. No exceptions. This ensures all devices (PC and Mobile) show identical signals.
+CRITICAL SCALP RULE: Every signal is SCALPING only. Keep stop-loss disciplined and set TP1-TP3 around nearby structure with minimum risk-reward 1:2.
 
 MANDATORY SIGNAL FORMAT (FOLLOW STRICTLY):
 # [SYMBOL]/USDT
 
-Exchanges: Binance Futures
+Key Level: [Price] (support/resistance)
+
+Level Strength: [Weak/Normal/Strong]
 
 Signal Type: Regular ([Long/Short])
-
-Leverage: Cross (4X-12X, volatility-adjusted)
 
 Entry :
 ([Price 1], [Price 2], [Price 3])
@@ -2076,30 +2095,18 @@ Take-Profit Targets:
 1) [Price]
 2) [Price]
 3) [Price]
-4) [Price]
 
 Stop Targets:
 1) [Price]
 
-Trailing Configuration:
-Stop: Percent Below Highest ([X]%)
-  - [Trail behavior based on conditions]
-Breakeven: Trigger at +[Y]% profit
-  - Stop moves to entry after +[Y]%.
-
-[SYMBOL] Trade Rationales
-1. [Rationale 1]
-2. [Rationale 2]
-3. [Rationale 3]
-4. [Rationale 4]
-5. [Rationale 5]
+Risk-Reward: 1:2
 
 CRITICAL: NEVER add "(1:1 R:R)", "(1:2 R:R)", "(1:3 R:R)", "(1:4 R:R)" or "(1.5 ATR)" anywhere in the signal. 
-CRITICAL: Trailing Configuration must adapt to market conditions (volatility/risk) and direction (LONG/SHORT); do not keep it fixed.
 CRITICAL ENTRY ORDER RULE:
-- LONG entries must be: ([Start Price], [Lower Entry], [Lower Entry]).
-- SHORT entries must be: ([Start Price], [Higher Entry], [Higher Entry]).
-- Start Price should be chosen intelligently from market structure and volatility (do NOT hard-lock it to current price).
+- LONG entries must be: Entry1 near support, Entry2 lower by 0.5%-1.0%, Entry3 lower by 0.5%-1.0%.
+- SHORT entries must be: Entry1 near resistance, Entry2 higher by 0.5%-1.0%, Entry3 higher by 0.5%-1.0%.
+- Stop loss must be 0.5%-1.0% beyond Entry3 in trade-invalidating direction.
+- TP1 must be exactly 2R from average entry, TP2 = 3R, TP3 = 4R.
 
 For all other queries, provide a single, highly optimized, data-driven response. Use markdown headers, bold text, and bullet points for readability.`
     };
@@ -2353,13 +2360,13 @@ export async function fetchDualAI(userQuery, assetContext = '') {
 
       const longStart = deriveAdaptiveStartFromCandle('LONG', p, atr, candleData) ?? p;
       const shortStart = deriveAdaptiveStartFromCandle('SHORT', p, atr, candleData) ?? p;
-      const ladderStep = clampBetween(atr * 0.18, p * 0.0008, p * 0.0015);
-      const longEntryMid = Math.max(0.0000001, longStart - ladderStep);
-      const longEntryLow = Math.max(0.0000001, longEntryMid - ladderStep);
-      const shortEntryMid = shortStart + ladderStep;
-      const shortEntryHigh = shortEntryMid + ladderStep;
-      const longAvgEntry = (longEntryLow + longEntryMid + longStart) / 3;
-      const shortAvgEntry = (shortEntryHigh + shortEntryMid + shortStart) / 3;
+      const stepPct = clampBetween(0.55 + (((atr / p) * 100) * 0.10), 0.50, 1.00);
+      const longEntry2 = Math.max(0.0000001, longStart * (1 - (stepPct / 100)));
+      const longEntry3 = Math.max(0.0000001, longEntry2 * (1 - ((stepPct + 0.05) / 100)));
+      const shortEntry2 = shortStart * (1 + (stepPct / 100));
+      const shortEntry3 = shortEntry2 * (1 + ((stepPct + 0.05) / 100));
+      const longAvgEntry = (longStart + longEntry2 + longEntry3) / 3;
+      const shortAvgEntry = (shortStart + shortEntry2 + shortEntry3) / 3;
 
       const longEnvelope = getScalpRiskEnvelope(candleData, tradeMeta?.confidence);
       const shortEnvelope = getScalpRiskEnvelope(candleData, tradeMeta?.confidence);
@@ -2367,8 +2374,16 @@ export async function fetchDualAI(userQuery, assetContext = '') {
       const shortRisk = shortAvgEntry * (((shortEnvelope.minRiskPct + shortEnvelope.maxRiskPct) / 2) / 100);
       const longSl = Math.max(0.0000001, longAvgEntry - longRisk);
       const shortSl = shortAvgEntry + shortRisk;
-      const longTargets = buildScalpTargetsFromStructure('LONG', longAvgEntry, longRisk, candleData, tradeMeta?.confidence);
-      const shortTargets = buildScalpTargetsFromStructure('SHORT', shortAvgEntry, shortRisk, candleData, tradeMeta?.confidence);
+      const longTargets = [
+        longAvgEntry + (longRisk * 2),
+        longAvgEntry + (longRisk * 3),
+        longAvgEntry + (longRisk * 4)
+      ];
+      const shortTargets = [
+        shortAvgEntry - (shortRisk * 2),
+        shortAvgEntry - (shortRisk * 3),
+        shortAvgEntry - (shortRisk * 4)
+      ];
 
       // Formatting helper to keep decimals sane
       const fmt = (n) => p < 1 ? n.toFixed(5) : p < 10 ? n.toFixed(4) : p < 1000 ? n.toFixed(2) : n.toFixed(1);
@@ -2396,20 +2411,18 @@ export async function fetchDualAI(userQuery, assetContext = '') {
 - Local Supports Below Price: ${supportLine}
 
 🚨 [CRITICAL: IF SIGNAL IS LONG, YOU MUST USE THESE EXACT VALUES IN THE OUTPUT]
-- Entry Ladder (MUST be ASCENDING for LONG: lowest, middle, highest): ($${fmt(longEntryLow)}, $${fmt(longEntryMid)}, $${fmt(longStart)})
+- Entry Ladder (MUST follow LONG scaling: entry1, entry2, entry3): ($${fmt(longStart)}, $${fmt(longEntry2)}, $${fmt(longEntry3)})
 - Stop Loss: $${fmt(longSl)}
-- TP1: $${fmt(longTargets[0] ?? (longAvgEntry + longRisk * 1.5))}
-- TP2: $${fmt(longTargets[1] ?? (longAvgEntry + longRisk * 2.1))}
-- TP3: $${fmt(longTargets[2] ?? (longAvgEntry + longRisk * 2.8))}
-- TP4: $${fmt(longTargets[3] ?? (longAvgEntry + longRisk * 3.6))}
+- TP1: $${fmt(longTargets[0] ?? (longAvgEntry + longRisk * 2))}
+- TP2: $${fmt(longTargets[1] ?? (longAvgEntry + longRisk * 3))}
+- TP3: $${fmt(longTargets[2] ?? (longAvgEntry + longRisk * 4))}
 
 🚨 [CRITICAL: IF SIGNAL IS SHORT, YOU MUST USE THESE EXACT VALUES IN THE OUTPUT]
-- Entry Ladder (MUST be DESCENDING for SHORT: highest, middle, lowest): ($${fmt(shortEntryHigh)}, $${fmt(shortEntryMid)}, $${fmt(shortStart)})
+- Entry Ladder (MUST follow SHORT scaling: entry1, entry2, entry3): ($${fmt(shortStart)}, $${fmt(shortEntry2)}, $${fmt(shortEntry3)})
 - Stop Loss: $${fmt(shortSl)}
-- TP1: $${fmt(shortTargets[0] ?? (shortAvgEntry - shortRisk * 1.5))}
-- TP2: $${fmt(shortTargets[1] ?? (shortAvgEntry - shortRisk * 2.1))}
-- TP3: $${fmt(shortTargets[2] ?? (shortAvgEntry - shortRisk * 2.8))}
-- TP4: $${fmt(shortTargets[3] ?? (shortAvgEntry - shortRisk * 3.6))}
+- TP1: $${fmt(shortTargets[0] ?? (shortAvgEntry - shortRisk * 2))}
+- TP2: $${fmt(shortTargets[1] ?? (shortAvgEntry - shortRisk * 3))}
+- TP3: $${fmt(shortTargets[2] ?? (shortAvgEntry - shortRisk * 4))}
 `;
     }
     if (hasDetectedCandlePatterns(candleData)) {
@@ -2425,9 +2438,12 @@ CRITICAL: Do NOT claim specific candlestick pattern names. Base rationale on pri
     const fmtPlan = (n) => formatSignalPrice(n, cp);
     enhancedContext += `\n\n🧮 API-DERIVED EXECUTION PLAN (HIGHEST PRIORITY):
 - Direction: ${apiTradePlan.direction}
+- Key Level: ${fmtPlan(apiTradePlan.keyLevel ?? apiTradePlan.entries[0])} (${apiTradePlan.keyLevelType || (apiTradePlan.direction === 'SHORT' ? 'resistance' : 'support')})
+- Level Strength: ${apiTradePlan.levelStrength || 'Normal'}
 - Entry Ladder: (${fmtPlan(apiTradePlan.entries[0])}, ${fmtPlan(apiTradePlan.entries[1])}, ${fmtPlan(apiTradePlan.entries[2])})
-- TP1-TP4: (${fmtPlan(apiTradePlan.targets[0])}, ${fmtPlan(apiTradePlan.targets[1])}, ${fmtPlan(apiTradePlan.targets[2])}, ${fmtPlan(apiTradePlan.targets[3])})
+- TP1-TP3: (${fmtPlan(apiTradePlan.targets[0])}, ${fmtPlan(apiTradePlan.targets[1])}, ${fmtPlan(apiTradePlan.targets[2])})
 - Stop: ${fmtPlan(apiTradePlan.stop)}
+- Risk-Reward: ${apiTradePlan.riskRewardLabel || '1:2'}
 - Confidence: ${formatPercentValue(apiTradePlan.confidence || 0)}
 CRITICAL: Use this plan exactly in the final signal format.`;
   }
