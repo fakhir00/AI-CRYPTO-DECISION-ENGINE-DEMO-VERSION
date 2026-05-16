@@ -46,7 +46,7 @@ const SIGNAL_SCAN_INTERVAL_MS = 60 * 1000;
 const SIGNAL_KLINE_LIMIT = 80;
 const SIGNAL_FETCH_TIMEOUT_MS = 6000;
 const SIGNAL_KLINE_CONCURRENCY = 10;
-const MIN_SIGNAL_RR_RATIO = 1.0;
+const MIN_SIGNAL_RR_RATIO = 1.5;
 const BREAKOUT_VOLUME_SPIKE_MULTIPLIER = 2.0;
 const BREAKOUT_RSI_MIN = 60;
 const BREAKOUT_RSI_MAX = 75;
@@ -895,39 +895,47 @@ function sigComputeAlpha(pillars = {}) {
 }
 
 function sigComputeTradePlan(symbol = 'BTC', direction = 'BUY', entry = 0, atrPct = 0, snapshot = null) {
-  const breakoutLevel = Number(snapshot?.breakout?.breakoutLevel);
-  const retestLow = Number(snapshot?.breakout?.retestLow);
-  const keyLow = Number(snapshot?.breakout?.recentKeyLow);
+  const entry1 = Number(entry) || 0;
+  const entry2 = direction === 'BUY'
+    ? entry1 * (1 - 0.0008)
+    : entry1;
+  const entry3 = direction === 'BUY'
+    ? entry1 * (1 - 0.0018)
+    : entry1 * (1 - 0.0012);
+  const shortEntry1 = direction === 'SELL' ? entry1 * (1 + 0.0012) : entry1;
+  const shortEntry2 = direction === 'SELL' ? entry1 : entry2;
+  const shortEntry3 = direction === 'SELL' ? entry1 * (1 - 0.0012) : entry3;
 
-  const entry2 = Number.isFinite(breakoutLevel) && breakoutLevel > 0
-    ? Math.min(entry, breakoutLevel * 1.0015)
-    : entry * 0.996;
-  const entry3 = Number.isFinite(retestLow) && retestLow > 0
-    ? Math.min(entry2, retestLow * 1.0015)
-    : entry * 0.992;
+  const finalEntry1 = direction === 'SELL' ? shortEntry1 : entry1;
+  const finalEntry2 = direction === 'SELL' ? shortEntry2 : entry2;
+  const finalEntry3 = direction === 'SELL' ? shortEntry3 : entry3;
+  const avgEntry = (finalEntry1 + finalEntry2 + finalEntry3) / 3;
+
+  const slOffsetPct = direction === 'BUY'
+    ? (atrPct > 0.5 ? 0.0040 : (atrPct < 0.2 ? 0.0025 : 0.0032))
+    : (atrPct > 0.5 ? 0.0050 : (atrPct < 0.2 ? 0.0035 : 0.0042));
+  const tp1OffsetPct = atrPct > 0.5 ? 0.0050 : (atrPct < 0.2 ? 0.0030 : 0.0040);
+  const tp2OffsetPct = Math.max(0.0060, tp1OffsetPct * 1.7);
+  const tp3OffsetPct = Math.max(0.0090, tp1OffsetPct * 2.5);
+  const tp4OffsetPct = Math.max(0.0120, tp1OffsetPct * 3.5);
 
   const dir = direction === 'BUY' ? 1 : -1;
-  const tp1 = entry * (1 + (dir * 0.020));
-  const tp2 = entry * (1 + (dir * 0.030));
-  const tp3 = entry * (1 + (dir * 0.040));
-  const tp4 = entry * (1 + (dir * 0.050));
-
-  let sl = direction === 'BUY'
-    ? entry * 0.985
-    : entry * 1.015;
-  if (direction === 'BUY' && Number.isFinite(keyLow) && keyLow > 0) {
-    const belowKeyLow = keyLow * 0.9985;
-    if (belowKeyLow < entry) sl = belowKeyLow;
-  }
+  const tp1 = avgEntry * (1 + (dir * tp1OffsetPct));
+  const tp2 = avgEntry * (1 + (dir * tp2OffsetPct));
+  const tp3 = avgEntry * (1 + (dir * tp3OffsetPct));
+  const tp4 = avgEntry * (1 + (dir * tp4OffsetPct));
+  const sl = direction === 'BUY'
+    ? avgEntry * (1 - slOffsetPct)
+    : avgEntry * (1 + slOffsetPct);
 
   let leverage = '8X-12X';
   if (atrPct > 0.5) leverage = '5X-8X';
   else if (atrPct < 0.2) leverage = '15X-25X';
 
   return {
-    entry1: entry,
-    entry2,
-    entry3,
+    entry1: finalEntry1,
+    entry2: finalEntry2,
+    entry3: finalEntry3,
     tp1,
     tp2,
     tp3,
@@ -1011,7 +1019,7 @@ function sigEvaluate(symbol, timeframe, snapshot, timestamp, spreadPct = null) {
   };
   const alpha = sigComputeAlpha(pillars);
   const levels = sigComputeTradePlan(symbol, direction, snapshot.price, snapshot.atrPct, snapshot);
-  const rrRatio = sigComputeRiskRewardRatio(levels.entry1, levels.tp4, levels.sl);
+  const rrRatio = sigComputeRiskRewardRatio(levels.entry1, levels.tp2, levels.sl);
   if (!(rrRatio >= MIN_SIGNAL_RR_RATIO)) {
     const out = sigNoSignal(timeframe, symbol, timestamp, 'RR_FAIL', Math.round(alpha), direction);
     out.patternSummary = snapshot.pattern?.summary || snapshot.pattern?.name || 'NONE';
@@ -2409,7 +2417,7 @@ function renderOpportunitiesPage() {
     tbody.innerHTML = `
       <tr>
         <td colspan="8" style="text-align:center;padding:1.25rem;color:var(--text-muted);">
-          No SCALP trades currently meet minimum risk/reward 1:1.
+          No SCALP trades currently meet minimum risk/reward 1:1.5.
         </td>
       </tr>
     `;
