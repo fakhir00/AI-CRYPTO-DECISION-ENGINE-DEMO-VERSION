@@ -2115,7 +2115,6 @@ function generateSignalForAsset(asset) {
     }
 
     const isBull = side === 'BUY';
-    const dir = isBull ? 1 : -1;
     const baseAlpha = 50;
     let alpha = baseAlpha;
 
@@ -2191,7 +2190,7 @@ function generateSignalForAsset(asset) {
     const riskAtrMult = isScalp ? 0.38 : 0.72;
     const risk = atrSafe * riskAtrMult;
     const entry1 = price;
-    const [_, entry2, entry3] = deriveEntryLadder({ type, side, entry: entry1, atrSafe, structure });
+    const [, entry2, entry3] = deriveEntryLadder({ type, side, entry: entry1, atrSafe, structure });
     const [t1, t2, t3, t4] = deriveTargetsFromStructure({
       type,
       side,
@@ -2215,7 +2214,7 @@ function generateSignalForAsset(asset) {
       'SIGNAL',
       type,
       `${symbol}/USDT`,
-      side,
+      isBull ? 'LONG' : 'SHORT',
       formatPrice(entry1),
       formatPrice(t1),
       formatPrice(t2),
@@ -2299,7 +2298,6 @@ function renderProSignals() {
 
     const dirIcon = sig.isBull ? '📈' : '📉';
     const dirLabel = sig.isBull ? 'LONG' : 'SHORT';
-    const dirClass = sig.isBull ? 'text-green' : 'text-red';
     const targetPct = (targetPrice) => {
       if (!(asset.price > 0) || !(targetPrice > 0)) return 0;
       const raw = sig.isBull
