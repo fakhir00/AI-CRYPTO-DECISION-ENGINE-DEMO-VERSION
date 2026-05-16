@@ -1428,7 +1428,8 @@ function renderOpportunitiesPage() {
       </td>
       <td><button class="action-btn">Analyze</button></td>
     </tr>
-  `}).join('');
+  `;
+  }).join('');
 
   document.querySelectorAll('#opportunities-table-body .action-btn').forEach(btn => {
     btn.addEventListener('click', (e) => {
@@ -1437,7 +1438,12 @@ function renderOpportunitiesPage() {
       
       navigateToPage('ai-research'); // Switch to AI Research Analyst Page
       setTimeout(() => {
-         triggerMcp(`Generate a strict quantitative algorithmic trade setup for ${symbol} using the provided market structure and candlestick patterns.`);
+        const input = document.getElementById('ai-chat-input');
+        const submitBtn = document.getElementById('ai-chat-submit');
+        if (input && submitBtn) {
+          input.value = `Generate a strict quantitative algorithmic trade setup for ${symbol} using the provided market structure and candlestick patterns.`;
+          submitBtn.click();
+        }
       }, 100);
     });
   });
