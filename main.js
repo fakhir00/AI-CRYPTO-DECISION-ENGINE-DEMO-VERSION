@@ -1,5 +1,5 @@
 import './style.css';
-import { fetchMarketData, fetchCandlePatterns, fetchGlobalMarketData, fetchWhaleActivity, fetchSentiment, fetchFearAndGreed, fetchAIAnalysis, fetchHermesAnalysis, fetchDualAI, calculateAlphaScore, fetchDefiPools, fetchNews, fetchTechnicalSignals, fetchTrendingNarratives, fetchChartData, fetchFundingRates, fetchOpenInterest, fetchOrderBookDepth, fetchBtcOnChain, fetchDuneMarketPulse, addToAIMemory, clearAIMemory, getAIMemory, getApiHealthSummary, getApiHealthPromptSummary } from './api.js';
+import { fetchMarketData, fetchCandlePatterns, fetchGlobalMarketData, fetchWhaleActivity, fetchSentiment, fetchFearAndGreed, fetchAIAnalysis, fetchHermesAnalysis, fetchDualAI, calculateAlphaScore, fetchDefiPools, fetchNews, fetchTechnicalSignals, fetchTrendingNarratives, fetchChartData, fetchFundingRates, fetchOpenInterest, fetchBidAskSpreads, fetchOrderBookDepth, fetchBtcOnChain, fetchDuneMarketPulse, addToAIMemory, clearAIMemory, getAIMemory, getApiHealthSummary, getApiHealthPromptSummary } from './api.js';
 import { setupAuth, openSignIn, logout, openUserProfile, clerk } from './lib/auth.js';
 import { supabase } from './lib/supabase.js';
 
@@ -42,11 +42,17 @@ let OPPORTUNITY_SORT = 'alpha';
 let CURRENT_MARKET_TIMEFRAME = '24H';
 const MAX_TRADABLE_ASSETS = 30;
 const MAX_TOP_OPPORTUNITIES = MAX_TRADABLE_ASSETS;
+const SIGNAL_SCAN_PAIRS = ['BTC', 'ETH', 'SOL', 'BNB'];
+const SIGNAL_SCAN_INTERVAL_MS = 60 * 1000;
+const SIGNAL_TIMEZONE = 'UTC';
 const STABLE_SYMBOLS = new Set([
   'USDT', 'USDC', 'DAI', 'BUSD', 'FDUSD', 'TUSD', 'PYUSD', 'USDE', 'USDD',
   'GUSD', 'LUSD', 'EURC', 'FRAX', 'USD1', 'USDS', 'USDP', 'USDB', 'RLUSD',
   'SUSD', 'MUSD', 'USD0', 'USDL', 'EURS', 'XAUT'
 ]);
+const LIVE_SIGNAL_CONTEXT = {};
+const LIVE_SIGNAL_PATTERNS = {};
+const LIVE_SPREADS = {};
 
 function isStablecoinSymbol(symbol = '', name = '', price = null) {
   const sym = String(symbol || '').toUpperCase().trim();
@@ -562,8 +568,8 @@ async function initApp() {
   // Verify Supabase Connectivity
   testSupabase();
 
-  // Real-time market data polling (every 20 seconds for high-precision accuracy)
-  setInterval(syncLiveApis, 20000);
+  // Real-time market data polling (every 60 seconds per signal scan protocol)
+  setInterval(syncLiveApis, SIGNAL_SCAN_INTERVAL_MS);
   
   // UI Visual Heartbeat (flashes text)
   setInterval(simulateMarketTick, 3000);
@@ -739,6 +745,11 @@ async function syncLiveApis() {
       .filter(c => !isStablecoinSymbol(c.symbol, c.name, c.current_price))
       .map(c => c.symbol.toUpperCase());
     const derivativeSymbols = topSymbols.slice(0, 15); // Top 15 for heavy OI/Funding data
+    const technicalSymbols = [...new Set([...derivativeSymbols, ...SIGNAL_SCAN_PAIRS])];
+    const signalPatternJobs = SIGNAL_SCAN_PAIRS.flatMap((sym) => ([
+      fetchCandlePatterns(sym, '1m').then(data => ({ symbol: sym, interval: '1m', data })).catch(() => ({ symbol: sym, interval: '1m', data: null })),
+      fetchCandlePatterns(sym, '15m').then(data => ({ symbol: sym, interval: '15m', data })).catch(() => ({ symbol: sym, interval: '15m', data: null }))
+    ]));
 
     // 2. Fetch all other data using discovered symbols
     const [
@@ -747,6 +758,7 @@ async function syncLiveApis() {
       chartPrices,
       fundingData,
       oiData,
+      spreadData,
       depthData,
       dunePulseData,
       btcChainData,
@@ -755,13 +767,15 @@ async function syncLiveApis() {
       globalMarketData,
       defiPoolsData,
       newsData,
-      technicalData
+      technicalData,
+      signalPatternData
     ] = await Promise.all([
       fetchWhaleActivity(),
       fetchTrendingNarratives(),
       fetchChartData('BTC'),
-      fetchFundingRates(derivativeSymbols),
-      fetchOpenInterest(derivativeSymbols),
+      fetchFundingRates(technicalSymbols),
+      fetchOpenInterest(technicalSymbols),
+      fetchBidAskSpreads(technicalSymbols),
       fetchOrderBookDepth('BTC'),
       fetchDuneMarketPulse(),
       fetchBtcOnChain(),
@@ -770,7 +784,8 @@ async function syncLiveApis() {
       fetchGlobalMarketData(),
       fetchDefiPools(),
       fetchNews(),
-      fetchTechnicalSignals(derivativeSymbols)
+      fetchTechnicalSignals(technicalSymbols),
+      Promise.all(signalPatternJobs)
     ]);
 
     // Update Global Narratives & Sentiment
@@ -808,6 +823,13 @@ async function syncLiveApis() {
     if (technicalData?.ema && Object.keys(technicalData.ema).length > 0) {
       window._liveEmaData = technicalData.ema;
     }
+    if (technicalData?.indicators && Object.keys(technicalData.indicators).length > 0) {
+      Object.keys(LIVE_SIGNAL_CONTEXT).forEach(k => delete LIVE_SIGNAL_CONTEXT[k]);
+      Object.entries(technicalData.indicators).forEach(([sym, metrics]) => {
+        LIVE_SIGNAL_CONTEXT[sym] = metrics;
+      });
+      window._liveSignalContext = LIVE_SIGNAL_CONTEXT;
+    }
 
     if (globalMarketData?.data) {
       window._liveGlobalMarketData = globalMarketData.data;
@@ -816,13 +838,31 @@ async function syncLiveApis() {
     // Store derivatives data globally
     if (fundingData && fundingData.length > 0) LIVE_FUNDING = fundingData;
     if (oiData && oiData.length > 0) LIVE_OI = oiData;
+    if (spreadData && spreadData.length > 0) {
+      Object.keys(LIVE_SPREADS).forEach(k => delete LIVE_SPREADS[k]);
+      spreadData.forEach(s => {
+        if (s?.symbol) LIVE_SPREADS[s.symbol] = s;
+      });
+    }
     if (depthData) LIVE_DEPTH = depthData;
     if (dunePulseData) LIVE_DUNE_PULSE = dunePulseData;
     if (btcChainData) LIVE_BTC_CHAIN = btcChainData;
+    if (Array.isArray(signalPatternData)) {
+      Object.keys(LIVE_SIGNAL_PATTERNS).forEach(k => delete LIVE_SIGNAL_PATTERNS[k]);
+      signalPatternData.forEach((row) => {
+        const symbol = String(row?.symbol || '').toUpperCase();
+        const interval = String(row?.interval || '').toLowerCase();
+        if (!symbol || !interval) return;
+        if (!LIVE_SIGNAL_PATTERNS[symbol]) LIVE_SIGNAL_PATTERNS[symbol] = {};
+        LIVE_SIGNAL_PATTERNS[symbol][interval] = row?.data || null;
+      });
+    }
     window._liveFundingData = LIVE_FUNDING;
     window._liveOiData = LIVE_OI;
     window._liveDepthData = LIVE_DEPTH;
     window._liveDunePulse = LIVE_DUNE_PULSE;
+    window._liveSpreads = LIVE_SPREADS;
+    window._liveSignalPatterns = LIVE_SIGNAL_PATTERNS;
 
     // Surface API status for debugging + AI context injection
     const apiHealth = getApiHealthSummary();
@@ -1815,128 +1855,421 @@ function formatPrice(num) {
 // ============================================================
 
 function generateSignalForAsset(asset) {
-  const p = asset.price;
-  const score = asset.score || 50;
-  const sym = asset.symbol;
-  const reasonText = String(asset.reason || '');
-  const bearishSetupHint = (asset.change <= -2.2) || /(bear|breakdown|distribution|top|contraction|rejection)/i.test(reasonText);
-  const bullishSetupHint = (asset.change >= 2.2) || /(bull|breakout|accumulation|ascending|squeeze|reversal)/i.test(reasonText);
-  
-  // ═══ GATE 1: WAIT PROTOCOL ═══
-  // Normally wait below threshold, but allow strong directional setups through.
-  const directionalOverride = (asset.bias === 'bearish' && bearishSetupHint) || (asset.bias === 'bullish' && bullishSetupHint);
-  if (score < 60 && !directionalOverride) {
-      return {
-          type: 'WAIT',
-          isBull: null,
-          strength: { label: 'NO TRADE ZONE', cls: 'text-muted' },
-          exchanges: ['Binance', 'Bybit'],
-          leverage: 'None',
-          entry1: 0, entry2: 0, entry3: 0,
-          t1: 0, t2: 0, t3: 0, t4: 0, sl: 0, rrRatio: '0.0',
-          waitReason: 'Alpha score below institutional threshold. Wait for confluence.'
-      };
+  const symbol = String(asset?.symbol || '').toUpperCase();
+  const price = Number(asset?.price);
+  if (!(price > 0)) {
+    return {
+      type: 'WAIT',
+      isBull: null,
+      strength: { label: 'NO DATA', cls: 'text-muted' },
+      exchanges: ['Binance'],
+      leverage: 'None',
+      entry1: 0, entry2: 0, entry3: 0,
+      t1: 0, t2: 0, t3: 0, t4: 0, sl: 0, rrRatio: '0.0',
+      waitReason: 'Price feed unavailable.',
+      signalText: ''
+    };
   }
 
-  let bias = asset.bias || 'neutral';
-  if (bias === 'neutral') {
-    if (bearishSetupHint && !bullishSetupHint) bias = 'bearish';
-    else if (bullishSetupHint && !bearishSetupHint) bias = 'bullish';
+  if (!SIGNAL_SCAN_PAIRS.includes(symbol)) {
+    return {
+      type: 'WAIT',
+      isBull: null,
+      strength: { label: 'OUTSIDE SCAN', cls: 'text-muted' },
+      exchanges: ['Binance'],
+      leverage: 'None',
+      entry1: 0, entry2: 0, entry3: 0,
+      t1: 0, t2: 0, t3: 0, t4: 0, sl: 0, rrRatio: '0.0',
+      waitReason: 'Pair not in 60s scan universe (BTC, ETH, SOL, BNB).',
+      signalText: ''
+    };
   }
-  const isBull = bias === 'bullish';
-  const isBear = bias === 'bearish';
-  
-  // ═══ GATE 2: BIAS PROTOCOL ═══
-  if (bias === 'neutral' || (!isBull && !isBear)) {
-      return {
-          type: 'WAIT',
-          isBull: null,
-          strength: { label: 'NEUTRAL ZONE', cls: 'text-muted' },
-          exchanges: ['Binance'],
-          leverage: 'None',
-          entry1: 0, entry2: 0, entry3: 0,
-          t1: 0, t2: 0, t3: 0, t4: 0, sl: 0, rrRatio: '0.0',
-          waitReason: 'Market bias is neutral. Institutional algorithms are in "Wait and See" mode.'
-      };
+
+  const indicator = LIVE_SIGNAL_CONTEXT[symbol] || {};
+  const spread = LIVE_SPREADS[symbol] || {};
+  const funding = LIVE_FUNDING.find(f => f.symbol === symbol) || { rate: null };
+  const oi = LIVE_OI.find(f => f.symbol === symbol) || { oi: null };
+  const dune = LIVE_DUNE_PULSE || null;
+  const dominanceData = window._liveGlobalMarketData || null;
+  const utcHour = new Date().getUTCHours();
+
+  const buildWait = (reason) => ({
+    type: 'WAIT',
+    isBull: null,
+    strength: { label: 'GATE BLOCK', cls: 'text-muted' },
+    exchanges: ['Binance'],
+    leverage: 'None',
+    entry1: 0, entry2: 0, entry3: 0,
+    t1: 0, t2: 0, t3: 0, t4: 0, sl: 0, rrRatio: '0.0',
+    waitReason: reason,
+    signalText: ''
+  });
+
+  const getBtcDominanceShiftPct = () => {
+    if (!dominanceData || typeof dominanceData !== 'object') return 0;
+    const direct = Number(dominanceData?.btc_dominance_24h_percentage_change);
+    if (Number.isFinite(direct)) return direct;
+
+    const now = Number(dominanceData?.btc_dominance);
+    const prev = Number(dominanceData?.btc_dominance_yesterday);
+    if (Number.isFinite(now) && Number.isFinite(prev)) return now - prev;
+
+    return 0;
+  };
+
+  const classifyPattern = (type, side) => {
+    const key = type === 'SCALP' ? '1m' : '15m';
+    const patternFeed = LIVE_SIGNAL_PATTERNS?.[symbol]?.[key];
+    const patterns = Array.isArray(patternFeed?.patterns) ? patternFeed.patterns : [];
+    if (!patterns.length) return { valid: false, highReliability: false, name: 'NONE' };
+
+    const alignedType = side === 'BUY' ? 'bullish' : 'bearish';
+    const aligned = patterns.find(p => String(p?.type || '').toLowerCase() === alignedType);
+    if (!aligned) return { valid: false, highReliability: false, name: 'NONE' };
+    const patternName = String(aligned?.name || 'Pattern').toUpperCase().replace(/\s+/g, '_');
+    const isScalpHigh = /(FLAG|ENGULFING|PIN|HAMMER|SHOOTING)/i.test(patternName);
+    const isDayHigh = /(CUP|HANDLE|HEAD|SHOULDERS|H&S|TRIANGLE|FLAG)/i.test(patternName);
+    const highReliability = type === 'SCALP' ? isScalpHigh : isDayHigh;
+    return { valid: true, highReliability, name: patternName };
+  };
+
+  const dedupeLevels = (levels = [], minGapPct = 0.08) => {
+    const sorted = [...levels]
+      .map(v => Number(v))
+      .filter(v => Number.isFinite(v) && v > 0)
+      .sort((a, b) => a - b);
+
+    const out = [];
+    for (const level of sorted) {
+      if (!out.length) {
+        out.push(level);
+        continue;
+      }
+      const prev = out[out.length - 1];
+      const gapPct = prev > 0 ? (Math.abs(level - prev) / prev) * 100 : 0;
+      if (gapPct >= minGapPct) out.push(level);
+    }
+    return out;
+  };
+
+  const getStructureLevels = (type, side, entry) => {
+    const key = type === 'SCALP' ? '1m' : '15m';
+    const feed = LIVE_SIGNAL_PATTERNS?.[symbol]?.[key] || {};
+    const minGapPct = type === 'SCALP' ? 0.06 : 0.10;
+    const maxDistPct = type === 'SCALP' ? 1.8 : 3.5;
+    const localRes = dedupeLevels(feed?.localResistances || [], minGapPct);
+    const localSup = dedupeLevels(feed?.localSupports || [], minGapPct);
+
+    const resistanceAbove = localRes
+      .filter(level => level > entry)
+      .filter((level) => ((level - entry) / entry) * 100 <= maxDistPct)
+      .sort((a, b) => a - b);
+
+    const supportBelow = localSup
+      .filter(level => level < entry)
+      .filter((level) => ((entry - level) / entry) * 100 <= maxDistPct)
+      .sort((a, b) => b - a);
+
+    const entrySupports = localSup.filter(level => level < entry).sort((a, b) => b - a);
+    const entryResistances = localRes.filter(level => level > entry).sort((a, b) => a - b);
+
+    return {
+      resistanceAbove,
+      supportBelow,
+      entrySupports,
+      entryResistances,
+      hasUsableTargets: side === 'BUY' ? resistanceAbove.length > 0 : supportBelow.length > 0
+    };
+  };
+
+  const deriveEntryLadder = ({ type, side, entry, atrSafe, structure }) => {
+    const isScalp = type === 'SCALP';
+    const isBull = side === 'BUY';
+    const step2 = atrSafe * (isScalp ? 0.07 : 0.16);
+    const step3 = atrSafe * (isScalp ? 0.13 : 0.30);
+
+    let entry2 = isBull ? Math.max(0.0000001, entry - step2) : entry + step2;
+    let entry3 = isBull ? Math.max(0.0000001, entry - step3) : entry + step3;
+
+    if (isBull && Array.isArray(structure?.entrySupports) && structure.entrySupports.length > 0) {
+      entry2 = Math.max(0.0000001, structure.entrySupports[0]);
+      entry3 = Math.max(0.0000001, structure.entrySupports[1] ?? (entry2 - (step2 * 0.9)));
+    }
+
+    if (!isBull && Array.isArray(structure?.entryResistances) && structure.entryResistances.length > 0) {
+      entry2 = structure.entryResistances[0];
+      entry3 = structure.entryResistances[1] ?? (entry2 + (step2 * 0.9));
+    }
+
+    // Keep a strict ladder direction and avoid equal levels.
+    if (isBull) {
+      if (!(entry2 < entry)) entry2 = Math.max(0.0000001, entry - Math.max(step2 * 0.7, entry * 0.0005));
+      if (!(entry3 < entry2)) entry3 = Math.max(0.0000001, entry2 - Math.max(step2 * 0.6, entry * 0.0004));
+    } else {
+      if (!(entry2 > entry)) entry2 = entry + Math.max(step2 * 0.7, entry * 0.0005);
+      if (!(entry3 > entry2)) entry3 = entry2 + Math.max(step2 * 0.6, entry * 0.0004);
+    }
+
+    return [entry, entry2, entry3];
+  };
+
+  const deriveTargetsFromStructure = ({ type, side, entry, risk, atrSafe, structure }) => {
+    const isScalp = type === 'SCALP';
+    const isBull = side === 'BUY';
+    const fallbackMult = isScalp ? [0.55, 0.90, 1.20, 1.55] : [0.80, 1.25, 1.75, 2.30];
+    const dir = isBull ? 1 : -1;
+    const maxDistPct = isScalp ? 2.1 : 4.0;
+    const minStep = entry * (isScalp ? 0.00045 : 0.00085);
+    const sourceLevels = isBull ? (structure?.resistanceAbove || []) : (structure?.supportBelow || []);
+    const targets = [];
+
+    for (const level of sourceLevels) {
+      if (targets.length >= 4) break;
+      if (isBull) {
+        if (targets.length && level <= targets[targets.length - 1] + minStep) continue;
+        targets.push(level);
+      } else {
+        if (targets.length && level >= targets[targets.length - 1] - minStep) continue;
+        targets.push(level);
+      }
+    }
+
+    while (targets.length < 4) {
+      const idx = targets.length;
+      let candidate = entry + (dir * Math.max(risk, atrSafe * 0.15) * fallbackMult[idx]);
+      const maxBound = entry * (1 + (maxDistPct / 100));
+      const minBound = entry * (1 - (maxDistPct / 100));
+      if (isBull) {
+        candidate = Math.min(candidate, maxBound);
+        const floor = targets.length ? targets[targets.length - 1] + minStep : entry + minStep;
+        if (candidate < floor) candidate = floor;
+      } else {
+        candidate = Math.max(candidate, minBound);
+        const ceiling = targets.length ? targets[targets.length - 1] - minStep : entry - minStep;
+        if (candidate > ceiling) candidate = ceiling;
+      }
+      targets.push(candidate);
+    }
+
+    return targets.slice(0, 4);
+  };
+
+  const evaluateCandidate = (type) => {
+    const isScalp = type === 'SCALP';
+    const macd = isScalp ? indicator?.macd1m : indicator?.macd15m;
+    const rsi = Number(isScalp ? indicator?.rsi1m : indicator?.rsi15m);
+    const volumeSpikeRatio = Number(isScalp ? indicator?.volumeSpikeRatio1m : indicator?.volumeSpikeRatio15m);
+    const ema9 = Number(indicator?.ema9);
+    const ema21 = Number(indicator?.ema21);
+    const atr = Number(indicator?.atr);
+    const atrSafe = Number.isFinite(atr) && atr > 0 ? atr : price * (isScalp ? 0.0026 : 0.0044);
+    const atrPct = atrSafe / price;
+
+    if (!macd || !Number.isFinite(macd.line) || !Number.isFinite(macd.signal) || !Number.isFinite(macd.histogram)) {
+      return buildWait(`${type}: MACD data unavailable.`);
+    }
+
+    let side = null;
+    if (macd.line > macd.signal && macd.histogram > 0) side = 'BUY';
+    if (macd.line < macd.signal && macd.histogram < 0) side = 'SELL';
+    if (!side) return buildWait(`${type}: MACD core trigger failed.`);
+
+    if (!isScalp) {
+      const dayExpansion = side === 'BUY'
+        ? (Number.isFinite(macd.histogramPrev) && macd.histogram > macd.histogramPrev)
+        : (Number.isFinite(macd.histogramPrev) && macd.histogram < macd.histogramPrev);
+      if (!dayExpansion) return buildWait('DAY: MACD histogram expansion missing.');
+    }
+
+    if (isScalp && utcHour >= 0 && utcHour < 6) return buildWait('SCALP rest period active (00-06 UTC).');
+    if (!isScalp && (utcHour >= 22 || utcHour < 8)) return buildWait('DAY rest period active (22-08 UTC).');
+
+    if (!Number.isFinite(ema9) || !Number.isFinite(ema21)) {
+      return buildWait(`${type}: EMA 9/21 unavailable.`);
+    }
+    const emaAligned = side === 'BUY' ? ema9 > ema21 : ema9 < ema21;
+    if (!emaAligned) return buildWait(`${type}: EMA 9/21 not aligned with side.`);
+
+    const rsiMin = isScalp ? 35 : 30;
+    const rsiMax = isScalp ? 65 : 70;
+    if (!Number.isFinite(rsi) || rsi < rsiMin || rsi > rsiMax) {
+      return buildWait(`${type}: RSI gate failed (${Number.isFinite(rsi) ? rsi.toFixed(1) : 'N/A'}).`);
+    }
+
+    if (!Number.isFinite(volumeSpikeRatio) || volumeSpikeRatio < 1.5) {
+      return buildWait(`${type}: Volume spike gate failed (${Number.isFinite(volumeSpikeRatio) ? volumeSpikeRatio.toFixed(2) : 'N/A'}x).`);
+    }
+
+    const pattern = classifyPattern(type, side);
+    if (!pattern.valid) return buildWait(`${type}: No valid chart pattern detected.`);
+
+    const spreadPct = Number(spread?.spreadPct);
+    const spreadThreshold = symbol === 'BTC' || symbol === 'ETH' ? 0.08 : 0.12;
+    if (!Number.isFinite(spreadPct) || spreadPct > spreadThreshold) {
+      return buildWait(`${type}: Spread gate failed (${Number.isFinite(spreadPct) ? spreadPct.toFixed(3) : 'N/A'}%).`);
+    }
+
+    const fundingRate = Number(funding?.rate);
+    if (!Number.isFinite(fundingRate) || fundingRate < -0.0002 || fundingRate > 0.0005) {
+      return buildWait(`${type}: Funding risk gate failed (${Number.isFinite(fundingRate) ? (fundingRate * 100).toFixed(4) : 'N/A'}%).`);
+    }
+
+    const isBull = side === 'BUY';
+    const dir = isBull ? 1 : -1;
+    const baseAlpha = 50;
+    let alpha = baseAlpha;
+
+    // 1) Market Momentum & Structure
+    if (isScalp ? macd.expansion : (isBull ? macd.expansion : macd.contraction)) alpha += isScalp ? 10 : 15;
+    if (Number.isFinite(macd.crossBarsAgo) && macd.crossBarsAgo <= (isScalp ? 2 : 3)) alpha += isScalp ? 8 : 10;
+    if (volumeSpikeRatio > (isScalp ? 2.0 : 1.5)) alpha += 5;
+    if (Number.isFinite(rsi) && rsi >= 45 && rsi <= 55) alpha += isScalp ? 5 : 10;
+
+    // 2) Pattern Quality
+    alpha += isScalp ? 15 : 20;
+    if (pattern.highReliability) alpha += isScalp ? 5 : 10;
+
+    // 3) Dune On-Chain Intelligence (cap ±25)
+    let duneDelta = 0;
+    if (dune && Number.isFinite(Number(dune.signalScore))) {
+      const duneScore = Number(dune.signalScore);
+      const duneBias = String(dune.bias || 'neutral').toLowerCase();
+      const volumeGrowth = Number(dune.volumeGrowthPct || 0);
+      const btcTxGrowth = Number(dune.btcTxGrowthPct || 0);
+
+      if ((isBull && duneBias === 'bullish') || (!isBull && duneBias === 'bearish')) duneDelta += isScalp ? 5 : 8;
+      if ((isBull && duneScore >= 62) || (!isBull && duneScore <= 38)) duneDelta += isScalp ? 6 : 8;
+      if ((isBull && volumeGrowth > 3) || (!isBull && volumeGrowth < -3)) duneDelta += isScalp ? 4 : 6;
+      if ((isBull && btcTxGrowth > 2) || (!isBull && btcTxGrowth < -2)) duneDelta += 3;
+
+      if ((isBull && duneBias === 'bearish') || (!isBull && duneBias === 'bullish')) duneDelta -= isScalp ? 10 : 15;
+      if ((isBull && duneScore <= 40) || (!isBull && duneScore >= 60)) duneDelta -= isScalp ? 6 : 10;
+    }
+    duneDelta = Math.max(-25, Math.min(25, duneDelta));
+    alpha += duneDelta;
+
+    // 4) Whale, Sentiment & Macro
+    const recentWhale = Array.isArray(WHALE_ACTIONS) && WHALE_ACTIONS.length > 0;
+    if (recentWhale) alpha += isScalp ? 10 : 15;
+
+    const sentimentScore = Number(LIVE_SENTIMENT?.score);
+    if (Number.isFinite(sentimentScore) && sentimentScore > 70) alpha += isScalp ? 5 : 8;
+    if (Number.isFinite(sentimentScore)) {
+      if ((isBull && sentimentScore < 35) || (!isBull && sentimentScore > 65)) alpha -= isScalp ? 15 : 20;
+    }
+
+    const fng = Number(LIVE_FNG?.value);
+    if (Number.isFinite(fng)) {
+      if ((isBull && fng <= 25) || (!isBull && fng >= 75)) alpha += isScalp ? 5 : 10;
+      if ((isBull && fng >= 75) || (!isBull && fng <= 25)) alpha -= isScalp ? 6 : 10;
+    }
+
+    const btcDomShift = getBtcDominanceShiftPct();
+    if (symbol !== 'BTC' && Number.isFinite(btcDomShift) && btcDomShift <= -0.5 && isBull) alpha += isScalp ? 0 : 8;
+
+    // Additional negative penalties
+    const oiValue = Number(oi?.oi);
+    if (Number.isFinite(oiValue) && oiValue < 10000) alpha -= isScalp ? 8 : 10;
+    if (Number.isFinite(fundingRate) && (fundingRate < -0.0005 || fundingRate > 0.0008)) alpha -= isScalp ? 10 : 15;
+
+    const headlineText = Array.isArray(NEWS)
+      ? NEWS.slice(0, 5).map(n => `${n?.title || ''}`).join(' ')
+      : '';
+    if (headlineText && /(hack|exploit|liquidation|lawsuit|ban|outage)/i.test(headlineText)) {
+      alpha -= isScalp ? 15 : 20;
+    }
+
+    alpha = Math.max(0, Math.min(100, Math.round(alpha)));
+    const threshold = isScalp ? 65 : 70;
+    if (alpha < threshold) return buildWait(`${type}: Alpha ${alpha} below threshold ${threshold}.`);
+
+    const structure = getStructureLevels(type, side, price);
+    if (!structure.hasUsableTargets) {
+      return buildWait(`${type}: Local ${isBull ? 'resistance' : 'support'} targets unavailable.`);
+    }
+
+    const riskAtrMult = isScalp ? 0.38 : 0.72;
+    const risk = atrSafe * riskAtrMult;
+    const entry1 = price;
+    const [_, entry2, entry3] = deriveEntryLadder({ type, side, entry: entry1, atrSafe, structure });
+    const [t1, t2, t3, t4] = deriveTargetsFromStructure({
+      type,
+      side,
+      entry: entry1,
+      risk,
+      atrSafe,
+      structure
+    });
+    const sl = isBull ? Math.max(0.0000001, entry1 - risk) : entry1 + risk;
+
+    const riskPerUnit = Math.abs(entry1 - sl);
+    const reward = Math.abs(t2 - entry1);
+    const rrRatio = riskPerUnit > 0 ? (reward / riskPerUnit).toFixed(2) : '0.00';
+
+    const leverage = atrPct > 0.03
+      ? (isScalp ? 'Cross 5x' : 'Cross 4x')
+      : (isScalp ? 'Cross 10x' : 'Cross 6x');
+
+    const timestampUtc = new Date().toISOString();
+    const signalText = [
+      'SIGNAL',
+      type,
+      `${symbol}/USDT`,
+      side,
+      formatPrice(entry1),
+      formatPrice(t1),
+      formatPrice(t2),
+      formatPrice(sl),
+      pattern.name,
+      timestampUtc,
+      String(alpha)
+    ].join('|');
+
+    return {
+      type,
+      isBull,
+      side,
+      pattern: pattern.name,
+      strength: alpha >= 85 ? { label: 'HIGH CONVICTION', cls: 'text-green' } : { label: 'CONFIRMED', cls: 'text-primary' },
+      exchanges: ['Binance Futures'],
+      leverage,
+      entry1,
+      entry2,
+      entry3,
+      t1,
+      t2,
+      t3,
+      t4,
+      sl,
+      rrRatio,
+      atrPct,
+      alpha,
+      signalText,
+      timestampUtc,
+      gateSummary: `${type} gates passed (MACD, EMA, RSI, Volume, Pattern, Spread, Funding).`,
+      waitReason: ''
+    };
+  };
+
+  const day = evaluateCandidate('DAY');
+  const scalp = evaluateCandidate('SCALP');
+
+  const candidates = [day, scalp].filter(s => s.type !== 'WAIT');
+  if (!candidates.length) {
+    return day.type === 'WAIT' ? day : scalp;
   }
-  
-  // Use live ATR if available, otherwise use a percentage-based proxy
-  const emaInfo = window._liveEmaData ? window._liveEmaData[sym] : null;
-  const atr = emaInfo ? emaInfo.atr : p * 0.035; // fallback: 3.5% of price
-  const atrPct = atr / p; 
-  
-  // v4.0 GEOMETRY (SCALING OUT) — Backtested: 78%+ WR & High Profitability
-  // T1 (50% TP): 1.5 ATR | T2 (50% TP): 4.0 ATR | SL: 1.0 ATR
-  let entry1, entry2, entry3;
-  const momentum = Number.isFinite(asset.change) ? asset.change : 0;
-  const conviction = Number.isFinite(score) ? score : 50;
-  if (isBull) {
-    let startOffsetAtr = -0.15;
-    if (momentum >= 4 && conviction >= 80) startOffsetAtr = -0.08;
-    else if (momentum <= -1) startOffsetAtr = -0.30;
-    else if (conviction < 70) startOffsetAtr = -0.22;
-
-    entry1 = Math.max(0, p + (startOffsetAtr * atr));
-    entry2 = Math.max(0, entry1 - (0.45 * atr));
-    entry3 = Math.max(0, entry1 - (0.90 * atr));
-
-    if (entry2 >= entry1) entry2 = Math.max(0, entry1 * 0.995);
-    if (entry3 >= entry2) entry3 = Math.max(0, entry2 * 0.995);
-  } else {
-    let startOffsetAtr = 0.15;
-    if (momentum <= -4 && conviction >= 80) startOffsetAtr = 0.08;
-    else if (momentum >= 1) startOffsetAtr = 0.30;
-    else if (conviction < 70) startOffsetAtr = 0.22;
-
-    entry1 = p + (startOffsetAtr * atr);
-    entry2 = entry1 + (0.45 * atr);
-    entry3 = entry1 + (0.90 * atr);
-
-    if (entry2 <= entry1) entry2 = entry1 * 1.005;
-    if (entry3 <= entry2) entry3 = entry2 * 1.005;
-  }
-  
-  // Dynamic targets: Scaling out logic
-  const dir = isBull ? 1 : -1;
-  const t1 = p * (1 + dir * atrPct * 1.5);   // Take 50% Profit, Move SL to Breakeven
-  const t2 = p * (1 + dir * atrPct * 2.5);   
-  const t3 = p * (1 + dir * atrPct * 3.5);   
-  const t4 = p * (1 + dir * atrPct * 4.0);   // Take 50% Profit Runner
-
-  // SL: 1.0 ATR — tighter SL to maximize profitability
-  const sl = isBull ? p * (1 - atrPct * 1.0) : p * (1 + atrPct * 1.0);
-  
-  // Risk/Reward ratio calculation (calculating Max R:R using T4 to satisfy >= 2:1 requirement)
-  const riskPerUnit = Math.abs(p - sl);
-  const rewardT4 = Math.abs(t4 - p);
-  const rrRatio = riskPerUnit > 0 ? (rewardT4 / riskPerUnit).toFixed(1) : '2.6';
-
-  const exchanges = ['Binance', 'Bybit', 'OKX'];
-  
-  // v3.1 Dynamic Leverage — max capped at 5x
-  // Backtesting proved only 1x-5x range is consistently profitable
-  let levNum;
-  if (atrPct > 0.05) levNum = '2x-3x';        // >5% ATR: high risk, low leverage
-  else if (atrPct > 0.03) levNum = '3x-5x';   // 3-5% ATR: moderate risk
-  else levNum = '4x-5x';                       // <3% ATR: max 5x
-  
-  const leverage = `${levNum} ${isBull ? 'Cross' : 'Isolated'}`;
-  const type = score > 85 ? 'SWING' : 'DAY';
-  const strength = score >= 85 ? { label: 'STRONG CONVICTION', cls: 'text-green' }
-                 : { label: 'MEDIUM CONVICTION', cls: 'text-primary' };
-
-  return { entry1, entry2, entry3, t1, t2, t3, t4, sl, exchanges, leverage, strength, isBull, type, rrRatio, atrPct };
+  candidates.sort((a, b) => (b.alpha - a.alpha) || (a.type === 'DAY' ? -1 : 1));
+  return candidates[0];
 }
 
 function renderProSignals() {
   const grid = document.getElementById('pro-signals-grid');
   if (!grid) return;
 
-  // Use top 15 assets by opportunity score for the Pro Signals grid
-  const top = [...assets]
-    .filter(a => !isStablecoinSymbol(a.symbol, a.name, a.price))
-    .sort((a, b) => ((b.opportunityScore ?? b.score) - (a.opportunityScore ?? a.score)) || a.symbol.localeCompare(b.symbol))
-    .slice(0, 15);
+  // Fixed 60s scan universe per execution rules
+  const top = SIGNAL_SCAN_PAIRS
+    .map(sym => assets.find(a => a.symbol === sym))
+    .filter(Boolean);
 
   if (!top.length) {
     grid.innerHTML = `<div style="text-align:center;color:var(--text-muted);padding:3rem;">No assets loaded yet. Live data syncs on startup.</div>`;
@@ -1967,6 +2300,17 @@ function renderProSignals() {
     const dirIcon = sig.isBull ? '📈' : '📉';
     const dirLabel = sig.isBull ? 'LONG' : 'SHORT';
     const dirClass = sig.isBull ? 'text-green' : 'text-red';
+    const targetPct = (targetPrice) => {
+      if (!(asset.price > 0) || !(targetPrice > 0)) return 0;
+      const raw = sig.isBull
+        ? ((targetPrice - asset.price) / asset.price) * 100
+        : ((asset.price - targetPrice) / asset.price) * 100;
+      return Number.isFinite(raw) ? raw : 0;
+    };
+    const stopPct = (sig.sl > 0 && asset.price > 0)
+      ? -((Math.abs(sig.sl - asset.price) / asset.price) * 100)
+      : 0;
+    const fmtPct = (value) => `${value >= 0 ? '+' : ''}${value.toFixed(2)}%`;
     
     // SaaS Freemium Logic: Lock signals after the 2nd one (Unlocked per user request)
     const isLocked = false;
@@ -2003,13 +2347,17 @@ function renderProSignals() {
         </div>
 
         <!-- Trade Type -->
-        <div class="signal-row">
-          <span class="signal-label">Trade Type</span>
-          <span class="signal-value" style="color: var(--primary)">${sig.type}</span>
-        </div>
+            <div class="signal-row">
+              <span class="signal-label">Trade Type</span>
+              <span class="signal-value" style="color: var(--primary)">${sig.type}</span>
+            </div>
+            <div class="signal-row">
+              <span class="signal-label">Pattern</span>
+              <span class="signal-value">${sig.pattern || 'N/A'}</span>
+            </div>
 
-        <!-- Divider -->
-        <div class="signal-divider"></div>
+            <!-- Divider -->
+            <div class="signal-divider"></div>
 
         <!-- Premium Locked Container -->
         <div style="position:relative;margin-top:1rem;">
@@ -2028,22 +2376,22 @@ function renderProSignals() {
               <div class="signal-target-row">
                 <span class="target-num">🎯 Target 1</span>
                 <span class="signal-mono text-green">${formatPrice(sig.t1)}</span>
-                <span class="target-pct text-green">+${(((sig.t1 - asset.price) / asset.price) * 100).toFixed(2)}%</span>
+                <span class="target-pct text-green">${fmtPct(targetPct(sig.t1))}</span>
               </div>
               <div class="signal-target-row">
                 <span class="target-num">🎯 Target 2</span>
                 <span class="signal-mono text-green">${formatPrice(sig.t2)}</span>
-                <span class="target-pct text-green">+${(((sig.t2 - asset.price) / asset.price) * 100).toFixed(2)}%</span>
+                <span class="target-pct text-green">${fmtPct(targetPct(sig.t2))}</span>
               </div>
               <div class="signal-target-row">
                 <span class="target-num">🎯 Target 3</span>
                 <span class="signal-mono text-green">${formatPrice(sig.t3)}</span>
-                <span class="target-pct text-green">+${(((sig.t3 - asset.price) / asset.price) * 100).toFixed(2)}%</span>
+                <span class="target-pct text-green">${fmtPct(targetPct(sig.t3))}</span>
               </div>
               <div class="signal-target-row">
                 <span class="target-num">🎯 Target 4</span>
                 <span class="signal-mono text-green">${formatPrice(sig.t4)}</span>
-                <span class="target-pct text-green">+${(((sig.t4 - asset.price) / asset.price) * 100).toFixed(2)}%</span>
+                <span class="target-pct text-green">${fmtPct(targetPct(sig.t4))}</span>
               </div>
             </div>
 
@@ -2051,14 +2399,18 @@ function renderProSignals() {
             <div class="signal-row signal-sl-row">
               <span class="signal-label">🛑 Stop Loss</span>
               <span class="signal-mono text-red">${formatPrice(sig.sl)}</span>
-              <span class="target-pct text-red">${(((sig.sl - asset.price) / asset.price) * 100).toFixed(2)}%</span>
+              <span class="target-pct text-red">${fmtPct(stopPct)}</span>
+            </div>
+            <div class="signal-row">
+              <span class="signal-label">Signal String</span>
+              <span class="signal-value signal-mono" style="font-size:0.68rem;line-height:1.35;">${sig.signalText}</span>
             </div>
           </div>
         </div>
 
         <!-- Footer -->
         <div class="signal-footer">
-          <span>Alpha: <strong class="text-primary">${asset.opportunityScore ?? asset.score}/100</strong></span>
+          <span>Alpha: <strong class="text-primary">${sig.alpha ?? (asset.opportunityScore ?? asset.score)}/100</strong></span>
           <span>Risk:Reward <strong class="text-green">${sig.rrRatio}</strong></span>
           <span>Vol: <strong class="text-warning">${(sig.atrPct * 100).toFixed(1)}%</strong></span>
           <span class="signal-brand">⚡ NEXUS Pro</span>

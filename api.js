@@ -555,54 +555,194 @@ export async function fetchTechnicalSignals(symbols = []) {
     return null;
   }
   try {
+    const normalizedSymbols = [...new Set(symbols.map(s => String(s || '').toUpperCase()).filter(Boolean))];
+
     // 1. Fetch 24h ticker data from Binance for volume/price action
-    const binancePromises = symbols.map(sym =>
+    const binancePromises = normalizedSymbols.map(sym =>
       fetch(`https://api.binance.com/api/v3/ticker/24hr?symbol=${sym}USDT`)
         .then(r => r.json())
         .catch(() => null)
     );
     const binanceData = await Promise.all(binancePromises);
 
-    // 2. Fetch 4H klines for multi-timeframe confluence (last 50 candles = ~8 days)
-    const klinePromises = symbols.map(sym =>
+    // 2. Fetch 4H, 15M, and 1M klines for multi-timeframe confluence.
+    const kline4hPromises = normalizedSymbols.map(sym =>
       fetch(`https://api.binance.com/api/v3/klines?symbol=${sym}USDT&interval=4h&limit=50`)
         .then(r => r.json())
         .catch(() => null)
     );
-    const klineData = await Promise.all(klinePromises);
+    const kline15mPromises = normalizedSymbols.map(sym =>
+      fetch(`https://api.binance.com/api/v3/klines?symbol=${sym}USDT&interval=15m&limit=140`)
+        .then(r => r.json())
+        .catch(() => null)
+    );
+    const kline1mPromises = normalizedSymbols.map(sym =>
+      fetch(`https://api.binance.com/api/v3/klines?symbol=${sym}USDT&interval=1m&limit=180`)
+        .then(r => r.json())
+        .catch(() => null)
+    );
+    const [kline4hData, kline15mData, kline1mData] = await Promise.all([
+      Promise.all(kline4hPromises),
+      Promise.all(kline15mPromises),
+      Promise.all(kline1mPromises)
+    ]);
 
-    // 3. Compute EMA-9 and EMA-21 from 4H klines for each symbol
+    // 3. Compute EMA/ATR and momentum indicators.
     const emaData = {};
-    symbols.forEach((sym, idx) => {
-      const klines = klineData[idx];
-      if (klines && klines.length >= 21) {
-        const closes = klines.map(k => parseFloat(k[4]));
-        const highs = klines.map(k => parseFloat(k[2]));
-        const lows = klines.map(k => parseFloat(k[3]));
+    const indicatorMap = {};
+    const binanceMap = {};
+    normalizedSymbols.forEach((sym, idx) => {
+      if (binanceData[idx]) binanceMap[sym] = binanceData[idx];
 
-        const ema9 = computeEMA(closes, 9);
-        const ema21 = computeEMA(closes, 21);
+      const klines4h = kline4hData[idx];
+      const klines15m = kline15mData[idx];
+      const klines1m = kline1mData[idx];
+
+      const closes4h = Array.isArray(klines4h) ? klines4h.map(k => parseFloat(k[4])).filter(Number.isFinite) : [];
+      const highs4h = Array.isArray(klines4h) ? klines4h.map(k => parseFloat(k[2])).filter(Number.isFinite) : [];
+      const lows4h = Array.isArray(klines4h) ? klines4h.map(k => parseFloat(k[3])).filter(Number.isFinite) : [];
+      const closes15m = Array.isArray(klines15m) ? klines15m.map(k => parseFloat(k[4])).filter(Number.isFinite) : [];
+      const volumes15m = Array.isArray(klines15m) ? klines15m.map(k => parseFloat(k[5])).filter(Number.isFinite) : [];
+      const closes1m = Array.isArray(klines1m) ? klines1m.map(k => parseFloat(k[4])).filter(Number.isFinite) : [];
+      const volumes1m = Array.isArray(klines1m) ? klines1m.map(k => parseFloat(k[5])).filter(Number.isFinite) : [];
+
+      let ema9 = null;
+      let ema21 = null;
+      let atr = null;
+      if (closes4h.length >= 21 && highs4h.length === closes4h.length && lows4h.length === closes4h.length) {
+        ema9 = computeEMA(closes4h, 9);
+        ema21 = computeEMA(closes4h, 21);
 
         // Mathematically correct ATR: True Range = max(H-L, abs(H-PrevC), abs(L-PrevC))
         let trSum = 0;
         const period = 14;
-        const startIdx = Math.max(1, closes.length - period); // ensure we have a previous close
+        const startIdx = Math.max(1, closes4h.length - period); // ensure we have a previous close
         let actualPeriod = 0;
-        for (let i = startIdx; i < closes.length; i++) {
-          const hl = highs[i] - lows[i];
-          const hpc = Math.abs(highs[i] - closes[i - 1]);
-          const lpc = Math.abs(lows[i] - closes[i - 1]);
+        for (let i = startIdx; i < closes4h.length; i++) {
+          const hl = highs4h[i] - lows4h[i];
+          const hpc = Math.abs(highs4h[i] - closes4h[i - 1]);
+          const lpc = Math.abs(lows4h[i] - closes4h[i - 1]);
           trSum += Math.max(hl, hpc, lpc);
           actualPeriod++;
         }
-        const atr = actualPeriod > 0 ? trSum / actualPeriod : 0;
-        emaData[sym] = { ema9, ema21, atr, lastClose: closes[closes.length - 1] };
+        atr = actualPeriod > 0 ? trSum / actualPeriod : 0;
       }
+
+      const macd15m = computeMACDSnapshot(closes15m);
+      const macd1m = computeMACDSnapshot(closes1m);
+      const localRsi15m = computeRSI(closes15m, 14);
+      const localRsi1m = computeRSI(closes1m, 14);
+      const localVolumeSpike15m = computeVolumeSpikeRatio(volumes15m, 20);
+      const localVolumeSpike1m = computeVolumeSpikeRatio(volumes1m, 45);
+
+      if (Number.isFinite(ema9) && Number.isFinite(ema21) && Number.isFinite(atr)) {
+        emaData[sym] = { ema9, ema21, atr, lastClose: closes4h[closes4h.length - 1] };
+      }
+
+      indicatorMap[sym] = {
+        ema9,
+        ema21,
+        atr,
+        lastClose: closes4h[closes4h.length - 1] ?? null,
+        macd1m,
+        macd15m,
+        localRsi1m,
+        localRsi15m,
+        rsi1m: localRsi1m,
+        rsi15m: localRsi15m,
+        rsiSource: 'binance_local',
+        volumeSpikeRatio1m: localVolumeSpike1m,
+        volumeSpikeRatio15m: localVolumeSpike15m,
+        volumeSpikeRatio: localVolumeSpike15m
+      };
     });
 
-    // 4. Fetch RSI for BTC from TAAPI (Free tier = 1 call per 15s)
-    let btcRsi = null;
-    const computeFallbackBtcRsi = async (reason = 'TAAPI unavailable') => {
+    // 4. Fetch TAAPI RSI for the core scan pairs (bulk request == 1 API call).
+    const corePairs = ['BTC', 'ETH', 'SOL', 'BNB'];
+    let taapiHitCount = 0;
+    const applyTaapiToPair = (symbol, interval, taValue) => {
+      if (!Number.isFinite(taValue)) return;
+      const rec = indicatorMap[symbol];
+      if (!rec) return;
+      if (interval === '1m') rec.rsi1m = taValue;
+      if (interval === '15m') rec.rsi15m = taValue;
+      rec.rsiSource = 'taapi';
+      taapiHitCount++;
+    };
+
+    const taapiLocalFallback = async (reason = 'TAAPI unavailable') => {
+      let fallbackHits = 0;
+      corePairs.forEach((symbol) => {
+        const rec = indicatorMap[symbol];
+        if (!rec) return;
+        if (Number.isFinite(rec.localRsi1m)) {
+          rec.rsi1m = rec.localRsi1m;
+          fallbackHits++;
+        }
+        if (Number.isFinite(rec.localRsi15m)) {
+          rec.rsi15m = rec.localRsi15m;
+          fallbackHits++;
+        }
+        if (rec.rsiSource !== 'taapi') rec.rsiSource = 'binance_local';
+      });
+      if (fallbackHits > 0) {
+        markApiDegraded('TAAPI RSI', `Local RSI fallback (${reason})`);
+        return true;
+      }
+      return false;
+    };
+
+    const buildBulkConstruct = (symbol, interval) => ({
+      exchange: 'binance',
+      symbol: `${symbol}/USDT`,
+      interval,
+      indicators: [{ id: `${symbol}_${interval}_rsi`, indicator: 'rsi' }]
+    });
+
+    try {
+      const taapiPayload = {
+        secret: KEYS.taapi,
+        construct: [
+          ...corePairs.map(sym => buildBulkConstruct(sym, '1m')),
+          ...corePairs.map(sym => buildBulkConstruct(sym, '15m'))
+        ]
+      };
+      const taapiRes = await fetch('https://api.taapi.io/bulk', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(taapiPayload)
+      });
+      if (!taapiRes.ok) {
+        const hadFallback = await taapiLocalFallback(`HTTP ${taapiRes.status}`);
+        if (!hadFallback) markApiDegraded('TAAPI RSI', `HTTP ${taapiRes.status}`);
+      } else {
+        const taapiJson = await taapiRes.json();
+        const rows = Array.isArray(taapiJson?.data) ? taapiJson.data : [];
+        rows.forEach((row) => {
+          const id = String(row?.id || '');
+          const value = Number(row?.result?.value ?? row?.value);
+          if (!id) return;
+          const [sym, interval] = id.split('_');
+          if (!sym || !interval) return;
+          applyTaapiToPair(sym.toUpperCase(), interval, value);
+        });
+
+        if (taapiHitCount > 0) {
+          markApiOk('TAAPI RSI', `Bulk RSI hits ${taapiHitCount}`);
+        } else {
+          const hadFallback = await taapiLocalFallback('empty bulk payload');
+          if (!hadFallback) markApiDegraded('TAAPI RSI', 'Empty TAAPI bulk payload');
+        }
+      }
+    } catch (err) {
+      console.warn('⚠️ TAAPI bulk error:', err.message);
+      const hadFallback = await taapiLocalFallback(err.message);
+      if (!hadFallback) markApiDegraded('TAAPI RSI', err.message);
+    }
+
+    // 5. Compatibility shim for legacy consumers expecting btc-only rsi.
+    let btcRsi = Number(indicatorMap?.BTC?.rsi15m);
+    if (!Number.isFinite(btcRsi)) {
       try {
         const rsiRes = await fetch('https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=1h&limit=120');
         if (!rsiRes.ok) throw new Error(`Binance RSI fallback HTTP ${rsiRes.status}`);
@@ -611,39 +751,25 @@ export async function fetchTechnicalSignals(symbols = []) {
         const localRsi = computeRSI(closes, 14);
         if (Number.isFinite(localRsi)) {
           btcRsi = localRsi;
-          markApiDegraded('TAAPI RSI', `Fallback RSI ${localRsi.toFixed(1)} (${reason})`);
-          return true;
+          markApiDegraded('TAAPI RSI', `Fallback RSI ${localRsi.toFixed(1)} (compatibility mode)`);
         }
       } catch (fallbackErr) {
         console.warn('⚠️ Local RSI fallback failed:', fallbackErr.message);
       }
-      return false;
-    };
-
-    try {
-      const taapiRes = await fetch(`https://api.taapi.io/rsi?secret=${KEYS.taapi}&exchange=binance&symbol=BTC/USDT&interval=1h`);
-      if (taapiRes.ok) {
-        const taapiJson = await taapiRes.json();
-        btcRsi = Number(taapiJson.value);
-        if (Number.isFinite(btcRsi)) {
-          console.log('✅ TAAPI RSI fetched:', btcRsi);
-          markApiOk('TAAPI RSI', `BTC RSI ${btcRsi.toFixed(1)}`);
-        } else {
-          await computeFallbackBtcRsi('TAAPI payload');
-        }
-      } else {
-        const hadFallback = await computeFallbackBtcRsi(`HTTP ${taapiRes.status}`);
-        if (!hadFallback) markApiDegraded('TAAPI RSI', `HTTP ${taapiRes.status}`);
-      }
-    } catch (err) {
-      console.warn('⚠️ TAAPI rate limit or error:', err.message);
-      const hadFallback = await computeFallbackBtcRsi(err.message);
-      if (!hadFallback) markApiDegraded('TAAPI RSI', err.message);
     }
 
-    console.log('✅ Multi-indicator technical data fetched for', symbols.length, 'assets');
-    markApiOk('Technical Signals', `${Object.keys(emaData).length}/${symbols.length} EMA sets`);
-    return { binance: binanceData, rsi: btcRsi, ema: emaData };
+    // 6. Inject spot volume context from Binance 24h payload.
+    normalizedSymbols.forEach((sym) => {
+      const rec = indicatorMap[sym];
+      const ticker = binanceMap[sym];
+      if (!rec || !ticker) return;
+      const quoteVolume = Number(ticker.quoteVolume || ticker.quoteVolumeUsd || 0);
+      rec.quoteVolume24h = Number.isFinite(quoteVolume) ? quoteVolume : 0;
+    });
+
+    console.log('✅ Multi-indicator technical data fetched for', normalizedSymbols.length, 'assets');
+    markApiOk('Technical Signals', `${Object.keys(emaData).length}/${normalizedSymbols.length} EMA sets`);
+    return { binance: binanceData, rsi: btcRsi, ema: emaData, indicators: indicatorMap };
   } catch (e) {
     console.warn('⚠️ Binance/TAAPI failed:', e.message);
     markApiFailed('Technical Signals', e.message);
@@ -695,6 +821,44 @@ export async function fetchOpenInterest(symbols = []) {
   } catch (e) {
     console.warn('⚠️ Open Interest failed:', e.message);
     markApiFailed('Binance Open Interest', e.message);
+    return [];
+  }
+}
+
+// ─── 4C-3B. Binance Spot: Bid/Ask Spread Snapshot ────────────────────────────
+export async function fetchBidAskSpreads(symbols = []) {
+  if (symbols.length === 0) {
+    markApiDegraded('Binance Bid/Ask Spread', 'No symbols provided');
+    return [];
+  }
+  try {
+    const normalizedSymbols = [...new Set(symbols.map(s => String(s || '').toUpperCase()).filter(Boolean))];
+    const promises = normalizedSymbols.map(async (sym) => {
+      try {
+        const res = await fetch(`https://api.binance.com/api/v3/ticker/bookTicker?symbol=${sym}USDT`);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        const bid = Number(data?.bidPrice);
+        const ask = Number(data?.askPrice);
+        const mid = (bid > 0 && ask > 0) ? ((bid + ask) / 2) : 0;
+        const spreadPct = mid > 0 ? ((ask - bid) / mid) * 100 : null;
+        return {
+          symbol: sym,
+          bid: Number.isFinite(bid) ? bid : null,
+          ask: Number.isFinite(ask) ? ask : null,
+          spreadPct: Number.isFinite(spreadPct) ? spreadPct : null
+        };
+      } catch {
+        return { symbol: sym, bid: null, ask: null, spreadPct: null };
+      }
+    });
+
+    const results = await Promise.all(promises);
+    markApiOk('Binance Bid/Ask Spread', `${results.length} symbols`);
+    return results;
+  } catch (e) {
+    console.warn('⚠️ Bid/Ask spread fetch failed:', e.message);
+    markApiFailed('Binance Bid/Ask Spread', e.message);
     return [];
   }
 }
@@ -796,6 +960,88 @@ export async function fetchDuneMarketPulse() {
     markApiDegraded('Dune Market Pulse', `Fallback disabled: ${e.message}`);
     return null;
   }
+}
+
+function computeEMASequence(data = [], period = 12) {
+  if (!Array.isArray(data) || data.length < period) return [];
+  const out = new Array(data.length).fill(null);
+  let seed = data.slice(0, period).reduce((sum, v) => sum + v, 0) / period;
+  out[period - 1] = seed;
+  const k = 2 / (period + 1);
+
+  for (let i = period; i < data.length; i++) {
+    seed = data[i] * k + seed * (1 - k);
+    out[i] = seed;
+  }
+
+  return out;
+}
+
+function computeMACDSnapshot(closes = [], fast = 12, slow = 26, signal = 9) {
+  if (!Array.isArray(closes) || closes.length < slow + signal + 2) return null;
+
+  const emaFast = computeEMASequence(closes, fast);
+  const emaSlow = computeEMASequence(closes, slow);
+  const macdSeries = [];
+
+  for (let i = 0; i < closes.length; i++) {
+    if (!Number.isFinite(emaFast[i]) || !Number.isFinite(emaSlow[i])) continue;
+    macdSeries.push({ index: i, value: emaFast[i] - emaSlow[i] });
+  }
+  if (macdSeries.length < signal + 2) return null;
+
+  const signalSeqCompact = computeEMASequence(macdSeries.map(x => x.value), signal);
+  const history = macdSeries
+    .map((point, idx) => {
+      const sig = signalSeqCompact[idx];
+      if (!Number.isFinite(sig)) return null;
+      const hist = point.value - sig;
+      return {
+        index: point.index,
+        line: point.value,
+        signal: sig,
+        histogram: hist
+      };
+    })
+    .filter(Boolean);
+
+  if (history.length < 2) return null;
+  const last = history[history.length - 1];
+  const prev = history[history.length - 2];
+
+  let crossBarsAgo = null;
+  for (let i = history.length - 1; i >= 1; i--) {
+    const now = history[i].line - history[i].signal;
+    const prior = history[i - 1].line - history[i - 1].signal;
+    if ((now >= 0 && prior < 0) || (now <= 0 && prior > 0)) {
+      crossBarsAgo = history.length - 1 - i;
+      break;
+    }
+  }
+
+  return {
+    line: last.line,
+    signal: last.signal,
+    histogram: last.histogram,
+    histogramPrev: prev.histogram,
+    bullish: last.line > last.signal && last.histogram > 0,
+    bearish: last.line < last.signal && last.histogram < 0,
+    expansion: last.histogram > prev.histogram,
+    contraction: last.histogram < prev.histogram,
+    crossBarsAgo
+  };
+}
+
+function computeVolumeSpikeRatio(volumes = [], lookback = 20) {
+  if (!Array.isArray(volumes) || volumes.length < lookback + 1) return null;
+  const clean = volumes.map(v => Number(v)).filter(Number.isFinite);
+  if (clean.length < lookback + 1) return null;
+  const current = clean[clean.length - 1];
+  const reference = clean.slice(-1 - lookback, -1);
+  if (reference.length === 0) return null;
+  const avg = reference.reduce((sum, v) => sum + v, 0) / reference.length;
+  if (!(avg > 0)) return null;
+  return current / avg;
 }
 
 // Helper: Compute Exponential Moving Average
