@@ -47,7 +47,7 @@ const SCALP_SCAN_SYMBOLS = ['BTC', 'ETH', 'SOL', 'BNB'];
 const SIGNAL_KLINE_LIMIT = 80;
 const SIGNAL_FETCH_TIMEOUT_MS = 6000;
 const SIGNAL_KLINE_CONCURRENCY = 10;
-const MIN_SIGNAL_RR_RATIO = 1.0;
+const MIN_SIGNAL_RR_RATIO = 1.5;
 const BREAKOUT_VOLUME_SPIKE_MULTIPLIER = 2.0;
 const BREAKOUT_RSI_MIN = 60;
 const BREAKOUT_RSI_MAX = 75;
@@ -309,8 +309,14 @@ function getScalpRiskReward(asset = null) {
   const direct = Number(scalp.rrRatio);
   if (Number.isFinite(direct) && direct > 0) return direct;
 
-  const entry = Number(scalp.entry1 ?? scalp.entry);
-  const target = Number(scalp.tp2);
+  const entryA = Number(scalp.entry1 ?? scalp.entry);
+  const entryB = Number(scalp.entry2);
+  const entryC = Number(scalp.entry3);
+  const entryCandidates = [entryA, entryB, entryC].filter(Number.isFinite);
+  const entry = entryCandidates.length
+    ? (entryCandidates.reduce((sum, n) => sum + n, 0) / entryCandidates.length)
+    : entryA;
+  const target = Number(scalp.tp1);
   const stop = Number(scalp.sl);
   return sigComputeRiskRewardRatio(entry, target, stop);
 }
@@ -896,20 +902,16 @@ function sigComputeAlpha(pillars = {}) {
 }
 
 function sigComputeTradePlan(symbol = 'BTC', direction = 'BUY', entry = 0, atrPct = 0, snapshot = null) {
-  const entry1 = Number(entry) || 0;
-  const entry2 = direction === 'BUY'
-    ? entry1 * (1 - 0.0008)
-    : entry1;
-  const entry3 = direction === 'BUY'
-    ? entry1 * (1 - 0.0018)
-    : entry1 * (1 - 0.0012);
-  const shortEntry1 = direction === 'SELL' ? entry1 * (1 + 0.0012) : entry1;
-  const shortEntry2 = direction === 'SELL' ? entry1 : entry2;
-  const shortEntry3 = direction === 'SELL' ? entry1 * (1 - 0.0012) : entry3;
-
-  const finalEntry1 = direction === 'SELL' ? shortEntry1 : entry1;
-  const finalEntry2 = direction === 'SELL' ? shortEntry2 : entry2;
-  const finalEntry3 = direction === 'SELL' ? shortEntry3 : entry3;
+  const entryBase = Number(entry) || 0;
+  const ladderStep = entryBase * 0.0010;
+  const outerStep = ladderStep * 2;
+  const finalEntry1 = direction === 'SELL'
+    ? entryBase + outerStep
+    : Math.max(0.0000001, entryBase - outerStep);
+  const finalEntry2 = direction === 'SELL'
+    ? entryBase + ladderStep
+    : Math.max(0.0000001, entryBase - ladderStep);
+  const finalEntry3 = entryBase;
   const avgEntry = (finalEntry1 + finalEntry2 + finalEntry3) / 3;
   const riskPct = 0.0035;
   const minRewardPct = riskPct * 1.5;
@@ -1023,7 +1025,8 @@ function sigEvaluate(symbol, timeframe, snapshot, timestamp, spreadPct = null) {
     return out;
   }
   const levels = sigComputeTradePlan(symbol, direction, snapshot.price, snapshot.atrPct, snapshot);
-  const rrRatio = sigComputeRiskRewardRatio(levels.entry1, levels.tp2, levels.sl);
+  const avgEntry = (levels.entry1 + levels.entry2 + levels.entry3) / 3;
+  const rrRatio = sigComputeRiskRewardRatio(avgEntry, levels.tp1, levels.sl);
   if (!(rrRatio >= MIN_SIGNAL_RR_RATIO)) {
     const out = sigNoSignal(timeframe, symbol, timestamp, 'RR_FAIL', Math.round(alpha), direction);
     out.patternSummary = snapshot.pattern?.summary || snapshot.pattern?.name || 'NONE';
@@ -2431,7 +2434,7 @@ function renderOpportunitiesPage() {
     tbody.innerHTML = `
       <tr>
         <td colspan="8" style="text-align:center;padding:1.25rem;color:var(--text-muted);">
-          No SCALP trades currently meet minimum risk/reward 1:1.
+          No SCALP trades currently meet minimum risk/reward 1.5:1.
         </td>
       </tr>
     `;
@@ -2918,9 +2921,14 @@ function generateSignalForAsset(asset) {
   const isBull = scalp.direction === 'BUY';
   const rawEntry = Number(scalp.entry1 ?? scalp.entry) || Number(asset.price) || 0;
   const hasEntry = Number.isFinite(Number(scalp.entry1 ?? scalp.entry));
-  const entry1 = hasEntry ? rawEntry : (isBull ? rawEntry : rawEntry * (1 + 0.0012));
-  const entry2 = Number(scalp.entry2) || (isBull ? entry1 * (1 - 0.0008) : rawEntry);
-  const entry3 = Number(scalp.entry3) || (isBull ? entry1 * (1 - 0.0018) : rawEntry * (1 - 0.0012));
+  const fallbackStep = rawEntry * 0.0010;
+  const fallbackOuter = fallbackStep * 2;
+  const fallbackEntries = isBull
+    ? [Math.max(0.0000001, rawEntry - fallbackOuter), Math.max(0.0000001, rawEntry - fallbackStep), rawEntry]
+    : [rawEntry + fallbackOuter, rawEntry + fallbackStep, rawEntry];
+  const entry1 = hasEntry ? rawEntry : fallbackEntries[0];
+  const entry2 = Number(scalp.entry2) || fallbackEntries[1];
+  const entry3 = Number(scalp.entry3) || fallbackEntries[2];
   const avgEntry = (entry1 + entry2 + entry3) / 3;
   const riskPct = 0.0035;
   const minRewardPct = riskPct * 1.5;
@@ -2930,10 +2938,10 @@ function generateSignalForAsset(asset) {
   const t3 = Number(scalp.tp3) || (isBull ? avgEntry * (1 + (minRewardPct * 3.0)) : avgEntry * (1 - (minRewardPct * 3.0)));
   const t4 = Number(scalp.tp4) || (isBull ? avgEntry * (1 + (minRewardPct * 4.0)) : avgEntry * (1 - (minRewardPct * 4.0)));
 
-  const risk = Math.max(Math.abs(entry1 - sl), entry1 * 0.0005);
-  const rewardT2 = Math.abs(t2 - entry1);
-  const rrRatio = risk > 0 ? (rewardT2 / risk).toFixed(1) : '2.0';
-  const atrPct = Number.isFinite(Number(scalp.atrPct)) ? Number(scalp.atrPct) : ((entry1 > 0 ? (risk / entry1) * 100 : 0));
+  const risk = Math.max(Math.abs(avgEntry - sl), avgEntry * 0.0005);
+  const rewardT1 = Math.abs(t1 - avgEntry);
+  const rrRatio = risk > 0 ? (rewardT1 / risk).toFixed(1) : '1.5';
+  const atrPct = Number.isFinite(Number(scalp.atrPct)) ? Number(scalp.atrPct) : ((avgEntry > 0 ? (risk / avgEntry) * 100 : 0));
   const leverage = scalp.leverage || (atrPct > 0.5 ? '5X-8X' : atrPct < 0.2 ? '15X-25X' : '8X-12X');
 
   const strength = score >= 80

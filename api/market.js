@@ -15,7 +15,7 @@ const MAX_INTRADAY_RANGE_PCT = 24;
 const KLINE_LIMIT = 80;
 const FETCH_TIMEOUT_MS = 6000;
 const KLINE_CONCURRENCY = 12;
-const MIN_SIGNAL_RR_RATIO = 1.0;
+const MIN_SIGNAL_RR_RATIO = 1.5;
 const BREAKOUT_VOLUME_SPIKE_MULTIPLIER = 2.0;
 const BREAKOUT_RSI_MIN = 60;
 const BREAKOUT_RSI_MAX = 75;
@@ -539,20 +539,16 @@ function computeAlphaFromPillars(pillars = {}) {
 }
 
 function computeScalpTradePlan(symbol = 'BTC', direction = 'BUY', entry = 0, atrPct = 0, snapshot = null) {
-  const entry1 = Number(entry) || 0;
-  const entry2 = direction === 'BUY'
-    ? entry1 * (1 - 0.0008)
-    : entry1;
-  const entry3 = direction === 'BUY'
-    ? entry1 * (1 - 0.0018)
-    : entry1 * (1 - 0.0012);
-  const shortEntry1 = direction === 'SELL' ? entry1 * (1 + 0.0012) : entry1;
-  const shortEntry2 = direction === 'SELL' ? entry1 : entry2;
-  const shortEntry3 = direction === 'SELL' ? entry1 * (1 - 0.0012) : entry3;
-
-  const finalEntry1 = direction === 'SELL' ? shortEntry1 : entry1;
-  const finalEntry2 = direction === 'SELL' ? shortEntry2 : entry2;
-  const finalEntry3 = direction === 'SELL' ? shortEntry3 : entry3;
+  const entryBase = Number(entry) || 0;
+  const ladderStep = entryBase * 0.0010;
+  const outerStep = ladderStep * 2;
+  const finalEntry1 = direction === 'SELL'
+    ? entryBase + outerStep
+    : Math.max(0.0000001, entryBase - outerStep);
+  const finalEntry2 = direction === 'SELL'
+    ? entryBase + ladderStep
+    : Math.max(0.0000001, entryBase - ladderStep);
+  const finalEntry3 = entryBase;
   const avgEntry = (finalEntry1 + finalEntry2 + finalEntry3) / 3;
   const riskPct = 0.0035;
   const minRewardPct = riskPct * 1.5;
@@ -865,7 +861,8 @@ function evaluateSignal(symbol, timeframe, snapshot, timestampIso, spreadPct = n
   const alpha = alphaMeta.alpha;
 
   const levels = computeScalpTradePlan(symbol, direction, snapshot.price, snapshot.atrPct, snapshot);
-  const rrRatio = computeRiskRewardRatio(levels.entry1, levels.tp2, levels.sl);
+  const avgEntry = (levels.entry1 + levels.entry2 + levels.entry3) / 3;
+  const rrRatio = computeRiskRewardRatio(avgEntry, levels.tp1, levels.sl);
   if (!(rrRatio >= MIN_SIGNAL_RR_RATIO)) {
     return {
       status: 'NO_SIGNAL',
@@ -1062,7 +1059,7 @@ export default async function handler(req, res) {
           volumeSpike: 'Breakout candle >= 2x avg volume of prior 5 candles',
           retest: 'Latest candle retests breakout level and closes above it',
           rsiRange: '60-75',
-          minRiskReward: '1:1.0 (TP2 vs SL)'
+          minRiskReward: '1:1.5 (TP1 vs SL)'
         }
       }
     });

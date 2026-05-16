@@ -1136,52 +1136,56 @@ function getScalpRiskEnvelope(candleData = null, confidenceValue = null) {
   const confidence = normalizeTradeConfidence(confidenceValue);
 
   let minRiskPct = 0.35;
-  let maxRiskPct = 1.10;
+  let maxRiskPct = 0.50;
 
   if (atrPct !== null) {
     if (atrPct >= 4.2) {
-      minRiskPct = 0.75;
-      maxRiskPct = 1.95;
+      minRiskPct = 0.44;
+      maxRiskPct = 0.50;
     } else if (atrPct >= 3.0) {
-      minRiskPct = 0.62;
-      maxRiskPct = 1.65;
+      minRiskPct = 0.41;
+      maxRiskPct = 0.48;
     } else if (atrPct >= 2.0) {
-      minRiskPct = 0.50;
-      maxRiskPct = 1.35;
+      minRiskPct = 0.38;
+      maxRiskPct = 0.46;
     } else if (atrPct <= 0.9) {
-      minRiskPct = 0.25;
-      maxRiskPct = 0.80;
+      minRiskPct = 0.35;
+      maxRiskPct = 0.42;
     }
   }
 
   if (confidence >= 0.75) {
-    minRiskPct *= 0.90;
-    maxRiskPct *= 0.90;
+    minRiskPct -= 0.02;
+    maxRiskPct -= 0.02;
   } else if (confidence <= 0.35) {
-    minRiskPct *= 1.15;
-    maxRiskPct *= 1.15;
+    minRiskPct += 0.02;
+    maxRiskPct += 0.02;
   }
+
+  const boundedMin = clampBetween(minRiskPct, 0.35, 0.50);
+  const boundedMax = clampBetween(Math.max(maxRiskPct, boundedMin + 0.03), 0.38, 0.50);
 
   return {
     atrPct,
-    minRiskPct: clampBetween(minRiskPct, 0.18, 1.80),
-    maxRiskPct: clampBetween(maxRiskPct, 0.55, 2.40)
+    minRiskPct: boundedMin,
+    maxRiskPct: boundedMax
   };
 }
 
 function getScalpTargetMultipliers(confidenceValue = null, atrPct = null) {
   const confidence = normalizeTradeConfidence(confidenceValue);
-  let mults = [0.62, 0.95, 1.28, 1.65];
+  let mults = [1.50, 2.10, 2.80, 3.60];
 
-  if (confidence >= 0.75) mults = [0.72, 1.08, 1.45, 1.90];
-  else if (confidence <= 0.35) mults = [0.52, 0.82, 1.10, 1.45];
+  if (confidence >= 0.75) mults = [1.65, 2.30, 3.00, 3.85];
+  else if (confidence <= 0.35) mults = [1.50, 2.00, 2.60, 3.30];
 
   if (atrPct !== null && atrPct >= 3.5) {
-    mults = mults.map((m, i) => m + [0.04, 0.08, 0.12, 0.18][i]);
+    mults = mults.map((m, i) => m + [0.05, 0.10, 0.15, 0.20][i]);
   } else if (atrPct !== null && atrPct <= 1.0) {
-    mults = mults.map((m, i) => Math.max(0.45, m - [0.04, 0.06, 0.08, 0.10][i]));
+    mults = mults.map((m, i) => Math.max(i === 0 ? 1.50 : 1.85, m - [0.00, 0.08, 0.12, 0.16][i]));
   }
 
+  mults[0] = Math.max(mults[0], 1.50);
   return mults;
 }
 
@@ -1227,20 +1231,21 @@ function buildScalpTargetsFromStructure(direction = 'LONG', entryPrice = null, r
   const atr = toNumber(candleData?.atr) ?? Math.max(entry * 0.004, 0.0000001);
   const minStep = Math.max(atr * 0.12, entry * 0.0012);
   const safeRisk = Math.max(toNumber(riskDistance) || 0, entry * (envelope.minRiskPct / 100));
+  const minTp1Distance = safeRisk * 1.50;
   const multipliers = getScalpTargetMultipliers(confidenceValue, envelope.atrPct);
   const maxTravel = Math.max(safeRisk * (multipliers[3] + 0.20), entry * 0.0095);
 
   const directionalLevels = getDirectionalStructureLevels(side, entry, candleData);
   let levels = directionalLevels.filter(level => {
     const d = Math.abs(level - entry);
-    return d >= (minStep * 0.75) && d <= (maxTravel * 1.25);
+    return d >= Math.max(minStep * 0.75, minTp1Distance) && d <= (maxTravel * 1.25);
   });
 
   if (levels.length === 0 && directionalLevels.length > 0) {
     const nearestLevel = directionalLevels[0];
     const nearestDist = Math.abs(nearestLevel - entry);
-    const projectedDist = Math.max(minStep, Math.min(nearestDist, maxTravel));
-    const factors = [0.38, 0.58, 0.78, 0.96];
+    const projectedDist = Math.max(minTp1Distance, Math.min(nearestDist, maxTravel));
+    const factors = [1.50, 2.10, 2.80, 3.60];
     levels = factors.map(f => side === 'LONG'
       ? entry + (projectedDist * f)
       : Math.max(0.0000001, entry - (projectedDist * f)));
@@ -1500,20 +1505,27 @@ function buildDirectionalEntryLadder(direction = 'LONG', rawEntries = [], candle
 
   if (!(base > 0)) return [];
 
-  const step1 = atr && atr > 0 ? atr * 0.32 : Math.max(base * 0.006, 0.0000001);
-  const step2 = atr && atr > 0 ? atr * 0.64 : Math.max(base * 0.012, 0.0000002);
-
-  if (side === 'SHORT') {
-    const higher = unique.filter(v => v > base).sort((a, b) => a - b);
-    const entry2 = higher[0] ?? (base + step1);
-    const entry3 = higher[1] ?? Math.max(entry2 + Math.abs(step1), base + step2);
-    return [base, entry2, entry3];
+  if (unique.length >= 3) {
+    return unique
+      .slice(0, 3)
+      .sort((a, b) => side === 'LONG' ? a - b : b - a);
   }
 
-  const lower = unique.filter(v => v < base).sort((a, b) => b - a);
-  const entry2 = lower[0] ?? (base - step1);
-  const entry3 = lower[1] ?? Math.min(entry2 - Math.abs(step1), base - step2);
-  return [base, entry2, entry3];
+  const minStep = Math.max(base * 0.0008, 0.0000001);
+  const maxStep = Math.max(base * 0.0015, minStep);
+  const adaptiveStep = atr && atr > 0
+    ? clampBetween(atr * 0.18, minStep, maxStep)
+    : Math.max(base * 0.0010, minStep);
+
+  if (side === 'SHORT') {
+    return [base + (2 * adaptiveStep), base + adaptiveStep, base];
+  }
+
+  return [
+    Math.max(0.0000001, base - (2 * adaptiveStep)),
+    Math.max(0.0000001, base - adaptiveStep),
+    base
+  ];
 }
 
 function buildCanonicalSignalText(rawSignalText = '', fallbackSymbol = 'BTC', options = {}) {
@@ -1530,7 +1542,10 @@ function buildCanonicalSignalText(rawSignalText = '', fallbackSymbol = 'BTC', op
   const leverageLabel = forcedPlan?.leverageLabel || deriveScalpLeverageLabel(options.candleData, options.tradeMeta?.confidence);
 
   if (forcedPlan && Array.isArray(forcedPlan.entries) && Array.isArray(forcedPlan.targets) && forcedPlan.targets.length >= 4) {
-    const entryNums = forcedPlan.entries.slice(0, 3).map(toNumber);
+    const entryNums = forcedPlan.entries
+      .slice(0, 3)
+      .map(toNumber)
+      .sort((a, b) => direction === 'SHORT' ? b - a : a - b);
     const targetNums = forcedPlan.targets.slice(0, 4).map(toNumber);
     const stopNum = toNumber(forcedPlan.stop);
     const forcedPlanValid =
@@ -1692,19 +1707,25 @@ ${trailingBlock}`;
   if (entryLadder.length < 3 || targets.length < 4 || !stop) {
     const atrNum = toNumber(options.candleData?.atr) ?? Math.max(refPrice * 0.0075, 0.0001);
     const fallbackBase = refPrice;
-    const step1 = atrNum > 0 ? atrNum * 0.22 : Math.max(fallbackBase * 0.0035, 0.0000001);
-    const step2 = atrNum > 0 ? atrNum * 0.42 : Math.max(fallbackBase * 0.0065, 0.0000002);
+    const minStep = Math.max(fallbackBase * 0.0008, 0.0000001);
+    const maxStep = Math.max(fallbackBase * 0.0015, minStep);
+    const ladderStep = atrNum > 0
+      ? clampBetween(atrNum * 0.18, minStep, maxStep)
+      : Math.max(fallbackBase * 0.0010, minStep);
     const autoEntryNums = entryLadderNums.length >= 3
       ? entryLadderNums
       : (direction === 'SHORT'
-        ? [fallbackBase, fallbackBase + step1, fallbackBase + step2]
-        : [fallbackBase, Math.max(0.0000001, fallbackBase - step1), Math.max(0.0000001, fallbackBase - step2)]);
+        ? [fallbackBase + (2 * ladderStep), fallbackBase + ladderStep, fallbackBase]
+        : [Math.max(0.0000001, fallbackBase - (2 * ladderStep)), Math.max(0.0000001, fallbackBase - ladderStep), fallbackBase]);
     const autoEntries = autoEntryNums.map(v => formatSignalPrice(v, refPrice));
-    const entryBase = autoEntryNums[0] ?? refPrice;
+    const entryBase = autoEntryNums.length
+      ? (autoEntryNums.reduce((sum, n) => sum + n, 0) / autoEntryNums.length)
+      : refPrice;
+    const autoRiskPct = 0.42 / 100;
     const autoStopNum = direction === 'SHORT'
-      ? entryBase + (0.58 * atrNum)
-      : Math.max(0.0000001, entryBase - (0.58 * atrNum));
-    const autoRisk = Math.max(Math.abs(entryBase - autoStopNum), atrNum * 0.28);
+      ? entryBase * (1 + autoRiskPct)
+      : Math.max(0.0000001, entryBase * (1 - autoRiskPct));
+    const autoRisk = Math.abs(entryBase - autoStopNum);
     const autoTargets = buildScalpTargetsFromStructure(
       direction,
       entryBase,
@@ -1927,36 +1948,41 @@ function buildApiDrivenTradePlan({ symbol = 'BTC', userQuery = '', assetContext 
     else if (bias.confidence < 1) offset = 0.08;
   }
 
-  let entryStep1 = volHigh ? 0.28 : (volLow ? 0.16 : 0.22);
-  let entryStep2 = volHigh ? 0.52 : (volLow ? 0.30 : 0.40);
+  let entryStepAtr = volHigh ? 0.24 : (volLow ? 0.12 : 0.18);
   if (confidence >= 0.75) {
-    entryStep1 *= 0.9;
-    entryStep2 *= 0.9;
+    entryStepAtr *= 0.9;
   } else if (confidence <= 0.35) {
-    entryStep1 *= 1.1;
-    entryStep2 *= 1.1;
+    entryStepAtr *= 1.1;
   }
 
-  let entry1 = current + (offset * safeAtr);
-  let entry2 = direction === 'LONG' ? entry1 - (entryStep1 * safeAtr) : entry1 + (entryStep1 * safeAtr);
-  let entry3 = direction === 'LONG' ? entry1 - (entryStep2 * safeAtr) : entry1 + (entryStep2 * safeAtr);
+  const entryAnchor = Math.max(0.0000001, current + (offset * safeAtr));
+  const minEntryStep = Math.max(current * 0.0008, 0.0000001);
+  const maxEntryStep = Math.max(current * 0.0015, minEntryStep);
+  const ladderStep = clampBetween(entryStepAtr * safeAtr, minEntryStep, maxEntryStep);
 
+  let lowEntry;
+  let midEntry;
+  let highEntry;
   if (direction === 'LONG') {
-    entry1 = Math.max(0, entry1);
-    entry2 = Math.max(0, entry2);
-    entry3 = Math.max(0, entry3);
-    if (entry2 >= entry1) entry2 = Math.max(0, entry1 * 0.995);
-    if (entry3 >= entry2) entry3 = Math.max(0, entry2 * 0.995);
+    highEntry = entryAnchor;
+    midEntry = Math.max(0.0000001, highEntry - ladderStep);
+    lowEntry = Math.max(0.0000001, midEntry - ladderStep);
   } else {
-    if (entry2 <= entry1) entry2 = entry1 * 1.005;
-    if (entry3 <= entry2) entry3 = entry2 * 1.005;
+    lowEntry = entryAnchor;
+    midEntry = lowEntry + ladderStep;
+    highEntry = midEntry + ladderStep;
   }
 
-  let stopMult = volHigh ? 0.78 : (volLow ? 0.48 : 0.62);
-  if (confidence >= 0.75) stopMult *= 0.92;
-  else if (confidence <= 0.35) stopMult *= 1.10;
+  const orderedEntries = direction === 'LONG'
+    ? [lowEntry, midEntry, highEntry]
+    : [highEntry, midEntry, lowEntry];
+  const avgEntry = orderedEntries.reduce((sum, n) => sum + n, 0) / orderedEntries.length;
 
-  let stop = direction === 'LONG' ? entry1 - (stopMult * safeAtr) : entry1 + (stopMult * safeAtr);
+  let stopMult = volHigh ? 0.65 : (volLow ? 0.52 : 0.58);
+  if (confidence >= 0.75) stopMult *= 0.95;
+  else if (confidence <= 0.35) stopMult *= 1.05;
+
+  let stop = direction === 'LONG' ? avgEntry - (stopMult * safeAtr) : avgEntry + (stopMult * safeAtr);
   if (direction === 'LONG' && swingLow !== null) {
     stop = Math.min(stop, swingLow - (0.03 * safeAtr));
   }
@@ -1965,20 +1991,20 @@ function buildApiDrivenTradePlan({ symbol = 'BTC', userQuery = '', assetContext 
   }
   if (direction === 'LONG') stop = Math.max(0, stop);
 
-  let risk = Math.abs(entry1 - stop);
+  let risk = Math.abs(avgEntry - stop);
   const riskEnvelope = getScalpRiskEnvelope(candleData, bias.confidence);
-  const rawRiskPct = (entry1 > 0 && risk > 0) ? ((risk / entry1) * 100) : null;
+  const rawRiskPct = (avgEntry > 0 && risk > 0) ? ((risk / avgEntry) * 100) : null;
   const clampedRiskPct = clampBetween(
     rawRiskPct ?? ((riskEnvelope.minRiskPct + riskEnvelope.maxRiskPct) / 2),
     riskEnvelope.minRiskPct,
     riskEnvelope.maxRiskPct
   );
-  risk = entry1 * (clampedRiskPct / 100);
+  risk = avgEntry * (clampedRiskPct / 100);
   stop = direction === 'LONG'
-    ? Math.max(0.0000001, entry1 - risk)
-    : entry1 + risk;
+    ? Math.max(0.0000001, avgEntry - risk)
+    : avgEntry + risk;
 
-  const targets = buildScalpTargetsFromStructure(direction, entry1, risk, candleData, bias.confidence);
+  const targets = buildScalpTargetsFromStructure(direction, avgEntry, risk, candleData, bias.confidence);
 
   const minPrice = Math.max(current * 0.02, 0.0000001);
   const sanitizePositive = (n, fallback = current) => {
@@ -1987,9 +2013,9 @@ function buildApiDrivenTradePlan({ symbol = 'BTC', userQuery = '', assetContext 
     return x;
   };
 
-  const sanitizedEntries = [entry1, entry2, entry3].map(v => sanitizePositive(v, current));
+  const sanitizedEntries = orderedEntries.map(v => sanitizePositive(v, current));
   const sanitizedTargets = targets.map(v => sanitizePositive(v, minPrice));
-  const sanitizedStop = sanitizePositive(stop, direction === 'SHORT' ? entry1 * 1.008 : entry1 * 0.992);
+  const sanitizedStop = sanitizePositive(stop, direction === 'SHORT' ? avgEntry * 1.0042 : avgEntry * 0.9958);
 
   const planSymbol = String(symbol || '').toUpperCase();
   const planChangePct = toNumber(snap?.changePct) ?? toNumber(candleData?.changePct);
@@ -2327,19 +2353,22 @@ export async function fetchDualAI(userQuery, assetContext = '') {
 
       const longStart = deriveAdaptiveStartFromCandle('LONG', p, atr, candleData) ?? p;
       const shortStart = deriveAdaptiveStartFromCandle('SHORT', p, atr, candleData) ?? p;
-      const longEntry2 = longStart - (0.22 * atr);
-      const longEntry3 = longStart - (0.42 * atr);
-      const shortEntry2 = shortStart + (0.22 * atr);
-      const shortEntry3 = shortStart + (0.42 * atr);
+      const ladderStep = clampBetween(atr * 0.18, p * 0.0008, p * 0.0015);
+      const longEntryMid = Math.max(0.0000001, longStart - ladderStep);
+      const longEntryLow = Math.max(0.0000001, longEntryMid - ladderStep);
+      const shortEntryMid = shortStart + ladderStep;
+      const shortEntryHigh = shortEntryMid + ladderStep;
+      const longAvgEntry = (longEntryLow + longEntryMid + longStart) / 3;
+      const shortAvgEntry = (shortEntryHigh + shortEntryMid + shortStart) / 3;
 
       const longEnvelope = getScalpRiskEnvelope(candleData, tradeMeta?.confidence);
       const shortEnvelope = getScalpRiskEnvelope(candleData, tradeMeta?.confidence);
-      const longRisk = longStart * (((longEnvelope.minRiskPct + longEnvelope.maxRiskPct) / 2) / 100);
-      const shortRisk = shortStart * (((shortEnvelope.minRiskPct + shortEnvelope.maxRiskPct) / 2) / 100);
-      const longSl = Math.max(0.0000001, longStart - longRisk);
-      const shortSl = shortStart + shortRisk;
-      const longTargets = buildScalpTargetsFromStructure('LONG', longStart, longRisk, candleData, tradeMeta?.confidence);
-      const shortTargets = buildScalpTargetsFromStructure('SHORT', shortStart, shortRisk, candleData, tradeMeta?.confidence);
+      const longRisk = longAvgEntry * (((longEnvelope.minRiskPct + longEnvelope.maxRiskPct) / 2) / 100);
+      const shortRisk = shortAvgEntry * (((shortEnvelope.minRiskPct + shortEnvelope.maxRiskPct) / 2) / 100);
+      const longSl = Math.max(0.0000001, longAvgEntry - longRisk);
+      const shortSl = shortAvgEntry + shortRisk;
+      const longTargets = buildScalpTargetsFromStructure('LONG', longAvgEntry, longRisk, candleData, tradeMeta?.confidence);
+      const shortTargets = buildScalpTargetsFromStructure('SHORT', shortAvgEntry, shortRisk, candleData, tradeMeta?.confidence);
 
       // Formatting helper to keep decimals sane
       const fmt = (n) => p < 1 ? n.toFixed(5) : p < 10 ? n.toFixed(4) : p < 1000 ? n.toFixed(2) : n.toFixed(1);
@@ -2367,20 +2396,20 @@ export async function fetchDualAI(userQuery, assetContext = '') {
 - Local Supports Below Price: ${supportLine}
 
 🚨 [CRITICAL: IF SIGNAL IS LONG, YOU MUST USE THESE EXACT VALUES IN THE OUTPUT]
-- Entry Ladder (MUST be Start, Lower, Lower): ($${fmt(longStart)}, $${fmt(longEntry2)}, $${fmt(longEntry3)})
+- Entry Ladder (MUST be ASCENDING for LONG: lowest, middle, highest): ($${fmt(longEntryLow)}, $${fmt(longEntryMid)}, $${fmt(longStart)})
 - Stop Loss: $${fmt(longSl)}
-- TP1: $${fmt(longTargets[0] ?? (longStart + longRisk * 0.7))}
-- TP2: $${fmt(longTargets[1] ?? (longStart + longRisk * 1.1))}
-- TP3: $${fmt(longTargets[2] ?? (longStart + longRisk * 1.45))}
-- TP4: $${fmt(longTargets[3] ?? (longStart + longRisk * 1.9))}
+- TP1: $${fmt(longTargets[0] ?? (longAvgEntry + longRisk * 1.5))}
+- TP2: $${fmt(longTargets[1] ?? (longAvgEntry + longRisk * 2.1))}
+- TP3: $${fmt(longTargets[2] ?? (longAvgEntry + longRisk * 2.8))}
+- TP4: $${fmt(longTargets[3] ?? (longAvgEntry + longRisk * 3.6))}
 
 🚨 [CRITICAL: IF SIGNAL IS SHORT, YOU MUST USE THESE EXACT VALUES IN THE OUTPUT]
-- Entry Ladder (MUST be Start, Higher, Higher): ($${fmt(shortStart)}, $${fmt(shortEntry2)}, $${fmt(shortEntry3)})
+- Entry Ladder (MUST be DESCENDING for SHORT: highest, middle, lowest): ($${fmt(shortEntryHigh)}, $${fmt(shortEntryMid)}, $${fmt(shortStart)})
 - Stop Loss: $${fmt(shortSl)}
-- TP1: $${fmt(shortTargets[0] ?? (shortStart - shortRisk * 0.7))}
-- TP2: $${fmt(shortTargets[1] ?? (shortStart - shortRisk * 1.1))}
-- TP3: $${fmt(shortTargets[2] ?? (shortStart - shortRisk * 1.45))}
-- TP4: $${fmt(shortTargets[3] ?? (shortStart - shortRisk * 1.9))}
+- TP1: $${fmt(shortTargets[0] ?? (shortAvgEntry - shortRisk * 1.5))}
+- TP2: $${fmt(shortTargets[1] ?? (shortAvgEntry - shortRisk * 2.1))}
+- TP3: $${fmt(shortTargets[2] ?? (shortAvgEntry - shortRisk * 2.8))}
+- TP4: $${fmt(shortTargets[3] ?? (shortAvgEntry - shortRisk * 3.6))}
 `;
     }
     if (hasDetectedCandlePatterns(candleData)) {
