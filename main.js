@@ -2324,12 +2324,8 @@ function generateSignalForAsset(asset, options = {}) {
 
     const ema9Now = Number(emaSnap.ema9);
     const ema21Now = Number(emaSnap.ema21);
-    const spreadNow = Number(emaSnap.spread);
-    const spreadPrev = Number(emaSnap.spreadPrev);
-    const bullishTrendAligned = Number.isFinite(ema9Now) && Number.isFinite(ema21Now) && ema9Now > ema21Now
-      && Number.isFinite(spreadNow) && Number.isFinite(spreadPrev) && spreadNow >= spreadPrev;
-    const bearishTrendAligned = Number.isFinite(ema9Now) && Number.isFinite(ema21Now) && ema9Now < ema21Now
-      && Number.isFinite(spreadNow) && Number.isFinite(spreadPrev) && Math.abs(spreadNow) >= Math.abs(spreadPrev);
+    const bullishTrendAligned = Number.isFinite(ema9Now) && Number.isFinite(ema21Now) && ema9Now > ema21Now;
+    const bearishTrendAligned = Number.isFinite(ema9Now) && Number.isFinite(ema21Now) && ema9Now < ema21Now;
 
     let side = null;
     if (bullCrossValid && !bearCrossValid) side = 'BUY';
@@ -2339,8 +2335,14 @@ function generateSignalForAsset(asset, options = {}) {
     }
     if (!side && bullishTrendAligned) side = 'BUY';
     if (!side && bearishTrendAligned) side = 'SELL';
+
+    // Final fail-safe for flat/crossless moments: infer direction from price vs EMA9.
+    if (!side && Number.isFinite(ema9Now)) {
+      side = price >= ema9Now ? 'BUY' : 'SELL';
+    }
+
     if (!side) {
-      return buildWait(`${type}: EMA 9/21 cross recency failed.`);
+      return buildWait(`${type}: EMA alignment unavailable.`);
     }
 
     const volumeGateThreshold = isScalp ? 1.0 : 0.8;
