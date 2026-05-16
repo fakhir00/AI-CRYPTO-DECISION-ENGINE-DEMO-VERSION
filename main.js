@@ -845,6 +845,30 @@ async function syncLiveApis() {
       window._liveSignalContext = LIVE_SIGNAL_CONTEXT;
     }
 
+    // Reliability fallback: if mandatory EMA/volume snapshots are missing, retry only missing symbols.
+    const coverageSymbols = [...new Set([...SIGNAL_SCAN_PAIRS, ...topSymbols])];
+    const missingTechnical = coverageSymbols.filter((sym) => {
+      const rec = LIVE_SIGNAL_CONTEXT[sym];
+      return !rec
+        || !rec.ema1m
+        || !rec.ema15m
+        || !Number.isFinite(Number(rec.volumeVsAvg1m3))
+        || !Number.isFinite(Number(rec.volumeVsAvg15m5));
+    });
+    if (missingTechnical.length > 0) {
+      try {
+        const retryTechnical = await fetchTechnicalSignals(missingTechnical);
+        if (retryTechnical?.indicators && Object.keys(retryTechnical.indicators).length > 0) {
+          Object.entries(retryTechnical.indicators).forEach(([sym, metrics]) => {
+            LIVE_SIGNAL_CONTEXT[sym] = metrics;
+          });
+          window._liveSignalContext = LIVE_SIGNAL_CONTEXT;
+        }
+      } catch (retryErr) {
+        console.warn('⚠️ Technical retry failed:', retryErr?.message || retryErr);
+      }
+    }
+
     if (globalMarketData?.data) {
       window._liveGlobalMarketData = globalMarketData.data;
     }
@@ -857,6 +881,22 @@ async function syncLiveApis() {
       spreadData.forEach(s => {
         if (s?.symbol) LIVE_SPREADS[s.symbol] = s;
       });
+    }
+    const missingSpreadSymbols = coverageSymbols.filter((sym) => {
+      const row = LIVE_SPREADS[sym];
+      return !row || !Number.isFinite(Number(row.spreadPct));
+    });
+    if (missingSpreadSymbols.length > 0) {
+      try {
+        const retrySpreads = await fetchBidAskSpreads(missingSpreadSymbols);
+        if (Array.isArray(retrySpreads)) {
+          retrySpreads.forEach((row) => {
+            if (row?.symbol) LIVE_SPREADS[row.symbol] = row;
+          });
+        }
+      } catch (retrySpreadErr) {
+        console.warn('⚠️ Spread retry failed:', retrySpreadErr?.message || retrySpreadErr);
+      }
     }
     if (depthData) LIVE_DEPTH = depthData;
     if (dunePulseData) LIVE_DUNE_PULSE = dunePulseData;
@@ -1172,7 +1212,7 @@ function renderDashboard() {
       </div>
       <div class="asset-price">$${formatPrice(asset.price)}</div>
       <div class="asset-change ${asset.change >= 0 ? 'text-green' : 'text-red'}">${asset.change > 0 ? '+' : ''}${asset.change.toFixed(2)}%</div>
-      <div class="bias-badge bias-${asset.bias}">${asset.bias === 'bullish' ? 'LONG' : (asset.bias === 'bearish' ? 'SHORT' : 'WAIT')}</div>
+      <div class="bias-badge bias-${asset.bias}">${asset.bias === 'bullish' ? 'LONG' : (asset.bias === 'bearish' ? 'SHORT' : 'NEUTRAL')}</div>
     </div>
     `).join('');
   }
@@ -1425,7 +1465,7 @@ function renderOpportunitiesPage() {
     const displayScore = getUnifiedAlphaScore(asset);
     // Calculate profit potential based on max target (t4) at 5x leverage
     let profitPot = 0;
-    if (sig.type !== 'WAIT' && asset.price > 0 && sig.t4 > 0) {
+    if (sig.type !== 'NO_SIGNAL' && asset.price > 0 && sig.t4 > 0) {
        profitPot = (Math.abs(sig.t4 - asset.price) / asset.price) * 5 * 100;
     }
     return `
@@ -1446,18 +1486,9 @@ function renderOpportunitiesPage() {
 
       <td><span class="text-muted" style="font-size: 0.8rem">${asset.reason || 'Analyzing Technicals...'}</span></td>
       <td>
-        ${sig.type === 'WAIT' ? `
-          <div>
-            <span class="badge" style="background: rgba(255,255,255,0.05); color: var(--text-muted); font-size: 0.65rem; padding: 0.2rem 0.5rem;">⏸ WAIT</span>
-            <div style="font-size:0.64rem; color:var(--text-muted); margin-top:0.25rem; max-width: 280px; line-height:1.35;">
-              ${sig.waitReason || 'Mandatory conditions not met.'}
-            </div>
-          </div>
-        ` : `
-          <div style="font-family: var(--font-mono); font-size: 0.64rem; line-height: 1.35; color: #cfd8ff; max-width: 360px; white-space: normal;">
-            ${(Array.isArray(sig.signalLines) ? sig.signalLines : [sig.signalText]).filter(Boolean).join('<br/>')}
-          </div>
-        `}
+        <div style="font-family: var(--font-mono); font-size: 0.64rem; line-height: 1.35; color: #cfd8ff; max-width: 360px; white-space: normal;">
+          ${(Array.isArray(sig.signalLines) ? sig.signalLines : [sig.signalText]).filter(Boolean).join('<br/>')}
+        </div>
       </td>
       <td><button class="action-btn">Analyze</button></td>
     </tr>
@@ -1809,7 +1840,6 @@ function setupAiResearchChat() {
       if (SIGNAL_INTENT_RE.test(val)) {
         const requested = extractRequestedSymbols(val);
         const signalLines = [];
-        const waitRows = [];
 
         const symbolsNeedingIndicators = requested.filter((sym) => {
           const rec = LIVE_SIGNAL_CONTEXT[sym];
@@ -1858,18 +1888,16 @@ function setupAiResearchChat() {
         requested.forEach((sym) => {
           const asset = assets.find(a => a.symbol === sym);
           if (!asset) {
-            waitRows.push(`${sym}/USDT: asset context unavailable.`);
+            signalLines.push(`NO_SIGNAL|${sym}/USDT|${new Date().toISOString()}|ASSET_CONTEXT_UNAVAILABLE`);
             return;
           }
           const sig = generateSignalForAsset(asset, { enforceScanUniverse: false });
-          if (sig.type === 'WAIT') {
-            waitRows.push(`${sym}/USDT: ${sig.waitReason}`);
-            return;
-          }
           if (Array.isArray(sig.signalLines) && sig.signalLines.length > 0) {
             sig.signalLines.forEach((line) => signalLines.push(line));
           } else if (sig.signalText) {
             signalLines.push(sig.signalText);
+          } else {
+            signalLines.push(`NO_SIGNAL|${sym}/USDT|${new Date().toISOString()}|NO_OUTPUT`);
           }
         });
 
@@ -1885,7 +1913,7 @@ function setupAiResearchChat() {
         aiBubble.className = 'bubble';
         const body = signalLines.length
           ? signalLines.join('\n')
-          : `No signal generated.\n${waitRows.join('\n')}`;
+          : `NO_SIGNAL|UNKNOWN/USDT|${new Date().toISOString()}|NO_OUTPUT`;
         aiBubble.innerHTML = `<pre style="margin:0;white-space:pre-wrap;font-family:var(--font-mono);font-size:0.82rem;line-height:1.55;">${body}</pre>`;
         aiMsg.appendChild(aiAvatar);
         aiMsg.appendChild(aiBubble);
@@ -2396,98 +2424,102 @@ function generateSignalForAsset(asset, options = {}) {
     const isScalp = type === 'SCALP';
     const rsi = Number(isScalp ? indicator?.rsi1m : indicator?.rsi15m);
     const emaSnap = isScalp ? indicator?.ema1m : indicator?.ema15m;
+    const macd = isScalp ? indicator?.macd1m : indicator?.macd15m;
     const volumeRatioMandatory = Number(isScalp ? indicator?.volumeVsAvg1m3 : indicator?.volumeVsAvg15m5);
-    const ema200_15m = Number(indicator?.ema200_15m);
-    const atr = Number(indicator?.atr);
-    const atrSafe = Number.isFinite(atr) && atr > 0 ? atr : price * (isScalp ? 0.0026 : 0.0044);
-    const atrPct = atrSafe / price;
     const spreadPct = Number(spread?.spreadPct);
 
-    if (!emaSnap) {
-      return buildWait(`${type}: EMA snapshot unavailable.`);
-    }
+    if (!emaSnap) return buildNoSignal(type, 'EMA_CROSS_FAIL');
 
-    const crossLimit = isScalp ? 2 : 3;
+    // Relaxed mandatory checks
+    const crossLimit = isScalp ? 3 : 5;
     const bullCrossBars = Number(emaSnap.crossBarsAgoBullish);
     const bearCrossBars = Number(emaSnap.crossBarsAgoBearish);
     const bullCrossValid = Number.isFinite(bullCrossBars) && bullCrossBars <= crossLimit;
     const bearCrossValid = Number.isFinite(bearCrossBars) && bearCrossBars <= crossLimit;
-
-    const ema9Now = Number(emaSnap.ema9);
-    const ema21Now = Number(emaSnap.ema21);
-    const bullishTrendAligned = Number.isFinite(ema9Now) && Number.isFinite(ema21Now) && ema9Now > ema21Now;
-    const bearishTrendAligned = Number.isFinite(ema9Now) && Number.isFinite(ema21Now) && ema9Now < ema21Now;
-
     let side = null;
     if (bullCrossValid && !bearCrossValid) side = 'BUY';
     if (!bullCrossValid && bearCrossValid) side = 'SELL';
-    if (bullCrossValid && bearCrossValid) {
-      side = bullCrossBars <= bearCrossBars ? 'BUY' : 'SELL';
-    }
-    if (!side && bullishTrendAligned) side = 'BUY';
-    if (!side && bearishTrendAligned) side = 'SELL';
+    if (bullCrossValid && bearCrossValid) side = bullCrossBars <= bearCrossBars ? 'BUY' : 'SELL';
+    if (!side) return buildNoSignal(type, 'EMA_CROSS_FAIL');
 
-    // Final fail-safe for flat/crossless moments: infer direction from price vs EMA9.
-    if (!side && Number.isFinite(ema9Now)) {
-      side = price >= ema9Now ? 'BUY' : 'SELL';
-    }
-
-    if (!side) {
-      return buildWait(`${type}: EMA alignment unavailable.`);
-    }
-
-    const volumeGateThreshold = isScalp ? 1.0 : 0.8;
+    const volumeGateThreshold = isScalp ? 0.8 : 0.7;
     if (!Number.isFinite(volumeRatioMandatory) || volumeRatioMandatory <= volumeGateThreshold) {
-      return buildWait(`${type}: Volume gate failed (${Number.isFinite(volumeRatioMandatory) ? volumeRatioMandatory.toFixed(2) : 'N/A'}x).`);
+      return buildNoSignal(type, 'VOLUME_FAIL');
+    }
+    if (!Number.isFinite(spreadPct) || spreadPct >= 0.15) {
+      return buildNoSignal(type, 'SPREAD_FAIL');
     }
 
+    // Pillars for alpha
     const pattern = classifyPattern(type, side);
+    const patternScore = pattern.valid ? (pattern.highReliability ? 120 : 100) : 50;
+    const rsiScore = Number.isFinite(rsi) ? clamp(100 - (Math.abs(rsi - 50) * 2), 0, 100) : 50;
+    const macdScore = computeMacdScore(macd, side);
+    const technicalScore = clamp((rsiScore * 0.3) + (macdScore * 0.4) + (patternScore * 0.3), 0, 100);
+    const whaleScore = computeWhaleActivityScore(side);
+    const emaConfluenceScore = computeEmaConfluenceScore(type, side);
+    const volumeScore = computeVolumeScore(volumeRatioMandatory);
+    const sentimentBase = Number.isFinite(Number(LIVE_SENTIMENT?.score)) ? clamp(Number(LIVE_SENTIMENT.score), 0, 100) : 50;
+    const sentimentScore = side === 'BUY' ? sentimentBase : (100 - sentimentBase);
+    const newsBase = computeNewsSentimentBase();
+    const newsScore = side === 'BUY' ? newsBase : (100 - newsBase);
+    const alphaSourcesScore = computeAlphaSourcesScore(side);
+    const regime = (sentimentBase > 65 || sentimentBase < 35) ? 'TRENDING' : 'RANGING';
 
-    const isBull = side === 'BUY';
-    let rawAlpha = 50;
-    if (Number.isFinite(volumeRatioMandatory) && volumeRatioMandatory > 1.5) rawAlpha += 10;
-    if (pattern.valid) rawAlpha += 15;
-    if (Number.isFinite(rsi) && rsi >= 40 && rsi <= 60) rawAlpha += 10;
+    const weights = regime === 'TRENDING'
+      ? { technical: 0.22, whale: 0.20, ema: 0.15, volume: 0.08, sentiment: 0.15, news: 0.12, alphaSources: 0.10 }
+      : { technical: 0.15, whale: 0.15, ema: 0.08, volume: 0.15, sentiment: 0.25, news: 0.15, alphaSources: 0.12 };
+    const rawAlpha =
+      (technicalScore * weights.technical) +
+      (whaleScore * weights.whale) +
+      (emaConfluenceScore * weights.ema) +
+      (volumeScore * weights.volume) +
+      (sentimentScore * weights.sentiment) +
+      (newsScore * weights.news) +
+      (alphaSourcesScore * weights.alphaSources);
+    const alpha = clamp(Math.round(rawAlpha), 0, 100);
 
-    if (Number.isFinite(ema200_15m)) {
-      if ((isBull && price > ema200_15m) || (!isBull && price < ema200_15m)) rawAlpha += 10;
-    }
+    const pillars = {
+      Technical: technicalScore,
+      Whale: whaleScore,
+      EMAConfluence: emaConfluenceScore,
+      Volume: volumeScore,
+      Sentiment: sentimentScore,
+      News: newsScore,
+      AlphaSources: alphaSourcesScore
+    };
+    const poorCount = Object.values(pillars).filter(v => Number(v) < 40).length;
+    if (poorCount >= 3) return buildNoSignal(type, 'TOO_MANY_POOR_PILLARS');
+    if (technicalScore < 45) return buildNoSignal(type, 'PILLAR_FLOOR_FAIL:Technical');
+    const emaFloor = regime === 'TRENDING' ? 50 : 40;
+    if (emaConfluenceScore < emaFloor) return buildNoSignal(type, 'PILLAR_FLOOR_FAIL:EMA');
+    const volumeFloor = isScalp ? 40 : 35;
+    if (volumeScore < volumeFloor) return buildNoSignal(type, 'PILLAR_FLOOR_FAIL:Volume');
+    const alphaThreshold = isScalp ? 65 : 70;
+    if (alpha < alphaThreshold) return buildNoSignal(type, 'ALPHA_BELOW_THRESHOLD');
 
-    if (Number.isFinite(spreadPct) && spreadPct > 0.1) rawAlpha -= 10;
-
-    const alpha = clamp(Math.round(Math.max(40, rawAlpha)), 0, 100);
-
-    const structure = getStructureLevels(type, side, price);
-
-    const riskAtrMult = isScalp ? 0.38 : 0.72;
-    const risk = atrSafe * riskAtrMult;
+    // Fixed price levels
+    const isMajor = symbol === 'BTC' || symbol === 'ETH';
+    const cfg = isScalp
+      ? (isMajor ? { tp1: 0.25, tp2: 0.40, sl: 0.15 } : { tp1: 0.35, tp2: 0.50, sl: 0.20 })
+      : (isMajor ? { tp1: 1.0, tp2: 1.8, sl: 0.6 } : { tp1: 1.5, tp2: 2.5, sl: 0.8 });
     const entry1 = price;
-    const [, entry2, entry3] = deriveEntryLadder({ type, side, entry: entry1, atrSafe, structure });
-    const [t1, t2, t3, t4] = deriveTargetsFromStructure({
-      type,
-      side,
-      entry: entry1,
-      risk,
-      atrSafe,
-      structure
-    });
-    let sl = isBull ? Math.max(0.0000001, entry1 - risk) : entry1 + risk;
-    if (isBull && Array.isArray(structure?.entrySupports) && structure.entrySupports[0] > 0) {
-      sl = Math.max(0.0000001, Math.min(sl, Number(structure.entrySupports[0])));
-    }
-    if (!isBull && Array.isArray(structure?.entryResistances) && structure.entryResistances[0] > 0) {
-      sl = Math.max(sl, Number(structure.entryResistances[0]));
-    }
-
+    const entry2 = price;
+    const entry3 = price;
+    const dir = side === 'BUY' ? 1 : -1;
+    const t1 = entry1 * (1 + (dir * cfg.tp1 / 100));
+    const t2 = entry1 * (1 + (dir * cfg.tp2 / 100));
+    const t3 = t2;
+    const t4 = t2;
+    const sl = entry1 * (1 - (dir * cfg.sl / 100));
     const riskPerUnit = Math.abs(entry1 - sl);
     const reward = Math.abs(t2 - entry1);
     const rrRatio = riskPerUnit > 0 ? (reward / riskPerUnit).toFixed(2) : '0.00';
-
-    const leverage = atrPct > 0.03
-      ? (isScalp ? 'Cross 5x' : 'Cross 4x')
-      : (isScalp ? 'Cross 10x' : 'Cross 6x');
-
+    const atr = Number(indicator?.atr);
+    const atrSafe = Number.isFinite(atr) && atr > 0 ? atr : price * (isScalp ? 0.0026 : 0.0044);
+    const atrPct = atrSafe / price;
     const timestampUtc = new Date().toISOString();
+    const patternName = pattern.valid ? pattern.name : 'NONE';
     const signalText = [
       'SIGNAL',
       type,
@@ -2497,19 +2529,20 @@ function generateSignalForAsset(asset, options = {}) {
       formatPrice(t1),
       formatPrice(t2),
       formatPrice(sl),
-      'NONE',
+      patternName,
       timestampUtc,
       String(alpha)
     ].join('|');
 
     return {
       type,
-      isBull,
+      signalType: type,
+      isBull: side === 'BUY',
       side,
-      pattern: pattern.valid ? pattern.name : 'NONE',
+      pattern: patternName,
       strength: alpha >= 85 ? { label: 'HIGH CONVICTION', cls: 'text-green' } : { label: 'CONFIRMED', cls: 'text-primary' },
       exchanges: ['Binance Futures'],
-      leverage,
+      leverage: isScalp ? 'Cross 10x' : 'Cross 6x',
       entry1,
       entry2,
       entry3,
@@ -2522,15 +2555,18 @@ function generateSignalForAsset(asset, options = {}) {
       atrPct,
       alpha,
       signalText,
+      signalLines: [signalText],
       timestampUtc,
-      gateSummary: `${type} gates passed (EMA cross recency + relaxed volume).`,
+      gateSummary: `${type} mandatory gates passed.`,
       pillarScores: {
-        base: 50,
-        volume: Number.isFinite(volumeRatioMandatory) && volumeRatioMandatory > 1.5 ? 10 : 0,
-        pattern: pattern.valid ? 15 : 0,
-        rsi: Number.isFinite(rsi) && rsi >= 40 && rsi <= 60 ? 10 : 0,
-        ema200: Number.isFinite(ema200_15m) && ((isBull && price > ema200_15m) || (!isBull && price < ema200_15m)) ? 10 : 0,
-        spreadPenalty: Number.isFinite(spreadPct) && spreadPct > 0.1 ? -10 : 0
+        regime,
+        technical: Math.round(technicalScore),
+        whale: Math.round(whaleScore),
+        emaConfluence: Math.round(emaConfluenceScore),
+        volume: Math.round(volumeScore),
+        sentiment: Math.round(sentimentScore),
+        news: Math.round(newsScore),
+        alphaSources: Math.round(alphaSourcesScore)
       },
       waitReason: ''
     };
@@ -2539,16 +2575,21 @@ function generateSignalForAsset(asset, options = {}) {
   const day = evaluateCandidate('DAY');
   const scalp = evaluateCandidate('SCALP');
 
-  const candidates = [day, scalp].filter(s => s.type !== 'WAIT');
+  const evaluations = [scalp, day];
+  const lines = evaluations.map(x => x.signalText).filter(Boolean);
+  const candidates = evaluations.filter(s => s.type !== 'NO_SIGNAL');
   if (!candidates.length) {
     return {
-      ...buildWait(`${day.waitReason} | ${scalp.waitReason}`),
-      type: 'WAIT'
+      ...evaluations[0],
+      type: 'NO_SIGNAL',
+      signalLines: lines,
+      signalText: lines[0] || `NO_SIGNAL|${symbol}/USDT|${new Date().toISOString()}|NO_SIGNAL`,
+      waitReason: evaluations.map(x => x.waitReason).filter(Boolean).join(' | ')
     };
   }
   candidates.sort((a, b) => (b.alpha - a.alpha) || (a.type === 'DAY' ? -1 : 1));
   const best = candidates[0];
-  best.signalLines = candidates.map(c => c.signalText);
+  best.signalLines = lines;
   return best;
 }
 
@@ -2569,19 +2610,19 @@ function renderProSignals() {
   grid.innerHTML = top.map((asset, index) => {
     const sig = generateSignalForAsset(asset);
     
-    if (sig.type === 'WAIT') {
+    if (sig.type === 'NO_SIGNAL') {
       return `
         <div class="signal-card" id="signal-${asset.symbol}">
           <div class="signal-card-header">
             <div class="signal-pair">
               <span class="signal-symbol">#${asset.symbol}/USDT</span>
-              <span class="badge" style="background:var(--bg-lighter); color:var(--text-muted); font-size: 0.65rem;">WAIT</span>
+              <span class="badge" style="background:var(--bg-lighter); color:var(--text-muted); font-size: 0.65rem;">NO_SIGNAL</span>
             </div>
             <div class="signal-strength ${sig.strength.cls}">${sig.strength.label}</div>
           </div>
           <div style="padding: 2rem 0; text-align: center; color: var(--text-muted);">
             <i data-feather="shield" style="margin-bottom: 1rem; opacity: 0.5;"></i>
-            <p style="font-size: 0.85rem;">${sig.waitReason}</p>
+            <p style="font-size: 0.85rem; line-height:1.5;">${Array.isArray(sig.signalLines) ? sig.signalLines.join('<br/>') : sig.waitReason}</p>
           </div>
         </div>
       `;

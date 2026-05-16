@@ -120,18 +120,12 @@ export async function fetchMarketData() {
   try {
     const BINANCE_TOP_N = 30;
     const MIN_QUOTE_VOLUME_USD = 20_000_000;
-    const MAX_ABS_CHANGE_PCT = 20;
-    const MAX_INTRADAY_RANGE_PCT = 24;
 
-    // Filter out stablecoins and low-quality/high-chaos pairs.
+    // Filter out stablecoins and synthetic leveraged tokens.
     const STABLECOINS = new Set([
       'USDT', 'USDC', 'DAI', 'BUSD', 'FDUSD', 'TUSD', 'PYUSD', 'USDE', 'USDD',
       'GUSD', 'LUSD', 'EURC', 'FRAX', 'USD1', 'USDS', 'USDP', 'USDB', 'RLUSD',
       'SUSD', 'MUSD', 'USD0', 'USDL', 'EURS', 'XAUT'
-    ]);
-    const EXCLUDED_HIGH_RISK_SYMBOLS = new Set([
-      'DOGE', 'SHIB', 'PEPE', 'WIF', 'BONK', 'FLOKI', 'MEME', 'TURBO',
-      'MOG', 'POPCAT', 'PENGU', 'NEIRO', 'BRETT', 'TRUMP'
     ]);
 
     const isStablecoinLike = (symbol = '', name = '', price = null) => {
@@ -160,20 +154,11 @@ export async function fetchMarketData() {
     const isUnpredictableOrSham = (ticker = {}) => {
       const base = String(ticker.base || '').toUpperCase();
       if (!base) return true;
-      if (EXCLUDED_HIGH_RISK_SYMBOLS.has(base)) return true;
       if (/^(1000|1000000)/.test(base)) return true;
       if (/(UP|DOWN|BULL|BEAR)$/.test(base)) return true;
 
       const quoteVolume = Number(ticker.quoteVolume) || 0;
-      const absChange = Math.abs(Number(ticker.changePct) || 0);
-      const openPrice = Number(ticker.openPrice) || 0;
-      const highPrice = Number(ticker.highPrice) || 0;
-      const lowPrice = Number(ticker.lowPrice) || 0;
-      const rangePct = openPrice > 0 ? ((highPrice - lowPrice) / openPrice) * 100 : absChange;
-
       if (quoteVolume < MIN_QUOTE_VOLUME_USD) return true;
-      if (absChange > MAX_ABS_CHANGE_PCT) return true;
-      if (rangePct > MAX_INTRADAY_RANGE_PCT) return true;
       return false;
     };
 
