@@ -7,7 +7,6 @@ import { supabase } from './lib/supabase.js';
 // --- Navigation & Setup ---
 const NAV_ITEMS = [
   { id: 'dashboard', label: 'Dashboard Overview', icon: 'grid' },
-  { id: 'quant-feed', label: 'Quant V6.0 Live Feed', icon: 'terminal', beta: true },
   { id: 'opportunities', label: 'Top Opportunities', icon: 'trending-up' },
   { id: 'trading', label: 'Nexus Trading View', icon: 'monitor' },
   { id: 'ai-research', label: 'AI Research Analyst', icon: 'cpu' },
@@ -240,6 +239,7 @@ function parseVolumeBillions(vol = '') {
 }
 
 function getUnifiedAlphaScore(asset = {}) {
+  if (Number.isFinite(asset?.quantAlpha) && asset.quantAlpha > 0) return asset.quantAlpha;
   const opportunity = Number(asset?.opportunityScore);
   if (Number.isFinite(opportunity)) return opportunity;
   const base = Number(asset?.score);
@@ -566,56 +566,7 @@ async function initApp() {
   // Real-time market data polling (every 20 seconds for high-precision accuracy)
   setInterval(syncLiveApis, 20000);
   
-  // UI Visual Heartbeat (flashes text)
-  setInterval(simulateMarketTick, 3000);
-
-  // Nexus Quant V6.0 Scanner (Runs every 60 seconds)
-  startNexusQuantScanner();
-  setInterval(startNexusQuantScanner, 60000);
-}
-
-async function startNexusQuantScanner() {
-  const pairs = ['BTC', 'ETH', 'SOL', 'BNB'];
-  const feedContainer = document.getElementById('quant-live-feed-content');
-  if (!feedContainer) return;
-
-  const timestamp = new Date().toLocaleTimeString();
-  console.log(`[${timestamp}] NEXUS QUANT V6.0: Starting scan...`);
-
-  for (const pair of pairs) {
-    // Scan SCALP (1m)
-    const scalpSignal = await import('./api.js').then(m => m.evaluateNexusSignal(pair, 'SCALP'));
-    appendQuantSignal(scalpSignal);
-    
-    // Scan DAY (15m)
-    const daySignal = await import('./api.js').then(m => m.evaluateNexusSignal(pair, 'DAY'));
-    appendQuantSignal(daySignal);
-  }
-}
-
-function appendQuantSignal(signalString) {
-  const container = document.getElementById('quant-live-feed-content');
-  if (!container) return;
-
-  const isSignal = signalString.startsWith('SIGNAL');
-  const line = document.createElement('div');
-  line.className = `quant-feed-line ${isSignal ? 'is-signal' : 'is-no-signal'}`;
-  
-  // Format the output for better readability while keeping the raw string feel
-  const parts = signalString.split('|');
-  const type = parts[0];
-  
-  line.innerHTML = `
-    <span class="feed-timestamp">[${new Date().toLocaleTimeString()}]</span>
-    <span class="feed-raw-string">${signalString}</span>
-  `;
-
-  container.prepend(line);
-  
-  // Keep only last 50 lines
-  while (container.children.length > 50) {
-    container.removeChild(container.lastChild);
-  }
+  // Nexus Quant V6.0 Scanner removed - integrated into syncLiveApis
 }
 
 async function testSupabase() {
@@ -973,6 +924,20 @@ async function syncLiveApis() {
     if (assets.length > 0) {
       assets = applyDirectionalBiasToAssets(assets);
       assets = enforceTopAssetUniverse(assets);
+
+      // --- INTEGRATE QUANT V6.0 EVALUATION ---
+      // We evaluate the top 30 assets using the new Nexus Quant V6.0 logic
+      console.log('🧪 NEXUS QUANT V6.0: Evaluating Top 30 Assets...');
+      const quantPromises = assets.map(async (asset) => {
+        const quantSignal = await import('./api.js').then(m => m.evaluateNexusSignal(asset.symbol, 'DAY'));
+        asset.quantSignalRaw = quantSignal;
+        const parts = quantSignal.split('|');
+        asset.isQuantSignal = parts[0] === 'SIGNAL';
+        asset.quantAlpha = asset.isQuantSignal ? parseInt(parts[parts.length - 1]) : 0;
+        asset.quantReason = asset.isQuantSignal ? 'Quant V6.0 Alpha Confirmed' : parts[parts.length - 1];
+        return asset;
+      });
+      await Promise.all(quantPromises);
     }
 
     if (assets.length > 0) {
@@ -1413,38 +1378,51 @@ function renderOpportunitiesPage() {
   const visibleRows = sorted.slice(0, MAX_TOP_OPPORTUNITIES);
   
   tbody.innerHTML = visibleRows.map((asset, i) => {
-    const sig = generateSignalForAsset(asset);
-    const displayScore = getUnifiedAlphaScore(asset);
-    // Calculate profit potential based on max target (t4) at 5x leverage
-    let profitPot = 0;
-    if (sig.type !== 'WAIT' && asset.price > 0 && sig.t4 > 0) {
-       profitPot = (Math.abs(sig.t4 - asset.price) / asset.price) * 5 * 100;
+    const displayScore = asset.quantAlpha || getUnifiedAlphaScore(asset);
+    const isQuant = asset.isQuantSignal;
+    
+    // Parse the raw signal for directions and levels if it's a SIGNAL
+    let sigType = 'WAIT';
+    let direction = 'NEUTRAL';
+    if (isQuant && asset.quantSignalRaw) {
+      const parts = asset.quantSignalRaw.split('|');
+      sigType = 'QUANT';
+      direction = parts[3]; // BUY or SELL
     }
+
     return `
     <tr>
       <td class="text-muted">${i+1}</td>
-      <td><strong>${asset.name}</strong> <span class="text-muted ml-2">${asset.symbol}</span></td>
+      <td>
+        <div style="display:flex; flex-direction:column;">
+          <strong>${asset.name}</strong>
+          <span class="text-muted" style="font-size:0.7rem;">${asset.symbol}</span>
+        </div>
+      </td>
       <td style="font-family: var(--font-mono)" class="live-price" data-symbol="${asset.symbol}">$${formatPrice(asset.price)}</td>
       <td class="${asset.change >= 0 ? 'text-green' : 'text-red'} live-change" data-symbol="${asset.symbol}">${asset.change > 0 ? '+' : ''}${asset.change.toFixed(2)}%</td>
       <td>
         <div class="td-score-container">
-          <span class="td-score-val">${displayScore}</span>
+          <span class="td-score-val ${isQuant ? 'text-primary' : ''}">${displayScore}</span>
           <div class="td-score-bar-bg">
-            <div class="td-score-bar-fill" style="width: ${displayScore}%"></div>
+            <div class="td-score-bar-fill ${isQuant ? 'bg-primary' : ''}" style="width: ${displayScore}%"></div>
           </div>
         </div>
       </td>
-
-
-      <td><span class="text-muted" style="font-size: 0.8rem">${asset.reason || 'Analyzing Technicals...'}</span></td>
       <td>
-        ${sig.type === 'WAIT' ? `
+        <span class="text-muted" style="font-size: 0.75rem">
+          ${isQuant ? `<span style="color:var(--primary); font-weight:700;">QUANT V6.0: </span>` : ''}
+          ${asset.quantReason || asset.reason || 'Analyzing...'}
+        </span>
+      </td>
+      <td>
+        ${!isQuant ? `
           <span class="badge" style="background: rgba(255,255,255,0.05); color: var(--text-muted); font-size: 0.65rem; padding: 0.2rem 0.5rem;">
             ⏸ WAIT
           </span>
         ` : `
-          <span class="badge ${sig.isBull ? 'sig-long' : 'sig-short'}" style="font-size: 0.65rem; padding: 0.2rem 0.5rem; display: inline-flex; align-items: center; gap: 4px;">
-            ${sig.isBull ? '📈' : '📉'} ${sig.isBull ? 'LONG' : 'SHORT'}
+          <span class="badge ${direction === 'BUY' ? 'sig-long' : 'sig-short'}" style="font-size: 0.65rem; padding: 0.2rem 0.5rem; display: inline-flex; align-items: center; gap: 4px;">
+            ${direction === 'BUY' ? '📈' : '📉'} ${direction}
           </span>
         `}
       </td>
