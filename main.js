@@ -911,23 +911,20 @@ function sigComputeTradePlan(symbol = 'BTC', direction = 'BUY', entry = 0, atrPc
   const finalEntry2 = direction === 'SELL' ? shortEntry2 : entry2;
   const finalEntry3 = direction === 'SELL' ? shortEntry3 : entry3;
   const avgEntry = (finalEntry1 + finalEntry2 + finalEntry3) / 3;
-
-  const slOffsetPct = direction === 'BUY'
-    ? (atrPct > 0.5 ? 0.0040 : (atrPct < 0.2 ? 0.0025 : 0.0032))
-    : (atrPct > 0.5 ? 0.0050 : (atrPct < 0.2 ? 0.0035 : 0.0042));
-  const tp1OffsetPct = atrPct > 0.5 ? 0.0050 : (atrPct < 0.2 ? 0.0030 : 0.0040);
-  const tp2OffsetPct = Math.max(0.0060, tp1OffsetPct * 1.7);
-  const tp3OffsetPct = Math.max(0.0090, tp1OffsetPct * 2.5);
-  const tp4OffsetPct = Math.max(0.0120, tp1OffsetPct * 3.5);
+  const riskPct = 0.0035;
+  const minRewardPct = riskPct * 1.5;
+  const tp2OffsetPct = minRewardPct * 2.0;
+  const tp3OffsetPct = minRewardPct * 3.0;
+  const tp4OffsetPct = minRewardPct * 4.0;
 
   const dir = direction === 'BUY' ? 1 : -1;
-  const tp1 = avgEntry * (1 + (dir * tp1OffsetPct));
+  const tp1 = avgEntry * (1 + (dir * minRewardPct));
   const tp2 = avgEntry * (1 + (dir * tp2OffsetPct));
   const tp3 = avgEntry * (1 + (dir * tp3OffsetPct));
   const tp4 = avgEntry * (1 + (dir * tp4OffsetPct));
   const sl = direction === 'BUY'
-    ? avgEntry * (1 - slOffsetPct)
-    : avgEntry * (1 + slOffsetPct);
+    ? avgEntry * (1 - riskPct)
+    : avgEntry * (1 + riskPct);
 
   let leverage = '8X-12X';
   if (atrPct > 0.5) leverage = '5X-8X';
@@ -2925,11 +2922,13 @@ function generateSignalForAsset(asset) {
   const entry2 = Number(scalp.entry2) || (isBull ? entry1 * (1 - 0.0008) : rawEntry);
   const entry3 = Number(scalp.entry3) || (isBull ? entry1 * (1 - 0.0018) : rawEntry * (1 - 0.0012));
   const avgEntry = (entry1 + entry2 + entry3) / 3;
-  const sl = Number(scalp.sl) || (isBull ? avgEntry * (1 - 0.0032) : avgEntry * (1 + 0.0042));
-  const t1 = Number(scalp.tp1) || (isBull ? avgEntry * (1 + 0.0040) : avgEntry * (1 - 0.0040));
-  const t2 = Number(scalp.tp2) || (isBull ? avgEntry * (1 + 0.0068) : avgEntry * (1 - 0.0068));
-  const t3 = Number(scalp.tp3) || (isBull ? avgEntry * (1 + 0.0100) : avgEntry * (1 - 0.0100));
-  const t4 = Number(scalp.tp4) || (isBull ? avgEntry * (1 + 0.0140) : avgEntry * (1 - 0.0140));
+  const riskPct = 0.0035;
+  const minRewardPct = riskPct * 1.5;
+  const sl = Number(scalp.sl) || (isBull ? avgEntry * (1 - riskPct) : avgEntry * (1 + riskPct));
+  const t1 = Number(scalp.tp1) || (isBull ? avgEntry * (1 + minRewardPct) : avgEntry * (1 - minRewardPct));
+  const t2 = Number(scalp.tp2) || (isBull ? avgEntry * (1 + (minRewardPct * 2.0)) : avgEntry * (1 - (minRewardPct * 2.0)));
+  const t3 = Number(scalp.tp3) || (isBull ? avgEntry * (1 + (minRewardPct * 3.0)) : avgEntry * (1 - (minRewardPct * 3.0)));
+  const t4 = Number(scalp.tp4) || (isBull ? avgEntry * (1 + (minRewardPct * 4.0)) : avgEntry * (1 - (minRewardPct * 4.0)));
 
   const risk = Math.max(Math.abs(entry1 - sl), entry1 * 0.0005);
   const rewardT2 = Math.abs(t2 - entry1);
