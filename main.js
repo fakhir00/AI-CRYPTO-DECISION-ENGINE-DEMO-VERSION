@@ -1994,30 +1994,32 @@ function generateSignalForAsset(asset, options = {}) {
   const price = Number(asset?.price);
   if (!(price > 0)) {
     return {
-      type: 'WAIT',
+      type: 'NO_SIGNAL',
       isBull: null,
-      strength: { label: 'NO DATA', cls: 'text-muted' },
+      strength: { label: 'NO SIGNAL', cls: 'text-muted' },
       exchanges: ['Binance'],
       leverage: 'None',
       entry1: 0, entry2: 0, entry3: 0,
       t1: 0, t2: 0, t3: 0, t4: 0, sl: 0, rrRatio: '0.0',
-      waitReason: 'Price feed unavailable.',
-      signalText: ''
+      waitReason: 'PRICE_UNAVAILABLE',
+      signalText: `NO_SIGNAL|${symbol || 'UNKNOWN'}/USDT|${new Date().toISOString()}|PRICE_UNAVAILABLE`,
+      signalLines: [`NO_SIGNAL|${symbol || 'UNKNOWN'}/USDT|${new Date().toISOString()}|PRICE_UNAVAILABLE`]
     };
   }
 
   const activeUniverse = getTopUniverseSymbols(MAX_TRADABLE_ASSETS);
   if (enforceScanUniverse && !activeUniverse.includes(symbol)) {
     return {
-      type: 'WAIT',
+      type: 'NO_SIGNAL',
       isBull: null,
-      strength: { label: 'OUTSIDE SCAN', cls: 'text-muted' },
+      strength: { label: 'NO SIGNAL', cls: 'text-muted' },
       exchanges: ['Binance'],
       leverage: 'None',
       entry1: 0, entry2: 0, entry3: 0,
       t1: 0, t2: 0, t3: 0, t4: 0, sl: 0, rrRatio: '0.0',
-      waitReason: `Pair not in Binance top ${MAX_TRADABLE_ASSETS} non-stable universe.`,
-      signalText: ''
+      waitReason: 'OUTSIDE_UNIVERSE',
+      signalText: `NO_SIGNAL|${symbol}/USDT|${new Date().toISOString()}|OUTSIDE_UNIVERSE`,
+      signalLines: [`NO_SIGNAL|${symbol}/USDT|${new Date().toISOString()}|OUTSIDE_UNIVERSE`]
     };
   }
 
@@ -2028,17 +2030,29 @@ function generateSignalForAsset(asset, options = {}) {
   const dominanceData = window._liveGlobalMarketData || null;
   const utcHour = new Date().getUTCHours();
 
-  const buildWait = (reason) => ({
-    type: 'WAIT',
-    isBull: null,
-    strength: { label: 'GATE BLOCK', cls: 'text-muted' },
-    exchanges: ['Binance'],
-    leverage: 'None',
-    entry1: 0, entry2: 0, entry3: 0,
-    t1: 0, t2: 0, t3: 0, t4: 0, sl: 0, rrRatio: '0.0',
-    waitReason: reason,
-    signalText: ''
-  });
+  const buildNoSignal = (signalType, reason) => {
+    const ts = new Date().toISOString();
+    const reasonText = `${signalType}:${reason}`;
+    const line = `NO_SIGNAL|${symbol}/USDT|${ts}|${reasonText}`;
+    return {
+      type: 'NO_SIGNAL',
+      signalType,
+      isBull: null,
+      side: null,
+      pattern: 'NONE',
+      strength: { label: 'NO SIGNAL', cls: 'text-muted' },
+      exchanges: ['Binance'],
+      leverage: 'None',
+      entry1: 0, entry2: 0, entry3: 0,
+      t1: 0, t2: 0, t3: 0, t4: 0, sl: 0, rrRatio: '0.0',
+      atrPct: 0,
+      alpha: 0,
+      signalText: line,
+      signalLines: [line],
+      timestampUtc: ts,
+      waitReason: reasonText
+    };
+  };
 
   const getBtcDominanceShiftPct = () => {
     if (!dominanceData || typeof dominanceData !== 'object') return 0;
@@ -2256,19 +2270,25 @@ function generateSignalForAsset(asset, options = {}) {
   };
 
   const computeWhaleActivityScore = (side) => {
-    const thresholdUsd = symbol === 'BTC' || symbol === 'ETH' ? 1_000_000 : 200_000;
+    const thresholdUsd = 500_000;
     let netFlowUsd = 0;
     let hasData = false;
+    let alignmentSignals = 0;
 
     if (dune && Number.isFinite(Number(dune.signalScore))) {
       hasData = true;
-      const duneDrift = ((Number(dune.signalScore) - 50) / 50) * thresholdUsd * 0.9;
+      const duneDrift = ((Number(dune.signalScore) - 50) / 50) * thresholdUsd;
       netFlowUsd += duneDrift;
+      const duneBias = String(dune?.bias || '').toLowerCase();
+      if ((side === 'BUY' && duneBias === 'bullish') || (side === 'SELL' && duneBias === 'bearish')) {
+        alignmentSignals++;
+      }
     }
 
     if (Array.isArray(LIVE_WHALES_RAW) && LIVE_WHALES_RAW.length > 0) {
       const exchangeRe = /(binance|coinbase|kraken|okx|bybit|gate|kucoin|mexc)/i;
       hasData = true;
+      let whaleDirectionalBias = 0;
       LIVE_WHALES_RAW.slice(0, 40).forEach((tx) => {
         const valueM = Number(tx?.value);
         const usd = Number.isFinite(valueM) && valueM > 0 ? valueM * 1_000_000 : 0;
@@ -2277,9 +2297,18 @@ function generateSignalForAsset(asset, options = {}) {
         const to = String(tx?.to || '').toLowerCase();
         const fromEx = exchangeRe.test(from);
         const toEx = exchangeRe.test(to);
-        if (fromEx && !toEx) netFlowUsd += usd; // exchange outflow (bullish)
-        if (!fromEx && toEx) netFlowUsd -= usd; // exchange inflow (bearish)
+        if (fromEx && !toEx) {
+          netFlowUsd += usd; // exchange outflow (bullish)
+          whaleDirectionalBias += usd;
+        }
+        if (!fromEx && toEx) {
+          netFlowUsd -= usd; // exchange inflow (bearish)
+          whaleDirectionalBias -= usd;
+        }
       });
+      if ((side === 'BUY' && whaleDirectionalBias > 0) || (side === 'SELL' && whaleDirectionalBias < 0)) {
+        alignmentSignals++;
+      }
     }
 
     if (!hasData) return 50;
@@ -2288,7 +2317,9 @@ function generateSignalForAsset(asset, options = {}) {
       : netFlowUsd <= -thresholdUsd
         ? 0
         : clamp(50 + ((netFlowUsd / thresholdUsd) * 50), 0, 100);
-    return side === 'BUY' ? bullishFlowScore : (100 - bullishFlowScore);
+    let score = side === 'BUY' ? bullishFlowScore : (100 - bullishFlowScore);
+    if (alignmentSignals >= 2) score += 10;
+    return clamp(score, 0, 100);
   };
 
   const computeEmaConfluenceScore = (type, side) => {
@@ -2303,17 +2334,16 @@ function generateSignalForAsset(asset, options = {}) {
 
     const aboveBoth = price > e9 && price > e21;
     const belowBoth = price < e9 && price < e21;
-    const spreadNow = Math.abs(e9 - e21);
-    const spreadPrev = Math.abs(e9Prev - e21Prev);
-    const expanding = spreadNow > spreadPrev;
+    const buyExpanding = e9 > e9Prev && e21 > e21Prev;
+    const sellExpanding = e9 < e9Prev && e21 < e21Prev;
 
     if (side === 'BUY') {
-      if (aboveBoth && e9 > e21 && expanding) return 100;
+      if (aboveBoth && e9 > e21 && buyExpanding) return 100;
       if (belowBoth && e9 < e21) return 0;
       return 50;
     }
 
-    if (belowBoth && e9 < e21 && expanding) return 100;
+    if (belowBoth && e9 < e21 && sellExpanding) return 100;
     if (aboveBoth && e9 > e21) return 0;
     return 50;
   };
@@ -2339,10 +2369,10 @@ function generateSignalForAsset(asset, options = {}) {
     const avgGrowth = growthCandidates.length
       ? (growthCandidates.reduce((sum, x) => sum + x, 0) / growthCandidates.length)
       : null;
-    const defiScore = avgGrowth === null ? 50 : avgGrowth > 5 ? 100 : avgGrowth > 0 ? 70 : avgGrowth < -5 ? 20 : 50;
+    const defiScore = avgGrowth === null ? 50 : avgGrowth > 5 ? 100 : 50;
 
     const trendingScore = LIVE_TRENDING_COINS.length > 0
-      ? (LIVE_TRENDING_COINS.some(c => String(c?.symbol || '').toUpperCase() === symbol) ? 100 : 80)
+      ? (LIVE_TRENDING_COINS.some(c => String(c?.symbol || '').toUpperCase() === symbol) ? 100 : 50)
       : 50;
 
     const fng = Number(LIVE_FNG?.value);
@@ -2350,9 +2380,6 @@ function generateSignalForAsset(asset, options = {}) {
     if (Number.isFinite(fng)) {
       if (side === 'BUY' && fng < 25) fngScore = 100;
       else if (side === 'SELL' && fng > 75) fngScore = 100;
-      else if (side === 'BUY' && fng > 75) fngScore = 20;
-      else if (side === 'SELL' && fng < 25) fngScore = 20;
-      else fngScore = 50;
     }
 
     let domScore = 50;
@@ -2360,7 +2387,6 @@ function generateSignalForAsset(asset, options = {}) {
     if (symbol !== 'BTC' && Number.isFinite(domShift)) {
       if (side === 'BUY' && domShift <= -0.5) domScore = 100;
       else if (side === 'SELL' && domShift >= 0.5) domScore = 100;
-      else domScore = 50;
     }
 
     return (defiScore + trendingScore + fngScore + domScore) / 4;
