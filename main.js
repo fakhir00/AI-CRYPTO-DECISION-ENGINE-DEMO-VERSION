@@ -267,6 +267,13 @@ function getSortedTradeableAssets(sortBy = 'alpha') {
   });
 }
 
+function getTopUniverseSymbols(limit = MAX_TRADABLE_ASSETS) {
+  return getSortedTradeableAssets('alpha')
+    .slice(0, Math.max(1, limit))
+    .map(a => String(a?.symbol || '').toUpperCase())
+    .filter(Boolean);
+}
+
 function enforceTopAssetUniverse(assetList = [], maxAssets = MAX_TRADABLE_ASSETS) {
   const clean = (assetList || [])
     .filter(asset => asset && asset.symbol && !isStablecoinSymbol(asset.symbol, asset.name, asset.price))
@@ -748,7 +755,8 @@ async function syncLiveApis() {
       .map(c => c.symbol.toUpperCase());
     const derivativeSymbols = topSymbols.slice(0, 15); // Top 15 for heavy OI/Funding data
     const technicalSymbols = [...new Set([...topSymbols, ...SIGNAL_SCAN_PAIRS])];
-    const signalPatternJobs = SIGNAL_SCAN_PAIRS.flatMap((sym) => ([
+    const patternUniverse = topSymbols.slice(0, 12);
+    const signalPatternJobs = patternUniverse.flatMap((sym) => ([
       fetchCandlePatterns(sym, '1m').then(data => ({ symbol: sym, interval: '1m', data })).catch(() => ({ symbol: sym, interval: '1m', data: null })),
       fetchCandlePatterns(sym, '15m').then(data => ({ symbol: sym, interval: '15m', data })).catch(() => ({ symbol: sym, interval: '15m', data: null }))
     ]));
@@ -1727,12 +1735,24 @@ function setupAiResearchChat() {
   const extractRequestedSymbols = (text = '') => {
     const upper = String(text || '').toUpperCase();
     const symbols = new Set();
+    const liveSymbolSet = new Set(
+      (assets || [])
+        .map(a => String(a?.symbol || '').toUpperCase())
+        .filter(Boolean)
+    );
     const pairMatches = [...upper.matchAll(/\b([A-Z0-9]{2,10})\s*\/\s*USDT\b/g)];
     pairMatches.forEach((m) => symbols.add(m[1]));
     const compactMatches = [...upper.matchAll(/\b([A-Z0-9]{2,10})USDT\b/g)];
     compactMatches.forEach((m) => symbols.add(m[1]));
-    const filtered = [...symbols].filter((s) => SIGNAL_SCAN_PAIRS.includes(s));
-    return filtered.length ? filtered : [...SIGNAL_SCAN_PAIRS];
+    const tokens = upper.match(/[A-Z0-9]{2,10}/g) || [];
+    tokens.forEach((token) => {
+      if (liveSymbolSet.has(token) || SIGNAL_SCAN_PAIRS.includes(token)) {
+        symbols.add(token);
+      }
+    });
+    if (symbols.size) return [...symbols];
+    const fallbackUniverse = getTopUniverseSymbols(MAX_TRADABLE_ASSETS);
+    return fallbackUniverse.length ? fallbackUniverse : [...SIGNAL_SCAN_PAIRS];
   };
 
   const handleChat = async () => {
@@ -1791,13 +1811,57 @@ function setupAiResearchChat() {
         const signalLines = [];
         const waitRows = [];
 
+        const symbolsNeedingIndicators = requested.filter((sym) => {
+          const rec = LIVE_SIGNAL_CONTEXT[sym];
+          if (!rec) return true;
+          return !rec.ema1m || !rec.ema15m || !Number.isFinite(Number(rec.volumeVsAvg1m3)) || !Number.isFinite(Number(rec.volumeVsAvg15m5));
+        });
+
+        if (symbolsNeedingIndicators.length > 0) {
+          try {
+            const [technical, spreads, patternRows] = await Promise.all([
+              fetchTechnicalSignals(symbolsNeedingIndicators),
+              fetchBidAskSpreads(symbolsNeedingIndicators),
+              Promise.all(symbolsNeedingIndicators.flatMap((sym) => ([
+                fetchCandlePatterns(sym, '1m').then(data => ({ symbol: sym, interval: '1m', data })).catch(() => ({ symbol: sym, interval: '1m', data: null })),
+                fetchCandlePatterns(sym, '15m').then(data => ({ symbol: sym, interval: '15m', data })).catch(() => ({ symbol: sym, interval: '15m', data: null }))
+              ])))
+            ]);
+
+            if (technical?.indicators && Object.keys(technical.indicators).length > 0) {
+              Object.entries(technical.indicators).forEach(([sym, metrics]) => {
+                LIVE_SIGNAL_CONTEXT[sym] = metrics;
+              });
+              window._liveSignalContext = LIVE_SIGNAL_CONTEXT;
+            }
+            if (Array.isArray(spreads)) {
+              spreads.forEach((row) => {
+                if (row?.symbol) LIVE_SPREADS[row.symbol] = row;
+              });
+              window._liveSpreads = LIVE_SPREADS;
+            }
+            if (Array.isArray(patternRows)) {
+              patternRows.forEach((row) => {
+                const sym = String(row?.symbol || '').toUpperCase();
+                const tf = String(row?.interval || '').toLowerCase();
+                if (!sym || !tf) return;
+                if (!LIVE_SIGNAL_PATTERNS[sym]) LIVE_SIGNAL_PATTERNS[sym] = {};
+                LIVE_SIGNAL_PATTERNS[sym][tf] = row?.data || null;
+              });
+              window._liveSignalPatterns = LIVE_SIGNAL_PATTERNS;
+            }
+          } catch (signalRefreshErr) {
+            console.warn('Signal on-demand refresh failed:', signalRefreshErr?.message || signalRefreshErr);
+          }
+        }
+
         requested.forEach((sym) => {
           const asset = assets.find(a => a.symbol === sym);
           if (!asset) {
             waitRows.push(`${sym}/USDT: asset context unavailable.`);
             return;
           }
-          const sig = generateSignalForAsset(asset);
+          const sig = generateSignalForAsset(asset, { enforceScanUniverse: false });
           if (sig.type === 'WAIT') {
             waitRows.push(`${sym}/USDT: ${sig.waitReason}`);
             return;
@@ -1821,7 +1885,7 @@ function setupAiResearchChat() {
         aiBubble.className = 'bubble';
         const body = signalLines.length
           ? signalLines.join('\n')
-          : `No signal generated (mandatory EMA-cross/volume checks failed).\n${waitRows.join('\n')}`;
+          : `No signal generated.\n${waitRows.join('\n')}`;
         aiBubble.innerHTML = `<pre style="margin:0;white-space:pre-wrap;font-family:var(--font-mono);font-size:0.82rem;line-height:1.55;">${body}</pre>`;
         aiMsg.appendChild(aiAvatar);
         aiMsg.appendChild(aiBubble);
@@ -1942,7 +2006,8 @@ function generateSignalForAsset(asset, options = {}) {
     };
   }
 
-  if (enforceScanUniverse && !SIGNAL_SCAN_PAIRS.includes(symbol)) {
+  const activeUniverse = getTopUniverseSymbols(MAX_TRADABLE_ASSETS);
+  if (enforceScanUniverse && !activeUniverse.includes(symbol)) {
     return {
       type: 'WAIT',
       isBull: null,
@@ -1951,7 +2016,7 @@ function generateSignalForAsset(asset, options = {}) {
       leverage: 'None',
       entry1: 0, entry2: 0, entry3: 0,
       t1: 0, t2: 0, t3: 0, t4: 0, sl: 0, rrRatio: '0.0',
-      waitReason: 'Pair not in 60s scan universe (BTC, ETH, SOL, BNB).',
+      waitReason: `Pair not in Binance top ${MAX_TRADABLE_ASSETS} non-stable universe.`,
       signalText: ''
     };
   }
@@ -2465,8 +2530,8 @@ function renderProSignals() {
   const grid = document.getElementById('pro-signals-grid');
   if (!grid) return;
 
-  // Fixed 60s scan universe per execution rules
-  const top = SIGNAL_SCAN_PAIRS
+  const universe = getTopUniverseSymbols(MAX_TRADABLE_ASSETS);
+  const top = universe
     .map(sym => assets.find(a => a.symbol === sym))
     .filter(Boolean);
 
