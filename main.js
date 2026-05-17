@@ -47,7 +47,6 @@ const SCALP_SCAN_SYMBOLS = ['BTC', 'ETH', 'SOL', 'BNB'];
 const SIGNAL_KLINE_LIMIT = 80;
 const SIGNAL_FETCH_TIMEOUT_MS = 6000;
 const SIGNAL_KLINE_CONCURRENCY = 10;
-const MIN_SIGNAL_RR_RATIO = 1.5;
 const BREAKOUT_VOLUME_SPIKE_MULTIPLIER = 2.0;
 const BREAKOUT_RSI_MIN = 60;
 const BREAKOUT_RSI_MAX = 75;
@@ -301,30 +300,6 @@ function getSortedTradeableAssets(sortBy = 'alpha') {
     }
     return (getUnifiedAlphaScore(b) - getUnifiedAlphaScore(a)) || a.symbol.localeCompare(b.symbol);
   });
-}
-
-function getScalpRiskReward(asset = null) {
-  const scalp = asset?.signals?.scalp;
-  if (!scalp || scalp.status !== 'SIGNAL') return 0;
-  const direct = Number(scalp.rrRatio);
-  if (Number.isFinite(direct) && direct > 0) return direct;
-
-  const entryA = Number(scalp.entry1 ?? scalp.entry);
-  const entryB = Number(scalp.entry2);
-  const entryC = Number(scalp.entry3);
-  const entryCandidates = [entryA, entryB, entryC].filter(Number.isFinite);
-  const entry = entryCandidates.length
-    ? (entryCandidates.reduce((sum, n) => sum + n, 0) / entryCandidates.length)
-    : entryA;
-  const target = Number(scalp.tp1);
-  const stop = Number(scalp.sl);
-  return sigComputeRiskRewardRatio(entry, target, stop);
-}
-
-function hasQualifyingScalpTrade(asset = null) {
-  const scalp = asset?.signals?.scalp;
-  if (!scalp || scalp.status !== 'SIGNAL') return false;
-  return getScalpRiskReward(asset) >= MIN_SIGNAL_RR_RATIO;
 }
 
 function sigClamp(num, min, max) {
@@ -1027,13 +1002,6 @@ function sigEvaluate(symbol, timeframe, snapshot, timestamp, spreadPct = null) {
   const levels = sigComputeTradePlan(symbol, direction, snapshot.price, snapshot.atrPct, snapshot);
   const avgEntry = (levels.entry1 + levels.entry2 + levels.entry3) / 3;
   const rrRatio = sigComputeRiskRewardRatio(avgEntry, levels.tp1, levels.sl);
-  if (!(rrRatio >= MIN_SIGNAL_RR_RATIO)) {
-    const out = sigNoSignal(timeframe, symbol, timestamp, 'RR_FAIL', Math.round(alpha), direction);
-    out.patternSummary = snapshot.pattern?.summary || snapshot.pattern?.name || 'NONE';
-    out.spreadPct = Number.isFinite(spreadPct) ? spreadPct : null;
-    out.rrRatio = Number(rrRatio.toFixed(2));
-    return out;
-  }
   const patternName = snapshot.pattern?.name || 'NONE';
   const patternSummary = snapshot.pattern?.summary || patternName;
 
@@ -2376,8 +2344,7 @@ function typeWriterEffect(element, lines, speed = 20) {
 function renderOpportunitiesPage() {
   const tbody = document.getElementById('opportunities-table-body');
   const sorted = getSortedTradeableAssets(OPPORTUNITY_SORT);
-  const qualifyingTrades = sorted.filter(hasQualifyingScalpTrade);
-  const visibleRows = qualifyingTrades.slice(0, MAX_TOP_OPPORTUNITIES);
+  const visibleRows = sorted.slice(0, MAX_TOP_OPPORTUNITIES);
 
   const renderSignalCell = (signal = null) => {
     if (!signal) {
@@ -2434,7 +2401,7 @@ function renderOpportunitiesPage() {
     tbody.innerHTML = `
       <tr>
         <td colspan="8" style="text-align:center;padding:1.25rem;color:var(--text-muted);">
-          No SCALP trades currently meet minimum risk/reward 1:1.5.
+          No SCALP opportunities are currently available.
         </td>
       </tr>
     `;

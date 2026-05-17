@@ -15,7 +15,6 @@ const MAX_INTRADAY_RANGE_PCT = 24;
 const KLINE_LIMIT = 80;
 const FETCH_TIMEOUT_MS = 6000;
 const KLINE_CONCURRENCY = 12;
-const MIN_SIGNAL_RR_RATIO = 1.5;
 const BREAKOUT_VOLUME_SPIKE_MULTIPLIER = 2.0;
 const BREAKOUT_RSI_MIN = 60;
 const BREAKOUT_RSI_MAX = 75;
@@ -863,18 +862,6 @@ function evaluateSignal(symbol, timeframe, snapshot, timestampIso, spreadPct = n
   const levels = computeScalpTradePlan(symbol, direction, snapshot.price, snapshot.atrPct, snapshot);
   const avgEntry = (levels.entry1 + levels.entry2 + levels.entry3) / 3;
   const rrRatio = computeRiskRewardRatio(avgEntry, levels.tp1, levels.sl);
-  if (!(rrRatio >= MIN_SIGNAL_RR_RATIO)) {
-    return {
-      status: 'NO_SIGNAL',
-      reason: 'RR_FAIL',
-      alpha: Math.round(alpha),
-      direction,
-      patternSummary: snapshot.pattern?.summary || snapshot.pattern?.name || 'NONE',
-      spreadPct,
-      rrRatio: Number(rrRatio.toFixed(2)),
-      line: buildNoSignalLine(timeframe, symbol, timestampIso, 'RR_FAIL')
-    };
-  }
   const patternName = snapshot.pattern?.name || 'NONE';
   const patternSummary = snapshot.pattern?.summary || patternName;
 
@@ -1059,7 +1046,7 @@ export default async function handler(req, res) {
           volumeSpike: 'Breakout candle >= 2x avg volume of prior 5 candles',
           retest: 'Latest candle retests breakout level and closes above it',
           rsiRange: '60-75',
-          minRiskReward: '1:1.5 (TP1 vs SL)'
+          minRiskReward: 'Disabled (no RR filter)'
         }
       }
     });
