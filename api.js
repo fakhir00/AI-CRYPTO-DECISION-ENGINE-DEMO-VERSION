@@ -8,7 +8,7 @@ const KEYS = {
   etherscan: 'CRSWB6SIH2SAAPCPFGBK2NN473EC5JIS9M',
   taapi: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJjbHVlIjoiNjlmNWJjMTVlZTAzMzMxMWE0ZjJjOGRiIiwiaWF0IjoxNzc3NzEyMTQ5LCJleHAiOjMzMjgyMTc2MTQ5fQ.8Htit-r6kGZC5LZn7_EZLozYC7yOyCu4Z1WzhuPIH34',
   lunarcrush: '8a0hxklrnp6i5kfiowg77edxjemoobmyiw0g62whp',
-  openai: import.meta.env.VITE_OPENAI_API_KEY
+  openai: import.meta.env?.VITE_OPENAI_API_KEY
 };
 
 const API_HEALTH = {};
@@ -119,7 +119,8 @@ export function getAIMemory() { return AI_MEMORY.getMessages(); }
 export async function fetchMarketData() {
   try {
     const BINANCE_TOP_N = 50;
-    const MIN_QUOTE_VOLUME_USD = 20_000_000;
+    const MIN_QUOTE_VOLUME_USD = 5_000_000;
+    const MIN_PRICE_USD = 0.001;
     const MAX_ABS_CHANGE_PCT = 20;
     const MAX_INTRADAY_RANGE_PCT = 24;
 
@@ -162,12 +163,14 @@ export async function fetchMarketData() {
       if (/(SCAM|FAKE|TEST)/.test(base)) return true;
 
       const quoteVolume = Number(ticker.quoteVolume) || 0;
+      const lastPrice = Number(ticker.lastPrice) || 0;
       const absChange = Math.abs(Number(ticker.changePct) || 0);
       const openPrice = Number(ticker.openPrice) || 0;
       const highPrice = Number(ticker.highPrice) || 0;
       const lowPrice = Number(ticker.lowPrice) || 0;
       const rangePct = openPrice > 0 ? ((highPrice - lowPrice) / openPrice) * 100 : absChange;
 
+      if (lastPrice > 0 && lastPrice < MIN_PRICE_USD) return true;
       if (quoteVolume < MIN_QUOTE_VOLUME_USD) return true;
       if (absChange > MAX_ABS_CHANGE_PCT) return true;
       if (rangePct > MAX_INTRADAY_RANGE_PCT) return true;
@@ -1030,6 +1033,7 @@ async function readMirroredSignal(symbol, interval = '4h', liveReferencePrice = 
     const hasPlaceholderStop = /Stop Targets:[\s\S]*?1\)\s*1/i.test(rawHtml);
     const hasUnavailableFeed = /Candle Pattern Feed\s*\([^)]+\)\s*:\s*Candle feed temporarily unavailable\./i.test(rawHtml);
     const hasHardPatternClaim = /\b(High-Volume Breakout|Bear Flag Breakdown|Bull Flag Breakout|Ascending Triangle|Cup\s*&\s*Handle|Descending Channel|Shooting Star|Bullish Hammer|Bearish Marubozu)\b/i.test(rawHtml);
+    const missingLeverage = !/\bLeverage\s*:/i.test(rawHtml);
     if (hasPlaceholderTargets && hasPlaceholderStop) {
       // Reject low-quality mirrored payloads so they don't persist for the full TTL.
       return null;
@@ -1038,6 +1042,7 @@ async function readMirroredSignal(symbol, interval = '4h', liveReferencePrice = 
       // Reject contradictory mirrored payloads: feed unavailable but rationale still claims specific patterns.
       return null;
     }
+    if (missingLeverage) return null;
     const mirroredRefPrice = toNumber(data?.data?.referencePrice);
     const liveRef = toNumber(liveReferencePrice);
     if (mirroredRefPrice && liveRef) {
@@ -1598,14 +1603,13 @@ function buildCanonicalSignalText(rawSignalText = '', fallbackSymbol = 'BTC', op
     const entryNums = forcedPlan.entries
       .slice(0, 3)
       .map(toNumber)
+      .filter(n => n !== null && n > 0)
       .sort((a, b) => direction === 'SHORT' ? a - b : b - a);
-    const targetNums = forcedPlan.targets.slice(0, 4).map(toNumber);
+    const targetNums = forcedPlan.targets.slice(0, 4).map(toNumber).filter(n => n !== null && n > 0);
     const stopNum = toNumber(forcedPlan.stop);
     const forcedPlanValid =
       entryNums.length === 3 &&
       targetNums.length === 4 &&
-      entryNums.every(n => n !== null && n > 0) &&
-      targetNums.every(n => n !== null && n > 0) &&
       stopNum !== null &&
       stopNum > 0;
 
@@ -1627,11 +1631,16 @@ Take-Profit Targets:
 1) ${formattedTargets[0]}
 2) ${formattedTargets[1]}
 3) ${formattedTargets[2]}
+4) ${formattedTargets[3]}
 
 Stop Targets:
 1) ${formattedStop}
 
-Risk-Reward: 1:1.5`;
+Leverage: ${forcedPlan.leverageLabel || 'Cross (2X-3X)'}
+Risk Per Trade: ${Number(forcedPlan.positionRiskPct || 0.5).toFixed(2)}%
+Stop Distance: ${Number(forcedPlan.riskPct || 0).toFixed(2)}%
+Invalidation: ${forcedPlan.invalidation || `15m close ${direction === 'SHORT' ? 'above' : 'below'} stop`}
+Risk-Reward: ${forcedPlan.riskRewardLabel || 'TP2 1:1.90'}`;
     }
   }
 
@@ -1694,7 +1703,7 @@ Risk-Reward: 1:1.5`;
   }
 
   entries = [...new Set(entries)].slice(0, 3);
-  targets = [...new Set(targets)].slice(0, 3);
+  targets = [...new Set(targets)].slice(0, 4);
   stops = [...new Set(stops)];
   let stop = stops[0] || null;
   const entryLadderNums = buildDirectionalEntryLadder(direction, entries, options.candleData);
@@ -1760,8 +1769,8 @@ Risk-Reward: 1:1.5`;
       : Math.max(0.0000001, entryBase * (1 - autoRiskPct));
     const autoRisk = Math.abs(entryBase - autoStopNum);
     const autoTargets = (direction === 'SHORT'
-      ? [entryBase - (autoRisk * 2), entryBase - (autoRisk * 3), entryBase - (autoRisk * 4)]
-      : [entryBase + (autoRisk * 2), entryBase + (autoRisk * 3), entryBase + (autoRisk * 4)])
+      ? [entryBase - (autoRisk * 1.15), entryBase - (autoRisk * 1.9), entryBase - (autoRisk * 2.7), entryBase - (autoRisk * 3.5)]
+      : [entryBase + (autoRisk * 1.15), entryBase + (autoRisk * 1.9), entryBase + (autoRisk * 2.7), entryBase + (autoRisk * 3.5)])
       .map(v => formatSignalPrice(Math.max(v, 0.0000001), refPrice));
     const autoStop = formatSignalPrice(autoStopNum, refPrice);
 
@@ -1778,11 +1787,16 @@ Take-Profit Targets:
 1) ${autoTargets[0]}
 2) ${autoTargets[1]}
 3) ${autoTargets[2]}
+4) ${autoTargets[3] || autoTargets[2]}
 
 Stop Targets:
 1) ${autoStop}
 
-Risk-Reward: 1:1.5`;
+Leverage: ${deriveRiskFirstLeverageLabel(null, 0.5, options.tradeMeta?.confidence)}
+Risk Per Trade: 0.50%
+Stop Distance: 0.50%
+Invalidation: 15m close ${direction === 'SHORT' ? 'above' : 'below'} stop
+Risk-Reward: TP2 1:3.00`;
   }
 
   return `#${symbol}/USDT
@@ -1798,11 +1812,16 @@ Take-Profit Targets:
 1) ${targets[0]}
 2) ${targets[1]}
 3) ${targets[2]}
+4) ${targets[3] || targets[2]}
 
 Stop Targets:
 1) ${stop}
 
-Risk-Reward: 1:1.5`;
+Leverage: ${deriveRiskFirstLeverageLabel(null, 0.5, options.tradeMeta?.confidence)}
+Risk Per Trade: 0.50%
+Stop Distance: 0.50%
+Invalidation: 15m close ${direction === 'SHORT' ? 'above' : 'below'} stop
+Risk-Reward: TP2 1:3.00`;
 }
 
 function extractTradeRationales(text = '', symbol = 'COIN') {
@@ -1842,6 +1861,13 @@ ${points[3] ? `4. ${points[3]}` : ''}
 ${points[4] ? `5. ${points[4]}` : ''}`.replace(/\n{2,}/g, '\n');
 }
 
+function parseSignalNumberList(value = '') {
+  return String(value || '')
+    .split(/[\/,]/)
+    .map(toNumber)
+    .filter(n => n !== null && n > 0);
+}
+
 function parseAssetContextSnapshots(assetContext = '') {
   const snapshots = {};
   const segments = String(assetContext || '')
@@ -1858,8 +1884,45 @@ function parseAssetContextSnapshots(assetContext = '') {
     const changePct = toNumber(m[3]);
     const reasonMatch = segment.match(/Rationale:\s*(.+)$/i);
     const reason = reasonMatch ? reasonMatch[1].trim() : '';
+    const signalMatch = segment.match(/\bSCALP_SIGNAL\s*=\s*([A-Z_]+)/i);
+    let signal = null;
 
-    snapshots[symbol] = { symbol, price, changePct, reason };
+    if (signalMatch) {
+      const rawStatus = String(signalMatch[1] || '').toUpperCase();
+      const isTrade = ['BUY', 'SELL', 'LONG', 'SHORT', 'SIGNAL'].includes(rawStatus);
+      const direction = rawStatus === 'SELL' || rawStatus === 'SHORT'
+        ? 'SHORT'
+        : rawStatus === 'BUY' || rawStatus === 'LONG'
+          ? 'LONG'
+          : null;
+      const entriesMatch = segment.match(/\bentries\s*=\s*([0-9.,/]+)/i);
+      const targetsMatch = segment.match(/\btp\s*=\s*([0-9.,/]+)/i);
+      const stopMatch = segment.match(/\bsl\s*=\s*([0-9.,]+)/i);
+      const leverageMatch = segment.match(/\bleverage\s*=\s*([^\s|]+)/i);
+      const rrMatch = segment.match(/\brrTp2\s*=\s*([0-9.]+)/i);
+      const riskMatch = segment.match(/\briskPct\s*=\s*([0-9.]+)/i);
+      const positionRiskMatch = segment.match(/\bpositionRiskPct\s*=\s*([0-9.]+)/i);
+      const setupMatch = segment.match(/\bsetup\s*=\s*([A-Z0-9_,.-]+)/i);
+      const invalidationMatch = segment.match(/\binvalidation\s*=\s*([^|]+?)(?:\s+-\s+Rationale:|$)/i);
+      const waitReasonMatch = segment.match(/\breason\s*=\s*([^|]+?)(?:\s+-\s+Rationale:|$)/i);
+
+      signal = {
+        status: isTrade ? 'SIGNAL' : rawStatus,
+        direction,
+        entries: parseSignalNumberList(entriesMatch?.[1]),
+        targets: parseSignalNumberList(targetsMatch?.[1]),
+        stop: toNumber(stopMatch?.[1]),
+        leverage: leverageMatch?.[1] ? leverageMatch[1].trim() : null,
+        rrToTp2: toNumber(rrMatch?.[1]),
+        riskPct: toNumber(riskMatch?.[1]),
+        positionRiskPct: toNumber(positionRiskMatch?.[1]),
+        setupType: setupMatch?.[1] ? setupMatch[1].trim() : null,
+        invalidation: invalidationMatch?.[1] ? invalidationMatch[1].trim() : null,
+        waitReason: waitReasonMatch?.[1] ? waitReasonMatch[1].trim() : null
+      };
+    }
+
+    snapshots[symbol] = { symbol, price, changePct, reason, signal };
   }
 
   return snapshots;
@@ -1937,9 +2000,90 @@ function evaluateDirectionalBias(snapshot = null, candleData = null, userQuery =
   };
 }
 
+function normalizeLeverageLabel(label = null, candleData = null, confidenceValue = null) {
+  const clean = String(label || '').trim();
+  if (clean && clean !== 'N/A') {
+    return /^cross/i.test(clean) ? clean : `Cross (${clean})`;
+  }
+  return deriveScalpLeverageLabel(candleData, confidenceValue);
+}
+
+function deriveRiskFirstLeverageLabel(atrPct = null, riskPct = null, confidenceValue = null) {
+  const confidence = normalizeTradeConfidence(confidenceValue);
+  const atr = toNumber(atrPct);
+  const risk = toNumber(riskPct);
+  let minLev = 4;
+  let maxLev = 6;
+
+  if ((risk !== null && risk > 1.15) || (atr !== null && atr > 1.0)) {
+    minLev = 2;
+    maxLev = 3;
+  } else if ((risk !== null && risk > 0.75) || (atr !== null && atr > 0.55)) {
+    minLev = 3;
+    maxLev = 5;
+  }
+
+  if (confidence < 0.35) {
+    maxLev = Math.max(minLev, maxLev - 1);
+  }
+
+  return minLev === maxLev ? `Cross (${minLev}X)` : `Cross (${minLev}X-${maxLev}X)`;
+}
+
+function buildScannerDrivenTradePlan(snapshot = null) {
+  const signal = snapshot?.signal;
+  if (!signal || signal.status !== 'SIGNAL') return null;
+
+  const entries = Array.isArray(signal.entries) ? signal.entries.slice(0, 3) : [];
+  const targets = Array.isArray(signal.targets) ? signal.targets.slice(0, 4) : [];
+  const stop = toNumber(signal.stop);
+  const direction = signal.direction === 'SHORT' ? 'SHORT' : 'LONG';
+  const valid =
+    entries.length === 3 &&
+    targets.length >= 4 &&
+    entries.every(n => n > 0) &&
+    targets.every(n => n > 0) &&
+    stop !== null &&
+    stop > 0;
+
+  if (!valid) return null;
+
+  return {
+    symbol: String(snapshot?.symbol || '').toUpperCase(),
+    direction,
+    entries,
+    targets,
+    stop,
+    keyLevel: entries[0],
+    keyLevelType: direction === 'SHORT' ? 'resistance' : 'support',
+    keyLevelFibLabel: 'scanner',
+    levelStrength: 'Strong',
+    riskRewardLabel: signal.rrToTp2 ? `TP2 1:${Number(signal.rrToTp2).toFixed(2)}` : 'TP2 1:1.90',
+    leverageLabel: normalizeLeverageLabel(signal.leverage, null, null),
+    confidence: 0.85,
+    changePct: toNumber(snapshot?.changePct),
+    patternBias: 0,
+    rationaleHints: [
+      `Scanner-confirmed ${direction} setup is active.`,
+      `${signal.setupType || 'Risk-filtered scalp'} passed the entry, stop, and R:R gate.`,
+      `Use ${normalizeLeverageLabel(signal.leverage, null, null)} and keep position risk near ${Number(signal.positionRiskPct || 0.5).toFixed(2)}%.`
+    ],
+    setupType: signal.setupType || 'SCANNER_CONFIRMED',
+    riskPct: signal.riskPct,
+    positionRiskPct: signal.positionRiskPct || 0.5,
+    invalidation: signal.invalidation || (direction === 'SHORT' ? `15m close above ${stop}` : `15m close below ${stop}`),
+    source: 'scanner'
+  };
+}
+
 function buildApiDrivenTradePlan({ symbol = 'BTC', userQuery = '', assetContext = '', candleData = null, fallbackPrice = null } = {}) {
   const snapshots = parseAssetContextSnapshots(assetContext);
   const snap = snapshots[String(symbol || '').toUpperCase()] || null;
+
+  const scannerPlan = buildScannerDrivenTradePlan(snap);
+  if (scannerPlan) return scannerPlan;
+  if (snap?.signal?.status === 'WAIT' || snap?.signal?.status === 'NO_SIGNAL') return null;
+
   let current = toNumber(candleData?.currentPrice);
   if (!(current > 0)) current = toNumber(snap?.price);
   if (!(current > 0)) current = toNumber(fallbackPrice);
@@ -1947,11 +2091,12 @@ function buildApiDrivenTradePlan({ symbol = 'BTC', userQuery = '', assetContext 
 
   const bias = evaluateDirectionalBias(snap, candleData, userQuery);
   const direction = bias.direction;
-  const leverageLabel = deriveScalpLeverageLabel(candleData, bias.confidence);
   const keyMeta = deriveKeyLevelMeta(direction, candleData, current);
   const entry1Base = keyMeta.keyLevel > 0 ? keyMeta.keyLevel : current;
 
-  const entryStepPct = 0.50;
+  const currentAtr = toNumber(candleData?.atr);
+  const atrPct = currentAtr && current ? (currentAtr / current) * 100 : null;
+  const entryStepPct = clampBetween((atrPct ?? 0.55) * 0.18, 0.07, 0.25);
 
   let orderedEntries;
   if (direction === 'LONG') {
@@ -1967,17 +2112,18 @@ function buildApiDrivenTradePlan({ symbol = 'BTC', userQuery = '', assetContext 
   }
   const avgEntry = orderedEntries.reduce((sum, n) => sum + n, 0) / orderedEntries.length;
 
-  const entry3 = orderedEntries[2];
-  const stopPct = 0.50;
+  const stopPct = clampBetween((atrPct ?? 0.70) * 0.9, 0.45, 1.60);
   let stop = direction === 'LONG'
-    ? Math.max(0.0000001, entry3 * (1 - (stopPct / 100)))
-    : entry3 * (1 + (stopPct / 100));
+    ? Math.max(0.0000001, avgEntry * (1 - (stopPct / 100)))
+    : avgEntry * (1 + (stopPct / 100));
 
-  const risk = Math.max(Math.abs(avgEntry - stop), avgEntry * 0.0005);
-  const tp1 = direction === 'LONG' ? (avgEntry + (risk * 2)) : (avgEntry - (risk * 2));
-  const tp2 = direction === 'LONG' ? (tp1 + risk) : (tp1 - risk);
-  const tp3 = direction === 'LONG' ? (tp2 + risk) : (tp2 - risk);
-  const tp4 = direction === 'LONG' ? (tp3 + risk) : (tp3 - risk);
+  const risk = Math.max(Math.abs(avgEntry - stop), avgEntry * 0.001);
+  const riskPct = (risk / avgEntry) * 100;
+  const leverageLabel = deriveRiskFirstLeverageLabel(atrPct, riskPct, bias.confidence);
+  const tp1 = direction === 'LONG' ? (avgEntry + (risk * 1.15)) : (avgEntry - (risk * 1.15));
+  const tp2 = direction === 'LONG' ? (avgEntry + (risk * 1.9)) : (avgEntry - (risk * 1.9));
+  const tp3 = direction === 'LONG' ? (avgEntry + (risk * 2.7)) : (avgEntry - (risk * 2.7));
+  const tp4 = direction === 'LONG' ? (avgEntry + (risk * 3.5)) : (avgEntry - (risk * 3.5));
   const targets = [tp1, tp2, tp3, tp4];
 
   const minPrice = Math.max(current * 0.02, 0.0000001);
@@ -2004,12 +2150,19 @@ function buildApiDrivenTradePlan({ symbol = 'BTC', userQuery = '', assetContext 
     keyLevelType: keyMeta.levelType,
     keyLevelFibLabel: keyMeta.fibLabel,
     levelStrength: keyMeta.levelStrength,
-    riskRewardLabel: '1:1.5',
+    riskRewardLabel: 'TP2 1:1.90',
     leverageLabel,
     confidence: bias.confidence,
     changePct: planChangePct,
     patternBias: getPatternBiasScore(candleData),
-    rationaleHints: bias.reasons
+    rationaleHints: bias.reasons,
+    setupType: 'AI_RISK_FALLBACK',
+    riskPct,
+    positionRiskPct: 0.5,
+    invalidation: direction === 'SHORT'
+      ? `15m close above ${formatSignalPrice(sanitizedStop, current)}`
+      : `15m close below ${formatSignalPrice(sanitizedStop, current)}`,
+    source: 'ai_fallback'
   };
 }
 
@@ -2025,7 +2178,7 @@ export async function fetchAIAnalysis(promptText, candleContext = null, options 
     const systemMessage = {
       role: 'system',
       content: `You are Nexus, the elite Dual-Engine AI powering the NEXUS Crypto Intelligence Platform (v5.0). You combine the deep contextual reasoning of GPT with the precise quantitative prediction modeling of Hermes. 
-You have FULL ACCESS to live market data, on-chain analytics, whale tracking, social sentiment, and news feeds — all provided to you in the user's message context. NEVER say you cannot access data or that something is unavailable. The data in the context IS your live feed.
+Use only the live market data, on-chain analytics, whale tracking, social sentiment, and news feeds provided in the user's message context. If a feed is missing or degraded, say that clearly and do not invent unavailable data.
 
 CRITICAL DATA PRIORITY: You must ALWAYS prioritize the numerical data (prices, scores, volumes) provided in the LATEST message. Conversation history is for context only. If the price in the current message differs from a previous message, use the current one. Never hallucinate prices.
 
@@ -2033,11 +2186,11 @@ CRITICAL: You have conversation memory. If the user previously mentioned a coin 
 
 Your core decision-making is based on the NEXUS High-Probability Framework. 
 
-CRITICAL: You are a DUAL-DIRECTIONAL agent. If the Alpha Score is low and the price change is negative, you MUST prefer SHORT setups. If the market is chopping sideways, stay NEUTRAL and advise against trading. Do not force Longs in a Bearish market. Never "guess" a direction—if the data is bearish, the signal MUST be SHORT.
+CRITICAL: You are a DUAL-DIRECTIONAL risk manager. Use scanner-provided SCALP_SIGNAL values exactly when present. If the scanner says WAIT, do not invent a trade; explain the failed gate and what must improve. Never promise guaranteed profit or no-loss trading.
 
-MATHEMATICAL TARGET GENERATION (STRICT): You will be provided with PRE-CALCULATED MANDATORY targets based on live Volatility (ATR) and Risk-Reward constraints in the context (under "MANDATORY LONG/SHORT TARGETS"). 
-CRITICAL: You MUST use the exact Entry, Stop Loss, and TP1-TP3 values provided in the context. Do NOT calculate your own. If the context says the Stop Loss is $3.85, you output $3.85. No exceptions. This ensures all devices (PC and Mobile) show identical signals.
-CRITICAL SCALP RULE: Every signal is SCALPING only. Keep stop-loss disciplined and set TP1-TP3 around nearby structure with minimum risk-reward 1:1.5.
+MATHEMATICAL TARGET GENERATION (STRICT): You will be provided with PRE-CALCULATED MANDATORY targets based on live volatility, scanner gates, and risk-reward constraints. 
+CRITICAL: You MUST use the exact Entry, Stop Loss, TP1-TP4, leverage, risk, and invalidation values provided in the context. Do NOT calculate your own. If the context says the Stop Loss is $3.85, you output $3.85. No exceptions. This ensures all devices show identical signals.
+CRITICAL SCALP RULE: Every signal is SCALPING only. Keep stop-loss disciplined and use TP2 risk-reward from the scanner/API plan.
 
 MANDATORY SIGNAL FORMAT (FOLLOW STRICTLY):
 # [SYMBOL]/USDT
@@ -2053,19 +2206,24 @@ Take-Profit Targets:
 1) [Price]
 2) [Price]
 3) [Price]
+4) [Price]
 
 Stop Targets:
 1) [Price]
 
-Risk-Reward: 1:1.5
+Leverage: Cross ([X])
+Risk Per Trade: [Percent]
+Stop Distance: [Percent]
+Invalidation: [15m close above/below stop]
+Risk-Reward: [TP2 R:R]
 
 CRITICAL: NEVER add "(1:1 R:R)", "(1:1.5 R:R)", "(1:3 R:R)", "(1:4 R:R)" or "(1.5 ATR)" anywhere in the signal. 
 CRITICAL ENTRY ORDER RULE:
-- LONG entries must be: Entry1 near support, Entry2 exactly 0.5% lower, Entry3 exactly 0.5% lower from Entry2.
-- SHORT entries must be: Entry1 near resistance, Entry2 exactly 0.5% higher, Entry3 exactly 0.5% higher from Entry2.
-- Minimum spread between highest and lowest entry must be 1.0%.
-- Stop loss must be 0.5%-1.0% beyond Entry3 in trade-invalidating direction.
-- TP1 must be exactly 2R from average entry, TP2 = 3R, TP3 = 4R.
+- LONG entries must be copied exactly from the scanner/API plan and remain ordered high to low.
+- SHORT entries must be copied exactly from the scanner/API plan and remain ordered low to high.
+- Stop loss must be copied exactly from the scanner/API plan.
+- TP1, TP2, TP3, and TP4 must come from the scanner/API plan exactly. Do not omit TP4.
+- Leverage must come from the scanner/API plan exactly. Never omit leverage.
 
 For all other queries, provide a single, highly optimized, data-driven response. Use markdown headers, bold text, and bullet points for readability.`
     };
@@ -2085,30 +2243,44 @@ For all other queries, provide a single, highly optimized, data-driven response.
       }
     }
 
-    const res = await fetch('https://api.openai.com/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${KEYS.openai}`
-      },
-      body: JSON.stringify({
-        model: 'gpt-4o',
-        messages,
-        temperature: 0.0,
-        seed: 42,
-        top_p: 1,
-        frequency_penalty: 0,
-        presence_penalty: 0
-      })
-    });
+    const payload = {
+      model: 'gpt-4o',
+      messages,
+      temperature: 0.0,
+      seed: 42,
+      top_p: 1,
+      frequency_penalty: 0,
+      presence_penalty: 0
+    };
 
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      const errMsg = (typeof err?.error === 'string') ? err.error : err?.error?.message;
-      throw new Error(errMsg || `HTTP ${res.status}`);
+    let data = null;
+    try {
+      const proxyRes = await fetch('/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      const proxyText = await proxyRes.text();
+      if (!proxyRes.ok) throw new Error(proxyText || `HTTP ${proxyRes.status}`);
+      data = JSON.parse(proxyText);
+    } catch (proxyErr) {
+      if (!KEYS.openai) throw proxyErr;
+      const directRes = await fetch('https://api.openai.com/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${KEYS.openai}`
+        },
+        body: JSON.stringify(payload)
+      });
+      if (!directRes.ok) {
+        const err = await directRes.json().catch(() => ({}));
+        const errMsg = (typeof err?.error === 'string') ? err.error : err?.error?.message;
+        throw new Error(errMsg || `HTTP ${directRes.status}`);
+      }
+      data = await directRes.json();
     }
 
-    const data = await res.json();
     if (data.choices?.[0]?.message?.content) {
       const reply = data.choices[0].message.content;
       // Store the AI response in memory
@@ -2206,7 +2378,7 @@ export async function fetchHermesAnalysis(promptText) {
         messages: [
           {
             role: 'system',
-            content: `You are Hermes, the quantitative prediction engine inside the NEXUS Crypto Intelligence Platform. You have FULL ACCESS to live market data — prices, trends, AI scores, confidence levels, and volume — all provided in the user's context. NEVER say you lack access to data. The context IS your live data feed. Always produce confident, numerical analysis.
+            content: `You are Hermes, the quantitative prediction engine inside the NEXUS Crypto Intelligence Platform. Use only the live market data — prices, trends, AI scores, confidence levels, and volume — provided in the user's context. If a feed is missing, identify the gap instead of inventing values.
 
 Your specialization:
 - Quantitative price predictions with probability scores
@@ -2216,7 +2388,7 @@ Your specialization:
 
 CRITICAL: You must ALWAYS provide 5 "Quantitative Rationales" explaining the data-driven basis for the trade. Ensure Risk:Reward ratio is emphasized.
 
-When the user asks for a signal or trade setup, output in this exact HTML format:
+When the user asks for a signal or trade setup, only output a trade if the context contains a valid SCALP_SIGNAL with exact entries, targets, stop, and risk/reward. Never promise guaranteed profit or no-loss trading. When a signal is valid, output in this exact HTML format:
 📪 #[COIN]/USDT<br><br>Direction: <strong style="color:var(--green)">[LONG]</strong> or <strong style="color:var(--red)">[SHORT]</strong><br>Leverage: Cross (2X-5X)<br><br>Entry: ([Price], [Price], [Price])<br><br>Target 1: [Price]<br>Target 2: [Price]<br>Target 3: [Price]<br>Target 4: [Price]<br><br>Stop loss: [Price]<br><br>Risk:Reward Ratio: 1:[Value]<br><br>⚡ NEXUS Pro Autotrade Signals<br><br><strong>5 Quantitative Rationales:</strong><br>1. [Rationale 1]<br>2. [Rationale 2]<br>3. [Rationale 3]<br>4. [Rationale 4]<br>5. [Rationale 5]
 
 For analysis queries, provide structured output with: Price targets, Probability scores, Key risk factors, and a clear BUY/SELL/HOLD recommendation. Use markdown formatting.`
@@ -2249,6 +2421,33 @@ For analysis queries, provide structured output with: Price targets, Probability
   }
 }
 
+function buildNoTradeSetupHtml(symbol = 'COIN', reason = 'NO_VALID_SIGNAL', snapshot = null) {
+  const cleanSymbol = String(symbol || 'COIN').toUpperCase();
+  const waitReason = String(reason || snapshot?.signal?.waitReason || 'NO_VALID_SIGNAL').replace(/_/g, ' ');
+  const change = toNumber(snapshot?.changePct);
+  const priceLine = snapshot?.price
+    ? `<div style="font-family:monospace;color:#94A3B8;margin-top:0.5rem;">Current: $${snapshot.price}${change !== null ? ` | 24h: ${change >= 0 ? '+' : ''}${change}%` : ''}</div>`
+    : '';
+
+  return `
+    <div style="width:100%;">
+      <div style="background:rgba(14,19,32,0.65);border:1px solid rgba(255,255,255,0.07);border-radius:8px;padding:1rem;margin:0.5rem 0 1rem;">
+        <div style="font-weight:800;color:#E2E8F0;margin-bottom:0.35rem;">#${cleanSymbol}/USDT: No Trade Setup</div>
+        <div style="color:#BAC2DE;line-height:1.6;">The scanner is in WAIT mode. Failed gate: <strong>${waitReason}</strong>. No entry, TP, SL, or leverage should be used until the scanner prints a valid SIGNAL.</div>
+        ${priceLine}
+      </div>
+      <div style="color:#BAC2DE;line-height:1.6;">
+        <strong>What must improve:</strong>
+        <ul>
+          <li>Directional edge must clear the long/short conflict gate.</li>
+          <li>Alpha must clear the minimum signal threshold.</li>
+          <li>Spread and ATR must stay inside the scalp risk band.</li>
+          <li>TP2 risk/reward must remain above the minimum gate.</li>
+        </ul>
+      </div>
+    </div>`;
+}
+
 // ─── 9. Dual AI Fusion — Candle Pattern Enhanced ───────────────────────────
 export async function fetchDualAI(userQuery, assetContext = '') {
   const context = assetContext
@@ -2262,9 +2461,12 @@ export async function fetchDualAI(userQuery, assetContext = '') {
   const mirroredRefPrice = extractedSymbol
     ? toNumber(contextSnapshots[String(extractedSymbol).toUpperCase()]?.price)
     : null;
+  const mirroredLiveSnapshot = extractedSymbol
+    ? contextSnapshots[String(extractedSymbol).toUpperCase()] || null
+    : null;
 
   // Global Mirror Protocol: if this is a signal query, force all devices to read one canonical response first.
-  if (signalMode && extractedSymbol) {
+  if (signalMode && extractedSymbol && !mirroredLiveSnapshot?.signal) {
     const mirroredHtml = await readMirroredSignal(extractedSymbol, interval, mirroredRefPrice);
     if (mirroredHtml) {
       console.log(`✅ Mirror cache hit for ${extractedSymbol} (${interval})`);
@@ -2310,6 +2512,19 @@ export async function fetchDualAI(userQuery, assetContext = '') {
     patternBias: apiTradePlan?.patternBias ?? getPatternBiasScore(candleData)
   };
 
+  if (
+    signalMode &&
+    activeSnapshot?.signal &&
+    activeSnapshot.signal.status !== 'SIGNAL' &&
+    !apiTradePlan
+  ) {
+    return buildNoTradeSetupHtml(
+      planSymbol || extractedSymbol || 'COIN',
+      activeSnapshot.signal.waitReason || activeSnapshot.signal.status,
+      activeSnapshot
+    );
+  }
+
   // 2. Build enhanced context with candle patterns and market structure
   let enhancedContext = `${context}\n\n🛰 API HEALTH SNAPSHOT:\n${getApiHealthPromptSummary()}`;
   if (candleData) {
@@ -2334,14 +2549,16 @@ export async function fetchDualAI(userQuery, assetContext = '') {
       const longSl = Math.max(0.0000001, longAvgEntry - longRisk);
       const shortSl = shortAvgEntry + shortRisk;
       const longTargets = [
-        longAvgEntry + (longRisk * 2),
-        longAvgEntry + (longRisk * 3),
-        longAvgEntry + (longRisk * 4)
+        longAvgEntry + (longRisk * 1.15),
+        longAvgEntry + (longRisk * 1.9),
+        longAvgEntry + (longRisk * 2.7),
+        longAvgEntry + (longRisk * 3.5)
       ];
       const shortTargets = [
-        shortAvgEntry - (shortRisk * 2),
-        shortAvgEntry - (shortRisk * 3),
-        shortAvgEntry - (shortRisk * 4)
+        shortAvgEntry - (shortRisk * 1.15),
+        shortAvgEntry - (shortRisk * 1.9),
+        shortAvgEntry - (shortRisk * 2.7),
+        shortAvgEntry - (shortRisk * 3.5)
       ];
 
       // Formatting helper to keep decimals sane
@@ -2375,6 +2592,8 @@ export async function fetchDualAI(userQuery, assetContext = '') {
 - TP1: $${fmt(longTargets[0] ?? (longAvgEntry + longRisk * 2))}
 - TP2: $${fmt(longTargets[1] ?? (longAvgEntry + longRisk * 3))}
 - TP3: $${fmt(longTargets[2] ?? (longAvgEntry + longRisk * 4))}
+- TP4: $${fmt(longTargets[3] ?? (longAvgEntry + longRisk * 3.5))}
+- Leverage: ${apiTradePlan?.leverageLabel || deriveRiskFirstLeverageLabel((atr / p) * 100, (longRisk / longAvgEntry) * 100, tradeMeta?.confidence)}
 
 🚨 [CRITICAL: IF SIGNAL IS SHORT, YOU MUST USE THESE EXACT VALUES IN THE OUTPUT]
 - Entry Ladder (MUST follow SHORT scaling: entry1, entry2, entry3): ($${fmt(shortStart)}, $${fmt(shortEntry2)}, $${fmt(shortEntry3)})
@@ -2382,6 +2601,8 @@ export async function fetchDualAI(userQuery, assetContext = '') {
 - TP1: $${fmt(shortTargets[0] ?? (shortAvgEntry - shortRisk * 2))}
 - TP2: $${fmt(shortTargets[1] ?? (shortAvgEntry - shortRisk * 3))}
 - TP3: $${fmt(shortTargets[2] ?? (shortAvgEntry - shortRisk * 4))}
+- TP4: $${fmt(shortTargets[3] ?? (shortAvgEntry - shortRisk * 3.5))}
+- Leverage: ${apiTradePlan?.leverageLabel || deriveRiskFirstLeverageLabel((atr / p) * 100, (shortRisk / shortAvgEntry) * 100, tradeMeta?.confidence)}
 `;
     }
     if (hasDetectedCandlePatterns(candleData)) {
@@ -2397,11 +2618,17 @@ CRITICAL: Do NOT claim specific candlestick pattern names. Base rationale on pri
     const fmtPlan = (n) => formatSignalPrice(n, cp);
     enhancedContext += `\n\n🧮 API-DERIVED EXECUTION PLAN (HIGHEST PRIORITY):
 - Direction: ${apiTradePlan.direction}
+- Setup Source: ${apiTradePlan.source || 'api'}
+- Setup Type: ${apiTradePlan.setupType || 'SCALP'}
 - Key Level: Fibonacci ${apiTradePlan.keyLevelFibLabel || '0.618'} (${apiTradePlan.keyLevelType || (apiTradePlan.direction === 'SHORT' ? 'resistance' : 'support')})
 - Entry Ladder: (${fmtPlan(apiTradePlan.entries[0])}, ${fmtPlan(apiTradePlan.entries[1])}, ${fmtPlan(apiTradePlan.entries[2])})
-- TP1-TP3: (${fmtPlan(apiTradePlan.targets[0])}, ${fmtPlan(apiTradePlan.targets[1])}, ${fmtPlan(apiTradePlan.targets[2])})
+- TP1-TP4: (${fmtPlan(apiTradePlan.targets[0])}, ${fmtPlan(apiTradePlan.targets[1])}, ${fmtPlan(apiTradePlan.targets[2])}, ${fmtPlan(apiTradePlan.targets[3])})
 - Stop: ${fmtPlan(apiTradePlan.stop)}
-- Risk-Reward: ${apiTradePlan.riskRewardLabel || '1:1.5'}
+- Leverage: ${apiTradePlan.leverageLabel || 'Cross (2X-3X)'}
+- Risk Per Trade: ${Number(apiTradePlan.positionRiskPct || 0.5).toFixed(2)}%
+- Stop Distance: ${Number(apiTradePlan.riskPct || 0).toFixed(2)}%
+- Invalidation: ${apiTradePlan.invalidation || '15m close beyond stop'}
+- Risk-Reward: ${apiTradePlan.riskRewardLabel || 'TP2 1:1.90'}
 - Confidence: ${formatPercentValue(apiTradePlan.confidence || 0)}
 CRITICAL: Use this plan exactly in the final signal format.`;
   }

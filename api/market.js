@@ -9,7 +9,8 @@ let cacheTimestamp = 0;
 const CACHE_TTL = 60 * 1000; // 60 seconds (scan cadence)
 
 const BINANCE_TOP_N = 50;
-const MIN_QUOTE_VOLUME_USD = 20_000_000;
+const MIN_QUOTE_VOLUME_USD = 5_000_000;
+const MIN_PRICE_USD = 0.001;
 const MAX_ABS_CHANGE_PCT = 20;
 const MAX_INTRADAY_RANGE_PCT = 24;
 const KLINE_LIMIT = 80;
@@ -19,6 +20,13 @@ const BREAKOUT_VOLUME_SPIKE_MULTIPLIER = 2.0;
 const BREAKOUT_RSI_MIN = 60;
 const BREAKOUT_RSI_MAX = 75;
 const BREAKOUT_RETEST_TOLERANCE_PCT = 0.35;
+const MAX_SCALP_SPREAD_PCT = 0.12;
+const MIN_SCALP_ATR_PCT = 0.06;
+const MAX_SCALP_ATR_PCT = 1.8;
+const MIN_SIGNAL_ALPHA = 66;
+const MIN_DIRECTION_EDGE = 1.35;
+const MIN_RR_TO_TP2 = 1.85;
+const MAX_STOP_DISTANCE_PCT = 1.85;
 
 const STABLECOINS = new Set([
   'USDT', 'USDC', 'DAI', 'BUSD', 'FDUSD', 'TUSD', 'PYUSD', 'USDE', 'USDD',
@@ -70,12 +78,14 @@ function isUnpredictableOrSham(ticker = {}) {
   if (/(SCAM|FAKE|TEST)/.test(base)) return true;
 
   const quoteVolume = Number(ticker.quoteVolume) || 0;
+  const lastPrice = Number(ticker.lastPrice) || 0;
   const absChange = Math.abs(Number(ticker.changePct) || 0);
   const openPrice = Number(ticker.openPrice) || 0;
   const highPrice = Number(ticker.highPrice) || 0;
   const lowPrice = Number(ticker.lowPrice) || 0;
   const rangePct = openPrice > 0 ? ((highPrice - lowPrice) / openPrice) * 100 : absChange;
 
+  if (lastPrice > 0 && lastPrice < MIN_PRICE_USD) return true;
   if (quoteVolume < MIN_QUOTE_VOLUME_USD) return true;
   if (absChange > MAX_ABS_CHANGE_PCT) return true;
   if (rangePct > MAX_INTRADAY_RANGE_PCT) return true;
@@ -280,6 +290,8 @@ function detectPattern(candles = [], timeframe = 'SCALP') {
   if (!Array.isArray(candles) || candles.length < 4) {
     return {
       name: 'NONE',
+      type: 'neutral',
+      reliability: 'none',
       hasPattern: false,
       highReliability: false,
       list: [],
@@ -406,6 +418,8 @@ function detectPattern(candles = [], timeframe = 'SCALP') {
   if (!recentUnique.length) {
     return {
       name: 'NONE',
+      type: 'neutral',
+      reliability: 'none',
       hasPattern: false,
       highReliability: false,
       list: [],
@@ -423,6 +437,8 @@ function detectPattern(candles = [], timeframe = 'SCALP') {
 
   return {
     name: primary.name,
+    type: primary.type,
+    reliability: primary.reliability,
     hasPattern: true,
     highReliability: primary.reliability === 'high' && timeframe === 'SCALP',
     list: recentUnique.map(p => p.name),
@@ -447,11 +463,17 @@ function computeTechnicalScore(snapshot = {}, direction = 'BUY', timeframe = 'SC
       strength = ((histCurrent - minHist20) / range) * 100;
     }
   }
+  if (direction === 'SELL') strength = 100 - strength;
 
   let directionScore = 50;
   if (Number.isFinite(histCurrent) && Number.isFinite(histPrevious)) {
-    if (histCurrent > histPrevious) directionScore = 100;
-    else if (histCurrent < histPrevious) directionScore = 0;
+    if (direction === 'BUY') {
+      if (histCurrent > histPrevious) directionScore = 100;
+      else if (histCurrent < histPrevious) directionScore = 0;
+    } else {
+      if (histCurrent < histPrevious) directionScore = 100;
+      else if (histCurrent > histPrevious) directionScore = 0;
+    }
   }
 
   const recency = clamp(100 - (candlesSinceCross * 10), 0, 100);
@@ -539,7 +561,8 @@ function computeAlphaFromPillars(pillars = {}) {
 
 function computeScalpTradePlan(symbol = 'BTC', direction = 'BUY', entry = 0, atrPct = 0, snapshot = null) {
   const entryBase = Number(entry) || 0;
-  const ladderStep = entryBase * 0.0010;
+  const atrFraction = clamp((Number(atrPct) || 0) / 100, 0.001, 0.018);
+  const ladderStep = entryBase * clamp(atrFraction * 0.18, 0.0007, 0.0025);
   const outerStep = ladderStep * 2;
   const finalEntry1 = direction === 'SELL'
     ? entryBase + outerStep
@@ -549,35 +572,58 @@ function computeScalpTradePlan(symbol = 'BTC', direction = 'BUY', entry = 0, atr
     : Math.max(0.0000001, entryBase - ladderStep);
   const finalEntry3 = entryBase;
   const avgEntry = (finalEntry1 + finalEntry2 + finalEntry3) / 3;
-  const riskPct = 0.0035;
-  const minRewardPct = riskPct * 1.5;
-  const tp2OffsetPct = minRewardPct * 2.0;
-  const tp3OffsetPct = minRewardPct * 3.0;
-  const tp4OffsetPct = minRewardPct * 4.0;
-
   const dir = direction === 'BUY' ? 1 : -1;
-  const tp1 = avgEntry * (1 + (dir * minRewardPct));
-  const tp2 = avgEntry * (1 + (dir * tp2OffsetPct));
-  const tp3 = avgEntry * (1 + (dir * tp3OffsetPct));
-  const tp4 = avgEntry * (1 + (dir * tp4OffsetPct));
-  const sl = direction === 'BUY'
-    ? avgEntry * (1 - riskPct)
-    : avgEntry * (1 + riskPct);
+  const stopRiskFraction = clamp(atrFraction * 0.9, 0.0045, 0.016);
+  const bufferFraction = clamp(atrFraction * 0.2, 0.0005, 0.0025);
+  const structure = snapshot?.breakout || {};
+  const keyLow = Number(structure.recentKeyLow);
+  const keyHigh = Number(structure.recentKeyHigh);
 
-  let leverage = '8X-12X';
-  if (atrPct > 0.5) leverage = '5X-8X';
-  else if (atrPct < 0.2) leverage = '15X-25X';
+  let sl = direction === 'BUY'
+    ? avgEntry * (1 - stopRiskFraction)
+    : avgEntry * (1 + stopRiskFraction);
+
+  if (direction === 'BUY' && Number.isFinite(keyLow) && keyLow > 0 && keyLow < avgEntry) {
+    const structureStop = keyLow * (1 - bufferFraction);
+    const structureRiskPct = ((avgEntry - structureStop) / avgEntry) * 100;
+    if (structureRiskPct <= MAX_STOP_DISTANCE_PCT) sl = Math.min(sl, structureStop);
+  }
+
+  if (direction === 'SELL' && Number.isFinite(keyHigh) && keyHigh > avgEntry) {
+    const structureStop = keyHigh * (1 + bufferFraction);
+    const structureRiskPct = ((structureStop - avgEntry) / avgEntry) * 100;
+    if (structureRiskPct <= MAX_STOP_DISTANCE_PCT) sl = Math.max(sl, structureStop);
+  }
+
+  const risk = Math.max(Math.abs(avgEntry - sl), avgEntry * 0.001);
+  const riskPct = (risk / avgEntry) * 100;
+  const tp1 = Math.max(0.0000001, avgEntry + (dir * risk * 1.15));
+  const tp2 = Math.max(0.0000001, avgEntry + (dir * risk * 1.9));
+  const tp3 = Math.max(0.0000001, avgEntry + (dir * risk * 2.7));
+  const tp4 = Math.max(0.0000001, avgEntry + (dir * risk * 3.5));
+
+  let leverage = '4X-6X';
+  if (riskPct > 1.15 || atrPct > 1.0) leverage = '2X-3X';
+  else if (riskPct > 0.75 || atrPct > 0.55) leverage = '3X-5X';
+
+  const invalidation = direction === 'BUY'
+    ? `15m close below ${formatLineNumber(sl)}`
+    : `15m close above ${formatLineNumber(sl)}`;
 
   return {
     entry1: finalEntry1,
     entry2: finalEntry2,
     entry3: finalEntry3,
+    avgEntry,
     tp1,
     tp2,
     tp3,
     tp4,
     sl,
-    leverage
+    leverage,
+    riskPct,
+    positionRiskPct: 0.5,
+    invalidation
   };
 }
 
@@ -682,10 +728,17 @@ function detectBreakoutRetest(candles = []) {
     return {
       volumeSpikeRatio: 0,
       breakoutLevel: null,
+      breakdownLevel: null,
       breakoutConfirmed: false,
+      breakdownConfirmed: false,
       retestConfirmed: false,
+      breakdownRetestConfirmed: false,
       recentKeyLow: null,
-      retestLow: null
+      recentKeyHigh: null,
+      retestLow: null,
+      retestHigh: null,
+      bull: null,
+      bear: null
     };
   }
 
@@ -697,29 +750,59 @@ function detectBreakoutRetest(candles = []) {
   const preBreakoutVolAvg = avg(preBreakout.map(c => c.volume));
   const volumeSpikeRatio = preBreakoutVolAvg > 0 ? (breakout.volume / preBreakoutVolAvg) : 0;
   const breakoutLevel = preBreakout.length ? Math.max(...preBreakout.map(c => c.high)) : null;
+  const breakdownLevel = preBreakout.length ? Math.min(...preBreakout.map(c => c.low)) : null;
 
   const breakoutConfirmed = Number.isFinite(breakoutLevel)
     && breakout.close > breakoutLevel
     && breakout.high > breakoutLevel
-    && volumeSpikeRatio >= BREAKOUT_VOLUME_SPIKE_MULTIPLIER;
+    && volumeSpikeRatio >= 1.15;
 
-  const tolerance = Number.isFinite(breakoutLevel)
+  const breakdownConfirmed = Number.isFinite(breakdownLevel)
+    && breakout.close < breakdownLevel
+    && breakout.low < breakdownLevel
+    && volumeSpikeRatio >= 1.15;
+
+  const breakoutTolerance = Number.isFinite(breakoutLevel)
     ? breakoutLevel * (BREAKOUT_RETEST_TOLERANCE_PCT / 100)
     : 0;
   const retestConfirmed = breakoutConfirmed
     && Number.isFinite(breakoutLevel)
-    && retest.low <= (breakoutLevel + tolerance)
+    && retest.low <= (breakoutLevel + breakoutTolerance)
     && retest.close >= breakoutLevel;
 
+  const breakdownTolerance = Number.isFinite(breakdownLevel)
+    ? breakdownLevel * (BREAKOUT_RETEST_TOLERANCE_PCT / 100)
+    : 0;
+  const breakdownRetestConfirmed = breakdownConfirmed
+    && Number.isFinite(breakdownLevel)
+    && retest.high >= (breakdownLevel - breakdownTolerance)
+    && retest.close <= breakdownLevel;
+
   const recentKeyLow = Math.min(...candles.slice(-8).map(c => c.low));
+  const recentKeyHigh = Math.max(...candles.slice(-8).map(c => c.high));
 
   return {
     volumeSpikeRatio,
     breakoutLevel,
+    breakdownLevel,
     breakoutConfirmed,
+    breakdownConfirmed,
     retestConfirmed,
+    breakdownRetestConfirmed,
     recentKeyLow: Number.isFinite(recentKeyLow) ? recentKeyLow : null,
-    retestLow: Number.isFinite(retest.low) ? retest.low : null
+    recentKeyHigh: Number.isFinite(recentKeyHigh) ? recentKeyHigh : null,
+    retestLow: Number.isFinite(retest.low) ? retest.low : null,
+    retestHigh: Number.isFinite(retest.high) ? retest.high : null,
+    bull: {
+      level: breakoutLevel,
+      confirmed: breakoutConfirmed,
+      retested: retestConfirmed
+    },
+    bear: {
+      level: breakdownLevel,
+      confirmed: breakdownConfirmed,
+      retested: breakdownRetestConfirmed
+    }
   };
 }
 
@@ -770,72 +853,163 @@ function buildTimeframeSnapshot(candles = [], timeframe = 'SCALP') {
   };
 }
 
+function isPatternAligned(pattern = {}, direction = 'BUY') {
+  const type = String(pattern?.type || '').toLowerCase();
+  if (direction === 'BUY') return type === 'bullish';
+  if (direction === 'SELL') return type === 'bearish';
+  return false;
+}
+
+function isPatternOpposed(pattern = {}, direction = 'BUY') {
+  const type = String(pattern?.type || '').toLowerCase();
+  if (direction === 'BUY') return type === 'bearish';
+  if (direction === 'SELL') return type === 'bullish';
+  return false;
+}
+
+function scoreDirection(snapshot = {}, direction = 'BUY') {
+  const isBuy = direction === 'BUY';
+  const price = Number(snapshot.price);
+  const ema9 = Number(snapshot.ema9);
+  const ema21 = Number(snapshot.ema21);
+  const ema9Prev = Number(snapshot.ema9Prev);
+  const ema21Prev = Number(snapshot.ema21Prev);
+  const rsi = snapshot.rsi == null ? null : Number(snapshot.rsi);
+  const histCurrent = snapshot.macd?.histCurrent == null ? null : Number(snapshot.macd.histCurrent);
+  const histPrevious = snapshot.macd?.histPrevious == null ? null : Number(snapshot.macd.histPrevious);
+  const structure = snapshot.breakout || {};
+  const volumeRatio = Math.max(Number(snapshot.volumeRatio5) || 0, Number(structure.volumeSpikeRatio) || 0);
+  const pattern = snapshot.pattern || {};
+  const reasons = [];
+  let score = 0;
+
+  if ([price, ema9, ema21].every(Number.isFinite)) {
+    if (isBuy && price > ema9 && ema9 > ema21) {
+      score += 2.1;
+      reasons.push('EMA_STACK_BULL');
+    }
+    if (!isBuy && price < ema9 && ema9 < ema21) {
+      score += 2.1;
+      reasons.push('EMA_STACK_BEAR');
+    }
+  }
+
+  if (Number.isFinite(ema9) && Number.isFinite(ema21) && Number.isFinite(ema9Prev) && Number.isFinite(ema21Prev)) {
+    if (isBuy && ema9 > ema9Prev && ema21 >= ema21Prev) {
+      score += 0.9;
+      reasons.push('EMA_EXPANSION');
+    }
+    if (!isBuy && ema9 < ema9Prev && ema21 <= ema21Prev) {
+      score += 0.9;
+      reasons.push('EMA_CONTRACTION');
+    }
+  }
+
+  if (Number.isFinite(rsi)) {
+    if (isBuy && rsi >= 50 && rsi <= 72) score += 1.1;
+    if (isBuy && rsi >= 55 && rsi <= 67) score += 0.45;
+    if (isBuy && rsi > 78) score -= 1.2;
+    if (!isBuy && rsi <= 50 && rsi >= 28) score += 1.1;
+    if (!isBuy && rsi <= 45 && rsi >= 33) score += 0.45;
+    if (!isBuy && rsi < 22) score -= 1.2;
+  }
+
+  if (Number.isFinite(histCurrent) && Number.isFinite(histPrevious)) {
+    if (isBuy && histCurrent > histPrevious) score += 1.0;
+    if (isBuy && histCurrent > 0) score += 0.55;
+    if (!isBuy && histCurrent < histPrevious) score += 1.0;
+    if (!isBuy && histCurrent < 0) score += 0.55;
+  }
+
+  if (isBuy && structure.bull?.retested) {
+    score += 2.4;
+    reasons.push('BREAKOUT_RETEST');
+  } else if (isBuy && structure.bull?.confirmed) {
+    score += 1.0;
+    reasons.push('BREAKOUT_CONFIRM');
+  }
+
+  if (!isBuy && structure.bear?.retested) {
+    score += 2.4;
+    reasons.push('BREAKDOWN_RETEST');
+  } else if (!isBuy && structure.bear?.confirmed) {
+    score += 1.0;
+    reasons.push('BREAKDOWN_CONFIRM');
+  }
+
+  if (volumeRatio >= BREAKOUT_VOLUME_SPIKE_MULTIPLIER) score += 1.0;
+  else if (volumeRatio >= 1.35) score += 0.65;
+  else if (volumeRatio < 0.75) score -= 0.35;
+
+  if (isPatternAligned(pattern, direction)) {
+    score += pattern.highReliability ? 1.15 : 0.75;
+    reasons.push(`${isBuy ? 'BULL' : 'BEAR'}_PATTERN`);
+  }
+  if (isPatternOpposed(pattern, direction)) score -= 0.9;
+
+  const divergence = snapshot.divergence || {};
+  if (isBuy && divergence.bullish) score += 0.75;
+  if (isBuy && divergence.bearish) score -= 0.75;
+  if (!isBuy && divergence.bearish) score += 0.75;
+  if (!isBuy && divergence.bullish) score -= 0.75;
+
+  return {
+    direction,
+    score,
+    reasons,
+    hasTrigger: reasons.some(r => /RETEST|CONFIRM|PATTERN/.test(r)) || score >= 4.2
+  };
+}
+
+function chooseSignalDirection(snapshot = {}) {
+  const buy = scoreDirection(snapshot, 'BUY');
+  const sell = scoreDirection(snapshot, 'SELL');
+  const winner = buy.score >= sell.score ? buy : sell;
+  const loser = winner.direction === 'BUY' ? sell : buy;
+  const edge = winner.score - loser.score;
+  return { winner, loser, edge, buy, sell };
+}
+
+function buildNoSignalPayload(timeframe, symbol, timestampIso, reason, snapshot = null, alpha = 50, direction = null, spreadPct = null) {
+  return {
+    status: 'NO_SIGNAL',
+    reason,
+    alpha: Math.round(alpha),
+    direction,
+    patternSummary: snapshot?.pattern?.summary || snapshot?.pattern?.name || 'NONE',
+    spreadPct: Number.isFinite(spreadPct) ? spreadPct : null,
+    atrPct: Number.isFinite(Number(snapshot?.atrPct)) ? Number(snapshot.atrPct) : null,
+    line: buildNoSignalLine(timeframe, symbol, timestampIso, reason)
+  };
+}
+
 function evaluateSignal(symbol, timeframe, snapshot, timestampIso, spreadPct = null) {
   if (!snapshot) {
-    return {
-      status: 'NO_SIGNAL',
-      reason: 'DATA_UNAVAILABLE',
-      alpha: 50,
-      patternSummary: 'NONE',
-      spreadPct: null,
-      line: buildNoSignalLine(timeframe, symbol, timestampIso, 'DATA_UNAVAILABLE')
-    };
+    return buildNoSignalPayload(timeframe, symbol, timestampIso, 'DATA_UNAVAILABLE');
   }
 
-  const breakout = snapshot.breakout || {};
-  const volumeSpikeRatio = Number(breakout.volumeSpikeRatio) || 0;
-  if (!(volumeSpikeRatio >= BREAKOUT_VOLUME_SPIKE_MULTIPLIER)) {
-    return {
-      status: 'NO_SIGNAL',
-      reason: 'VOLUME_SPIKE_FAIL',
-      alpha: 50,
-      direction: 'BUY',
-      patternSummary: snapshot.pattern?.summary || snapshot.pattern?.name || 'NONE',
-      spreadPct,
-      line: buildNoSignalLine(timeframe, symbol, timestampIso, 'VOLUME_SPIKE_FAIL')
-    };
+  const cleanSpread = Number(spreadPct);
+  if (Number.isFinite(cleanSpread) && cleanSpread > MAX_SCALP_SPREAD_PCT) {
+    return buildNoSignalPayload(timeframe, symbol, timestampIso, 'SPREAD_TOO_WIDE', snapshot, 50, null, cleanSpread);
   }
 
-  if (!breakout.breakoutConfirmed) {
-    return {
-      status: 'NO_SIGNAL',
-      reason: 'BREAKOUT_FAIL',
-      alpha: 50,
-      direction: 'BUY',
-      patternSummary: snapshot.pattern?.summary || snapshot.pattern?.name || 'NONE',
-      spreadPct,
-      line: buildNoSignalLine(timeframe, symbol, timestampIso, 'BREAKOUT_FAIL')
-    };
+  const atrPct = Number(snapshot.atrPct);
+  if (!(Number.isFinite(atrPct) && atrPct >= MIN_SCALP_ATR_PCT)) {
+    return buildNoSignalPayload(timeframe, symbol, timestampIso, 'VOLATILITY_TOO_LOW', snapshot, 50, null, cleanSpread);
+  }
+  if (atrPct > MAX_SCALP_ATR_PCT) {
+    return buildNoSignalPayload(timeframe, symbol, timestampIso, 'VOLATILITY_TOO_HIGH', snapshot, 50, null, cleanSpread);
   }
 
-  if (!breakout.retestConfirmed) {
-    return {
-      status: 'NO_SIGNAL',
-      reason: 'RETEST_FAIL',
-      alpha: 50,
-      direction: 'BUY',
-      patternSummary: snapshot.pattern?.summary || snapshot.pattern?.name || 'NONE',
-      spreadPct,
-      line: buildNoSignalLine(timeframe, symbol, timestampIso, 'RETEST_FAIL')
-    };
+  const directionChoice = chooseSignalDirection(snapshot);
+  const direction = directionChoice.winner.direction;
+  if (directionChoice.edge < MIN_DIRECTION_EDGE || !directionChoice.winner.hasTrigger) {
+    return buildNoSignalPayload(timeframe, symbol, timestampIso, 'NO_DIRECTIONAL_EDGE', snapshot, 50, direction, cleanSpread);
   }
 
-  const rsi = Number(snapshot.rsi);
-  if (!(Number.isFinite(rsi) && rsi >= BREAKOUT_RSI_MIN && rsi <= BREAKOUT_RSI_MAX)) {
-    return {
-      status: 'NO_SIGNAL',
-      reason: 'RSI_RANGE_FAIL',
-      alpha: 50,
-      direction: 'BUY',
-      patternSummary: snapshot.pattern?.summary || snapshot.pattern?.name || 'NONE',
-      spreadPct,
-      line: buildNoSignalLine(timeframe, symbol, timestampIso, 'RSI_RANGE_FAIL')
-    };
-  }
-
-  const direction = 'BUY';
   const technicalMeta = computeTechnicalScore(snapshot, direction, timeframe);
-  const technicalScore = technicalMeta.score;
+  const directionEdgeScore = clamp((directionChoice.winner.score / 8) * 100, 0, 100);
+  const technicalScore = clamp((technicalMeta.score * 0.62) + (directionEdgeScore * 0.38), 0, 100);
 
   // If unavailable from external feeds in this endpoint, keep strict neutral defaults per spec.
   const whaleScore = 50;
@@ -844,7 +1018,8 @@ function evaluateSignal(symbol, timeframe, snapshot, timestampIso, spreadPct = n
   const alphaSourcesScore = 50;
 
   const emaConfluenceScore = computeEmaConfluenceScore(direction, snapshot);
-  const volumeScore = computeVolumeScore(volumeSpikeRatio);
+  const volumeRatio = Math.max(Number(snapshot.volumeRatio5) || 0, Number(snapshot.breakout?.volumeSpikeRatio) || 0);
+  const volumeScore = computeVolumeScore(volumeRatio);
 
   const pillars = {
     technical: technicalScore,
@@ -858,12 +1033,24 @@ function evaluateSignal(symbol, timeframe, snapshot, timestampIso, spreadPct = n
 
   const alphaMeta = computeAlphaFromPillars(pillars);
   const alpha = alphaMeta.alpha;
+  if (alpha < MIN_SIGNAL_ALPHA) {
+    return buildNoSignalPayload(timeframe, symbol, timestampIso, 'ALPHA_SCORE_FAIL', snapshot, alpha, direction, cleanSpread);
+  }
 
   const levels = computeScalpTradePlan(symbol, direction, snapshot.price, snapshot.atrPct, snapshot);
-  const avgEntry = (levels.entry1 + levels.entry2 + levels.entry3) / 3;
-  const rrRatio = computeRiskRewardRatio(avgEntry, levels.tp1, levels.sl);
+  const avgEntry = Number(levels.avgEntry) || ((levels.entry1 + levels.entry2 + levels.entry3) / 3);
+  const rrToTp1 = computeRiskRewardRatio(avgEntry, levels.tp1, levels.sl);
+  const rrRatio = computeRiskRewardRatio(avgEntry, levels.tp2, levels.sl);
+  if (!Number.isFinite(Number(levels.riskPct)) || Number(levels.riskPct) > MAX_STOP_DISTANCE_PCT) {
+    return buildNoSignalPayload(timeframe, symbol, timestampIso, 'STOP_DISTANCE_FAIL', snapshot, alpha, direction, cleanSpread);
+  }
+  if (rrRatio < MIN_RR_TO_TP2) {
+    return buildNoSignalPayload(timeframe, symbol, timestampIso, 'RR_FAIL', snapshot, alpha, direction, cleanSpread);
+  }
+
   const patternName = snapshot.pattern?.name || 'NONE';
   const patternSummary = snapshot.pattern?.summary || patternName;
+  const setupType = directionChoice.winner.reasons.find(r => /RETEST|CONFIRM|PATTERN/.test(r)) || 'MOMENTUM_CONTINUATION';
 
   return {
     status: 'SIGNAL',
@@ -873,19 +1060,27 @@ function evaluateSignal(symbol, timeframe, snapshot, timestampIso, spreadPct = n
     entry1: levels.entry1,
     entry2: levels.entry2,
     entry3: levels.entry3,
+    avgEntry,
     tp1: levels.tp1,
     tp2: levels.tp2,
     tp3: levels.tp3,
     tp4: levels.tp4,
     sl: levels.sl,
     leverage: levels.leverage,
+    setupType,
+    invalidation: levels.invalidation,
+    riskPct: Number(levels.riskPct.toFixed(2)),
+    positionRiskPct: levels.positionRiskPct,
+    rrToTp1: Number(rrToTp1.toFixed(2)),
     rrRatio: Number(rrRatio.toFixed(2)),
     pattern: patternName,
     patternSummary,
     alpha: Math.round(alpha),
-    spreadPct,
-    atrPct: snapshot.atrPct,
+    spreadPct: Number.isFinite(cleanSpread) ? cleanSpread : null,
+    atrPct,
     regime: alphaMeta.regime,
+    directionEdge: Number(directionChoice.edge.toFixed(2)),
+    confirmations: directionChoice.winner.reasons,
     pillars: {
       technical: Math.round(technicalScore),
       whale: Math.round(whaleScore),
@@ -1042,11 +1237,13 @@ export default async function handler(req, res) {
           maxIntradayRangePct: MAX_INTRADAY_RANGE_PCT
         },
         mandatoryChecks: {
-          mode: 'BREAKOUT_15M',
-          volumeSpike: 'Breakout candle >= 2x avg volume of prior 5 candles',
-          retest: 'Latest candle retests breakout level and closes above it',
-          rsiRange: '60-75',
-          minRiskReward: 'Disabled (no RR filter)'
+          mode: 'RISK_FIRST_15M_SCALP',
+          direction: `Winner must beat opposite side by ${MIN_DIRECTION_EDGE}+ edge points`,
+          spread: `Spread <= ${MAX_SCALP_SPREAD_PCT}%`,
+          volatility: `${MIN_SCALP_ATR_PCT}% <= ATR <= ${MAX_SCALP_ATR_PCT}%`,
+          alpha: `Alpha >= ${MIN_SIGNAL_ALPHA}`,
+          minRiskReward: `TP2 R:R >= ${MIN_RR_TO_TP2}`,
+          stopDistance: `Stop distance <= ${MAX_STOP_DISTANCE_PCT}%`
         }
       }
     });

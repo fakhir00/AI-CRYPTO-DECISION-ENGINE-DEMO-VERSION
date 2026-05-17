@@ -250,12 +250,44 @@
                       <th>Alpha Score</th>
 
                       <th>Pattern Detected</th>
-                      <th>SCALP (1m)</th>
+                      <th>SCALP (15m)</th>
                       <th>Action</th>
                     </tr>
                   </thead>
                   <tbody id="opportunities-table-body"></tbody>
                 </table>
+              </div>
+            </div>
+          </div>
+
+          <!-- Trade Setups -->
+          <div class="page" id="page-setups">
+            <div class="setup-risk-strip">
+              <div class="setup-risk-item">
+                <span>Mode</span>
+                <strong>15m Scalp</strong>
+              </div>
+              <div class="setup-risk-item">
+                <span>Risk Per Trade</span>
+                <strong>0.50%</strong>
+              </div>
+              <div class="setup-risk-item">
+                <span>Minimum TP2 R:R</span>
+                <strong>1.85</strong>
+              </div>
+              <div class="setup-risk-item">
+                <span>Rule</span>
+                <strong>No Signal, No Trade</strong>
+              </div>
+            </div>
+            <div class="panel full-height">
+              <div class="panel-header">
+                <h2 class="panel-title"><i data-feather="target"></i> Risk-Filtered Trade Setups</h2>
+                <span class="panel-badge ai-badge">SCANNER LIVE</span>
+              </div>
+              <div class="panel-body">
+                <div class="risk-note">Scanner outputs are risk-managed setups, not profit guarantees. Invalidated trades must be cut at stop.</div>
+                <div class="signals-grid" id="pro-signals-grid"></div>
               </div>
             </div>
           </div>
