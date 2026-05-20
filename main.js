@@ -2526,15 +2526,11 @@ function renderOpportunitiesPage() {
       const sl = Number(signal.sl);
       const lev = signal.leverage || 'N/A';
       const rr = Number(signal.rrRatio);
-      const setupType = String(signal.setupType || signal.patternSummary || 'SETUP').replace(/_/g, ' ');
       const riskPct = Number(signal.riskPct);
       return `
         <div style="display:flex;flex-direction:column;gap:0.25rem;">
           <span class="badge ${dirIsBuy ? 'sig-long' : 'sig-short'}" style="font-size: 0.62rem; padding: 0.15rem 0.45rem; width: fit-content;">
             ${dirIsBuy ? 'BUY' : 'SELL'} - ${Number(signal.alpha ?? 50).toFixed(0)}
-          </span>
-          <span class="text-muted" style="font-size: 0.64rem; line-height: 1.25;">
-            ${setupType}
           </span>
           <span class="text-muted" style="font-size: 0.64rem; line-height: 1.25; font-family: var(--font-mono);">
             E: ${formatPrice(e1)} | ${formatPrice(e2)} | ${formatPrice(e3)}
