@@ -2516,33 +2516,10 @@ function renderOpportunitiesPage() {
 
     if (signal.status === 'SIGNAL') {
       const dirIsBuy = signal.direction === 'BUY';
-      const e1 = Number(signal.entry1 ?? signal.entry);
-      const e2 = Number(signal.entry2);
-      const e3 = Number(signal.entry3);
-      const tp1 = Number(signal.tp1);
-      const tp2 = Number(signal.tp2);
-      const tp3 = Number(signal.tp3);
-      const tp4 = Number(signal.tp4);
-      const sl = Number(signal.sl);
-      const lev = signal.leverage || 'N/A';
-      const rr = Number(signal.rrRatio);
-      const riskPct = Number(signal.riskPct);
       return `
         <div style="display:flex;flex-direction:column;gap:0.25rem;">
           <span class="badge ${dirIsBuy ? 'sig-long' : 'sig-short'}" style="font-size: 0.62rem; padding: 0.15rem 0.45rem; width: fit-content;">
             ${dirIsBuy ? 'BUY' : 'SELL'} - ${Number(signal.alpha ?? 50).toFixed(0)}
-          </span>
-          <span class="text-muted" style="font-size: 0.64rem; line-height: 1.25; font-family: var(--font-mono);">
-            E: ${formatPrice(e1)} | ${formatPrice(e2)} | ${formatPrice(e3)}
-          </span>
-          <span class="text-muted" style="font-size: 0.64rem; line-height: 1.25; font-family: var(--font-mono);">
-            TP: ${formatPrice(tp1)} / ${formatPrice(tp2)} / ${formatPrice(tp3)} / ${formatPrice(tp4)}
-          </span>
-          <span class="text-muted" style="font-size: 0.64rem; line-height: 1.25; font-family: var(--font-mono);">
-            SL: ${formatPrice(sl)} | Lev: ${lev}
-          </span>
-          <span class="text-muted" style="font-size: 0.64rem; line-height: 1.25; font-family: var(--font-mono);">
-            TP2 RR: ${(Number.isFinite(rr) ? rr.toFixed(2) : '0.00')} ${Number.isFinite(riskPct) ? `| Risk: ${riskPct.toFixed(2)}%` : ''}
           </span>
         </div>
       `;
