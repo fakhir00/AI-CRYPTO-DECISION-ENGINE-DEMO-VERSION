@@ -2,6 +2,7 @@ import './style.css';
 import { fetchMarketData, fetchCandlePatterns, fetchGlobalMarketData, fetchWhaleActivity, fetchSentiment, fetchFearAndGreed, fetchAIAnalysis, fetchHermesAnalysis, fetchDualAI, calculateAlphaScore, fetchDefiPools, fetchNews, fetchTechnicalSignals, fetchTrendingNarratives, fetchChartData, fetchFundingRates, fetchOpenInterest, fetchOrderBookDepth, fetchBtcOnChain, fetchDuneMarketPulse, addToAIMemory, clearAIMemory, getAIMemory, getApiHealthSummary, getApiHealthPromptSummary } from './api.js';
 import { setupAuth, openSignIn, logout, openUserProfile, clerk } from './lib/auth.js';
 import { supabase } from './lib/supabase.js';
+import { buildLocalStructureLevels, computeStructureAwareTradePlan } from './lib/trade-plan.js';
 
 
 // --- Navigation & Setup ---
@@ -57,7 +58,7 @@ const MIN_SCALP_ATR_PCT = 0.04;
 const MAX_SCALP_ATR_PCT = 1.6;
 const MIN_SIGNAL_ALPHA = 66;
 const MIN_DIRECTION_EDGE = 1.35;
-const MIN_RR_TO_TP2 = 1.85;
+const MIN_RR_TO_TP2 = 1.5;
 const MAX_STOP_DISTANCE_PCT = 1.85;
 const SIGNAL_BINANCE_ENDPOINTS = [
   'https://api.binance.com/api/v3/klines',
@@ -110,6 +111,7 @@ function isScamLikeAsset(asset = {}) {
   const price = Number(asset?.price ?? asset?.current_price);
 
   if (!symbol) return true;
+  if (!/^[A-Z0-9]+$/.test(symbol)) return true;
   if (symbol.length < 2) return true;
   if (/^(1000|1000000)/.test(symbol)) return true;
   if (/(UP|DOWN|BULL|BEAR)$/.test(symbol)) return true;
@@ -795,9 +797,11 @@ function sigBuildSnapshot(candles = [], timeframe = 'SCALP') {
   const pattern = sigDetectPattern(candles, timeframe);
   const atrPct = sigComputeAtrPercent(candles, 5);
   const breakout = sigDetectBreakoutRetest(candles);
+  const price = closes[closes.length - 1];
+  const structureLevels = buildLocalStructureLevels(candles, price, atrPct);
 
   return {
-    price: closes[closes.length - 1],
+    price,
     ema9,
     ema21,
     ema9Prev,
@@ -808,6 +812,7 @@ function sigBuildSnapshot(candles = [], timeframe = 'SCALP') {
     pattern,
     atrPct,
     breakout,
+    structureLevels,
     volumeRatio3,
     volumeRatio5,
     currentVolume,
@@ -939,71 +944,11 @@ function sigComputeAlpha(pillars = {}) {
 }
 
 function sigComputeTradePlan(symbol = 'BTC', direction = 'BUY', entry = 0, atrPct = 0, snapshot = null) {
-  const entryBase = Number(entry) || 0;
-  const atrFraction = sigClamp((Number(atrPct) || 0) / 100, 0.001, 0.018);
-  const ladderStep = entryBase * sigClamp(atrFraction * 0.18, 0.0007, 0.0025);
-  const outerStep = ladderStep * 2;
-  const finalEntry1 = direction === 'SELL'
-    ? entryBase + outerStep
-    : Math.max(0.0000001, entryBase - outerStep);
-  const finalEntry2 = direction === 'SELL'
-    ? entryBase + ladderStep
-    : Math.max(0.0000001, entryBase - ladderStep);
-  const finalEntry3 = entryBase;
-  const avgEntry = (finalEntry1 + finalEntry2 + finalEntry3) / 3;
-  const dir = direction === 'BUY' ? 1 : -1;
-  const stopRiskFraction = sigClamp(atrFraction * 0.9, 0.0045, 0.016);
-  const bufferFraction = sigClamp(atrFraction * 0.2, 0.0005, 0.0025);
-  const structure = snapshot?.breakout || {};
-  const keyLow = Number(structure.recentKeyLow);
-  const keyHigh = Number(structure.recentKeyHigh);
-
-  let sl = direction === 'BUY'
-    ? avgEntry * (1 - stopRiskFraction)
-    : avgEntry * (1 + stopRiskFraction);
-
-  if (direction === 'BUY' && Number.isFinite(keyLow) && keyLow > 0 && keyLow < avgEntry) {
-    const structureStop = keyLow * (1 - bufferFraction);
-    const structureRiskPct = ((avgEntry - structureStop) / avgEntry) * 100;
-    if (structureRiskPct <= MAX_STOP_DISTANCE_PCT) sl = Math.min(sl, structureStop);
-  }
-
-  if (direction === 'SELL' && Number.isFinite(keyHigh) && keyHigh > avgEntry) {
-    const structureStop = keyHigh * (1 + bufferFraction);
-    const structureRiskPct = ((structureStop - avgEntry) / avgEntry) * 100;
-    if (structureRiskPct <= MAX_STOP_DISTANCE_PCT) sl = Math.max(sl, structureStop);
-  }
-
-  const risk = Math.max(Math.abs(avgEntry - sl), avgEntry * 0.001);
-  const riskPct = (risk / avgEntry) * 100;
-  const tp1 = Math.max(0.0000001, avgEntry + (dir * risk * 1.15));
-  const tp2 = Math.max(0.0000001, avgEntry + (dir * risk * 1.9));
-  const tp3 = Math.max(0.0000001, avgEntry + (dir * risk * 2.7));
-  const tp4 = Math.max(0.0000001, avgEntry + (dir * risk * 3.5));
-
-  let leverage = '4X-6X';
-  if (riskPct > 1.15 || atrPct > 1.0) leverage = '2X-3X';
-  else if (riskPct > 0.75 || atrPct > 0.55) leverage = '3X-5X';
-
-  const invalidation = direction === 'BUY'
-    ? `15m close below ${sigFormatLineNumber(sl)}`
-    : `15m close above ${sigFormatLineNumber(sl)}`;
-
-  return {
-    entry1: finalEntry1,
-    entry2: finalEntry2,
-    entry3: finalEntry3,
-    avgEntry,
-    tp1,
-    tp2,
-    tp3,
-    tp4,
-    sl,
-    leverage,
-    riskPct,
-    positionRiskPct: 0.5,
-    invalidation
-  };
+  return computeStructureAwareTradePlan(symbol, direction, entry, atrPct, snapshot, {
+    maxStopDistancePct: MAX_STOP_DISTANCE_PCT,
+    minRrToTp2: MIN_RR_TO_TP2,
+    positionRiskPct: 0.5
+  });
 }
 
 function sigComputeRiskRewardRatio(entry = 0, target = 0, stopLoss = 0) {
@@ -1226,6 +1171,10 @@ function sigEvaluate(symbol, timeframe, snapshot, timestamp, spreadPct = null) {
     leverage: levels.leverage,
     setupType,
     invalidation: levels.invalidation,
+    stopBasis: levels.stopBasis,
+    targetBasis: levels.targetBasis,
+    localSupport: levels.localSupport,
+    localResistance: levels.localResistance,
     riskPct: Number(levels.riskPct.toFixed(2)),
     positionRiskPct: levels.positionRiskPct,
     rrToTp1: Number(rrToTp1.toFixed(2)),
@@ -2674,6 +2623,7 @@ function renderOpportunitiesPage() {
             + `sl=${scalpSignal.sl}, leverage=${scalpSignal.leverage}, `
             + `alpha=${scalpSignal.alpha}, setupType=${scalpSignal.setupType || 'SCALP'}, `
             + `riskPct=${scalpSignal.riskPct}, positionRiskPct=${scalpSignal.positionRiskPct || 0.5}, rrToTp2=${scalpSignal.rrRatio}, `
+            + `stopBasis=${scalpSignal.stopBasis || 'N/A'}, targetBasis=${(scalpSignal.targetBasis || []).join('/') || 'N/A'}, `
             + `invalidation="${scalpSignal.invalidation || 'stop loss'}", line="${scalpSignal.line}". `
             + `Do not alter these numbers.`
           );
@@ -3008,7 +2958,7 @@ function setupAiResearchChat() {
         .map((a) => {
           const sig = a?.signals?.scalp;
           const signalCtx = sig?.status === 'SIGNAL'
-            ? `SCALP_SIGNAL=${sig.direction} setup=${sig.setupType || sig.patternSummary || 'SCALP'} entries=${sig.entry1}/${sig.entry2}/${sig.entry3} tp=${sig.tp1}/${sig.tp2}/${sig.tp3}/${sig.tp4} sl=${sig.sl} leverage=${sig.leverage || 'N/A'} rrTp2=${sig.rrRatio} riskPct=${sig.riskPct || 0} positionRiskPct=${sig.positionRiskPct || 0.5} invalidation=${sig.invalidation || 'stop'}`
+            ? `SCALP_SIGNAL=${sig.direction} setup=${sig.setupType || sig.patternSummary || 'SCALP'} entries=${sig.entry1}/${sig.entry2}/${sig.entry3} tp=${sig.tp1}/${sig.tp2}/${sig.tp3}/${sig.tp4} sl=${sig.sl} leverage=${sig.leverage || 'N/A'} rrTp2=${sig.rrRatio} riskPct=${sig.riskPct || 0} positionRiskPct=${sig.positionRiskPct || 0.5} stopBasis=${sig.stopBasis || 'N/A'} targetBasis=${(sig.targetBasis || []).join('/') || 'N/A'} invalidation=${sig.invalidation || 'stop'}`
             : `SCALP_SIGNAL=WAIT reason=${sig?.reason || 'DATA_UNAVAILABLE'}`;
           return `${a.symbol}: CURRENT_PRICE=$${a.price} (${a.change >= 0 ? '+' : ''}${a.change.toFixed(2)}%) - ${signalCtx} - Rationale: ${a.reason}`;
         })
