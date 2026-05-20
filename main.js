@@ -3160,11 +3160,6 @@ function renderProSignals() {
       const base = Number(sig.avgEntry) || Number(asset.price) || 1;
       return (-Math.abs(((sig.sl - base) / base) * 100)).toFixed(2);
     };
-    const setupLabel = String(sig.setupType || 'MOMENTUM_CONTINUATION').replace(/_/g, ' ');
-    const confirmationLabel = sig.confirmations?.length
-      ? sig.confirmations.slice(0, 3).map(c => String(c).replace(/_/g, ' ')).join(' + ')
-      : setupLabel;
-    
     // SaaS Freemium Logic: Lock signals after the 2nd one (Unlocked per user request)
     const isLocked = false;
     const lockedOverlay = isLocked ? `
@@ -3196,17 +3191,6 @@ function renderProSignals() {
         <div class="signal-row">
           <span class="signal-label">Leverage</span>
           <span class="signal-value text-warning">${sig.leverage}</span>
-        </div>
-
-        <!-- Trade Type -->
-        <div class="signal-row">
-          <span class="signal-label">Trade Type</span>
-          <span class="signal-value" style="color: var(--primary)">${setupLabel}</span>
-        </div>
-
-        <div class="signal-row">
-          <span class="signal-label">Confirm</span>
-          <span class="signal-value">${confirmationLabel}</span>
         </div>
 
         <!-- Divider -->
