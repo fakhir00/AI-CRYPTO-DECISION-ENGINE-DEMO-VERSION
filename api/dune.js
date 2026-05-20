@@ -2,6 +2,8 @@
 // NEXUS Dune Proxy — Server-side macro on-chain intelligence
 // ═══════════════════════════════════════════════════════════════
 
+import { getServerEnv } from '../lib/server-env.js';
+
 const DUNE_BASE_URL = 'https://api.dune.com/api/v1';
 const CACHE_TTL_MS = 2 * 60 * 1000; // 2 minutes
 const EXEC_TIMEOUT_MS = 18 * 1000;  // bounded to keep UI responsive
@@ -50,11 +52,11 @@ async function duneRequest(path, apiKey, options = {}) {
   return res.json();
 }
 
-async function executeDuneSql(sql, apiKey, performance = 'medium') {
+async function executeDuneSql(sql, apiKey) {
   const executePayload = await duneRequest('/sql/execute', apiKey, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ sql, performance })
+    body: JSON.stringify({ sql })
   });
 
   const executionId = executePayload?.execution_id;
@@ -124,6 +126,70 @@ function buildPulseFromRows(rows = []) {
   };
 }
 
+async function fetchBinanceTicker(symbol) {
+  const res = await fetch(`https://api.binance.com/api/v3/ticker/24hr?symbol=${symbol}`);
+  if (!res.ok) throw new Error(`Binance ${symbol} HTTP ${res.status}`);
+  return res.json();
+}
+
+async function buildPublicFallbackPulse(reason = 'Dune unavailable') {
+  try {
+    const tickers = await Promise.all([
+      fetchBinanceTicker('BTCUSDT'),
+      fetchBinanceTicker('ETHUSDT'),
+      fetchBinanceTicker('SOLUSDT')
+    ]);
+
+    const changes = tickers
+      .map(t => Number(t.priceChangePercent))
+      .filter(Number.isFinite);
+    const quoteVolumes = tickers
+      .map(t => Number(t.quoteVolume))
+      .filter(Number.isFinite);
+
+    const avgChangePct = changes.length
+      ? changes.reduce((sum, value) => sum + value, 0) / changes.length
+      : 0;
+    const volume24h = quoteVolumes.reduce((sum, value) => sum + value, 0);
+    const signalScore = clamp(50 + (avgChangePct * 4), 0, 100);
+    const bias = signalScore >= 57 ? 'bullish' : (signalScore <= 43 ? 'bearish' : 'neutral');
+
+    return {
+      pulse: {
+        volume24h,
+        volumePrev24h: 0,
+        volumeGrowthPct: avgChangePct,
+        trades24h: 0,
+        uniqueTraders24h: 0,
+        btcTx24h: 0,
+        btcTxPrev24h: 0,
+        btcTxGrowthPct: avgChangePct,
+        signalScore,
+        bias,
+        fallbackReason: reason
+      },
+      source: 'fallback_public_market'
+    };
+  } catch (error) {
+    return {
+      pulse: {
+        volume24h: 0,
+        volumePrev24h: 0,
+        volumeGrowthPct: 0,
+        trades24h: 0,
+        uniqueTraders24h: 0,
+        btcTx24h: 0,
+        btcTxPrev24h: 0,
+        btcTxGrowthPct: 0,
+        signalScore: 50,
+        bias: 'neutral',
+        fallbackReason: `${reason}; public fallback failed: ${error.message}`
+      },
+      source: 'fallback_neutral'
+    };
+  }
+}
+
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET');
@@ -136,12 +202,13 @@ export default async function handler(req, res) {
     });
   }
 
-  const apiKey = process.env.DUNE_API_KEY || process.env.VITE_DUNE_API_KEY;
+  const apiKey = getServerEnv('DUNE_API_KEY', 'VITE_DUNE_API_KEY');
   if (!apiKey) {
+    const fallback = await buildPublicFallbackPulse('DUNE_API_KEY is not configured');
     return res.status(200).json({
-      source: 'disabled',
+      source: fallback.source,
       asOf: new Date().toISOString(),
-      data: null,
+      data: fallback.pulse,
       warning: 'DUNE_API_KEY is not configured.'
     });
   }
@@ -173,7 +240,7 @@ FROM dex_window
 `;
 
   try {
-    const rows = await executeDuneSql(sql, apiKey, 'medium');
+    const rows = await executeDuneSql(sql, apiKey);
     const pulse = buildPulseFromRows(rows);
 
     cachedPayload = pulse;
@@ -195,9 +262,12 @@ FROM dex_window
       });
     }
 
-    return res.status(500).json({
-      error: 'Failed to fetch Dune market pulse',
-      detail: error.message
+    const fallback = await buildPublicFallbackPulse(error.message);
+    return res.status(200).json({
+      source: fallback.source,
+      asOf: new Date().toISOString(),
+      data: fallback.pulse,
+      warning: `Dune fallback active: ${error.message}`
     });
   }
 }

@@ -3,6 +3,8 @@
 // Fetches OHLCV from Binance and detects institutional patterns
 // ═══════════════════════════════════════════════════════════════
 
+import { getServerEnv } from '../lib/server-env.js';
+
 // Cache: symbol+interval → { patterns, timestamp }
 const cache = {};
 const CACHE_TTL = 20 * 1000; // 20 seconds (scalp data freshness)
@@ -18,8 +20,8 @@ function isBear(o, c) { return c < o; }
 
 import { createClient } from '@supabase/supabase-js';
 
-const supabaseUrl = process.env.VITE_SUPABASE_URL;
-const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+const supabaseUrl = getServerEnv('VITE_SUPABASE_URL');
+const supabaseKey = getServerEnv('SUPABASE_SERVICE_ROLE_KEY');
 let supabase = null;
 
 function getSupabaseClient() {

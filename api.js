@@ -3,11 +3,11 @@
 // ====================================================
 
 const KEYS = {
-  coingecko: 'CG-7gTv8kk2qS7r8kj515m2rVQJ',
-  cmc: 'e7080786d0f14b3abfc6c58de5f61adc',
-  etherscan: 'CRSWB6SIH2SAAPCPFGBK2NN473EC5JIS9M',
-  taapi: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJjbHVlIjoiNjlmNWJjMTVlZTAzMzMxMWE0ZjJjOGRiIiwiaWF0IjoxNzc3NzEyMTQ5LCJleHAiOjMzMjgyMTc2MTQ5fQ.8Htit-r6kGZC5LZn7_EZLozYC7yOyCu4Z1WzhuPIH34',
-  lunarcrush: '8a0hxklrnp6i5kfiowg77edxjemoobmyiw0g62whp',
+  coingecko: import.meta.env?.VITE_COINGECKO_API_KEY || 'CG-7gTv8kk2qS7r8kj515m2rVQJ',
+  cmc: import.meta.env?.VITE_CMC_API_KEY || 'e7080786d0f14b3abfc6c58de5f61adc',
+  etherscan: import.meta.env?.VITE_ETHERSCAN_API_KEY || 'CRSWB6SIH2SAAPCPFGBK2NN473EC5JIS9M',
+  taapi: import.meta.env?.VITE_TAAPI_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJjbHVlIjoiNjlmNWJjMTVlZTAzMzMxMWE0ZjJjOGRiIiwiaWF0IjoxNzc3NzEyMTQ5LCJleHAiOjMzMjgyMTc2MTQ5fQ.8Htit-r6kGZC5LZn7_EZLozYC7yOyCu4Z1WzhuPIH34',
+  lunarcrush: import.meta.env?.VITE_LUNARCRUSH_KEY || '8a0hxklrnp6i5kfiowg77edxjemoobmyiw0g62whp',
   openai: import.meta.env?.VITE_OPENAI_API_KEY
 };
 
@@ -54,6 +54,19 @@ export function getApiHealthSummary() {
 export function getApiHealthPromptSummary() {
   const rows = Object.entries(API_HEALTH).map(([name, info]) => `${name}: ${info.status}${info.detail ? ` (${info.detail})` : ''}`);
   return rows.length > 0 ? rows.join(' | ') : 'No API health checks have run yet.';
+}
+
+export async function fetchRuntimeApiHealth() {
+  try {
+    const res = await fetch('/api/health');
+    if (!res.ok) throw new Error(`Health API HTTP ${res.status}`);
+    const payload = await res.json();
+    markApiOk('NEXUS Runtime Health', `${payload?.summary?.ok || 0}/${payload?.summary?.checked || 0} checks ok`);
+    return payload;
+  } catch (error) {
+    markApiDegraded('NEXUS Runtime Health', error.message);
+    return null;
+  }
 }
 
 // ─── 0. AI Conversation Memory Buffer ────────────────────────────────────────
@@ -277,6 +290,42 @@ export async function fetchBinancePatterns() {
 
 // ─── 2. CoinMarketCap: Global market + BTC dominance ─────────────────────────
 export async function fetchGlobalMarketData() {
+  const buildBinanceGlobalFallback = async (reason = 'CMC unavailable') => {
+    try {
+      const res = await fetch('https://api.binance.com/api/v3/ticker/24hr');
+      if (!res.ok) throw new Error(`Binance fallback HTTP ${res.status}`);
+      const rows = await res.json();
+      const usdtRows = Array.isArray(rows) ? rows.filter(row => String(row?.symbol || '').endsWith('USDT')) : [];
+      const totalVolume24h = usdtRows.reduce((sum, row) => sum + (Number(row.quoteVolume) || 0), 0);
+      const btcRow = usdtRows.find(row => row.symbol === 'BTCUSDT');
+      const ethRow = usdtRows.find(row => row.symbol === 'ETHUSDT');
+      const btcVolume = Number(btcRow?.quoteVolume) || 0;
+      const ethVolume = Number(ethRow?.quoteVolume) || 0;
+      const btcDominanceProxy = totalVolume24h > 0 ? (btcVolume / totalVolume24h) * 100 : 0;
+      const ethDominanceProxy = totalVolume24h > 0 ? (ethVolume / totalVolume24h) * 100 : 0;
+
+      markApiDegraded('CMC Global Metrics', `Binance global fallback: ${reason}`);
+      return {
+        source: 'binance_global_fallback',
+        data: {
+          btc_dominance: btcDominanceProxy,
+          eth_dominance: ethDominanceProxy,
+          total_volume_24h: totalVolume24h,
+          quote: {
+            USD: {
+              total_market_cap: 0,
+              total_volume_24h: totalVolume24h,
+              altcoin_volume_24h: Math.max(0, totalVolume24h - btcVolume - ethVolume)
+            }
+          }
+        }
+      };
+    } catch (fallbackError) {
+      markApiFailed('CMC Global Metrics', `${reason}; fallback failed: ${fallbackError.message}`);
+      return null;
+    }
+  };
+
   try {
     const res = await fetch('/api/cmc/v1/global-metrics/quotes/latest', {
       headers: {
@@ -291,8 +340,7 @@ export async function fetchGlobalMarketData() {
     return data;
   } catch (e) {
     console.warn('⚠️ CoinMarketCap failed:', e.message);
-    markApiFailed('CMC Global Metrics', e.message);
-    return null;
+    return buildBinanceGlobalFallback(e.message);
   }
 }
 

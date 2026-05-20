@@ -1,5 +1,5 @@
 import './style.css';
-import { fetchMarketData, fetchCandlePatterns, fetchGlobalMarketData, fetchWhaleActivity, fetchSentiment, fetchFearAndGreed, fetchAIAnalysis, fetchHermesAnalysis, fetchDualAI, calculateAlphaScore, fetchDefiPools, fetchNews, fetchTechnicalSignals, fetchTrendingNarratives, fetchChartData, fetchFundingRates, fetchOpenInterest, fetchOrderBookDepth, fetchBtcOnChain, fetchDuneMarketPulse, addToAIMemory, clearAIMemory, getAIMemory, getApiHealthSummary, getApiHealthPromptSummary } from './api.js';
+import { fetchMarketData, fetchCandlePatterns, fetchGlobalMarketData, fetchWhaleActivity, fetchSentiment, fetchFearAndGreed, fetchAIAnalysis, fetchHermesAnalysis, fetchDualAI, calculateAlphaScore, fetchDefiPools, fetchNews, fetchTechnicalSignals, fetchTrendingNarratives, fetchChartData, fetchFundingRates, fetchOpenInterest, fetchOrderBookDepth, fetchBtcOnChain, fetchDuneMarketPulse, fetchRuntimeApiHealth, addToAIMemory, clearAIMemory, getAIMemory, getApiHealthSummary, getApiHealthPromptSummary } from './api.js';
 import { setupAuth, openSignIn, logout, openUserProfile, clerk } from './lib/auth.js';
 import { supabase } from './lib/supabase.js';
 import { buildLocalStructureLevels, computeStructureAwareTradePlan } from './lib/trade-plan.js';
@@ -1895,7 +1895,8 @@ async function syncLiveApis() {
       globalMarketData,
       defiPoolsData,
       newsData,
-      technicalData
+      technicalData,
+      runtimeHealthData
     ] = await Promise.all([
       fetchWhaleActivity(),
       fetchTrendingNarratives(),
@@ -1910,7 +1911,8 @@ async function syncLiveApis() {
       fetchGlobalMarketData(),
       fetchDefiPools(),
       fetchNews(),
-      fetchTechnicalSignals(derivativeSymbols)
+      fetchTechnicalSignals(derivativeSymbols),
+      fetchRuntimeApiHealth()
     ]);
 
     // Update Global Narratives & Sentiment
@@ -1963,11 +1965,15 @@ async function syncLiveApis() {
     window._liveOiData = LIVE_OI;
     window._liveDepthData = LIVE_DEPTH;
     window._liveDunePulse = LIVE_DUNE_PULSE;
+    if (runtimeHealthData) window._serverApiHealth = runtimeHealthData;
 
     // Surface API status for debugging + AI context injection
     const apiHealth = getApiHealthSummary();
     window._apiHealthSummary = apiHealth;
-    window._apiHealthPrompt = getApiHealthPromptSummary();
+    const runtimeHealthPrompt = runtimeHealthData
+      ? `Runtime checks: ${(runtimeHealthData.checks || []).map(check => `${check.name}: ${check.status}${check.httpStatus ? ` HTTP ${check.httpStatus}` : ''}`).join(' | ')}`
+      : '';
+    window._apiHealthPrompt = [getApiHealthPromptSummary(), runtimeHealthPrompt].filter(Boolean).join(' | ');
     if (apiHealth.degraded > 0 || apiHealth.failed > 0) {
       const failingApis = apiHealth.services
         .filter(s => s.status !== 'ok')

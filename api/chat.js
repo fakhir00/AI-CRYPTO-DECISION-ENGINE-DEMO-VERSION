@@ -1,9 +1,11 @@
+import { getServerEnv } from '../lib/server-env.js';
+
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  const openaiKey = process.env.VITE_OPENAI_API_KEY || process.env.OPENAI_API_KEY;
+  const openaiKey = getServerEnv('OPENAI_API_KEY', 'VITE_OPENAI_API_KEY');
 
   if (!openaiKey) {
     return res.status(500).json({ error: 'OPENAI_API_KEY is missing from environment variables.' });
