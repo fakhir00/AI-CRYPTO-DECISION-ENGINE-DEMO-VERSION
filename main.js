@@ -603,7 +603,7 @@ function sigDetectMacdDivergence(candles = [], histSeries = []) {
   return { bullish, bearish };
 }
 
-function sigDetectPattern(candles = [], timeframe = 'SCALP') {
+function sigDetectPattern(candles = [], timeframe = 'MOMENTUM') {
   if (!Array.isArray(candles) || candles.length < 4) {
     return {
       name: 'NONE',
@@ -757,7 +757,7 @@ function sigDetectPattern(candles = [], timeframe = 'SCALP') {
     type: primary.type,
     reliability: primary.reliability,
     hasPattern: true,
-    highReliability: primary.reliability === 'high' && timeframe === 'SCALP',
+    highReliability: primary.reliability === 'high' && timeframe === 'MOMENTUM',
     list: recentUnique.map(p => p.name),
     summary: recentUnique.map(p => p.name).join(', ')
   };
@@ -846,7 +846,7 @@ function sigDetectBreakoutRetest(candles = []) {
   };
 }
 
-function sigBuildSnapshot(candles = [], timeframe = 'SCALP') {
+function sigBuildSnapshot(candles = [], timeframe = 'MOMENTUM') {
   if (!Array.isArray(candles) || candles.length < 30) return null;
 
   const closes = candles.map(c => c.close);
@@ -917,7 +917,7 @@ function sigComputeAtrPercent(candles = [], period = 5) {
   return (atr / lastClose) * 100;
 }
 
-function sigComputeTechnicalScore(snapshot = {}, direction = 'BUY', timeframe = 'SCALP') {
+function sigComputeTechnicalScore(snapshot = {}, direction = 'BUY', timeframe = 'MOMENTUM') {
   const rsi = Number.isFinite(snapshot.rsi) ? snapshot.rsi : 50;
   const rsiScore = sigClamp(100 - (Math.abs(rsi - 50) * 2), 0, 100);
 
@@ -957,7 +957,7 @@ function sigComputeTechnicalScore(snapshot = {}, direction = 'BUY', timeframe = 
 
   const pattern = snapshot.pattern || { hasPattern: false, highReliability: false };
   let patternScore = pattern.hasPattern ? 100 : 50;
-  if (pattern.highReliability) patternScore = timeframe === 'SCALP' ? 120 : 100;
+  if (pattern.highReliability) patternScore = timeframe === 'MOMENTUM' ? 120 : 100;
   patternScore = sigClamp(patternScore, 0, 100);
 
   return {
@@ -1281,7 +1281,7 @@ function sigEvaluate(symbol, timeframe, snapshot, timestamp, spreadPct = null) {
     entryLevels: [levels.entry1, levels.entry2, levels.entry3],
     targets: [levels.tp1, levels.tp2, levels.tp3, levels.tp4],
     stopLoss: levels.sl,
-    leverage: String(levels.leverage || '').includes('Cross') ? levels.leverage : `Cross ${levels.leverage || '4X-6X'}`,
+    leverage: levels.leverage || '3x Cross',
     riskPerTradePct: levels.positionRiskPct,
     stopDistancePct: levels.riskPct,
     riskRewardToTp2: rrRatio,
@@ -1513,8 +1513,10 @@ async function hydrateAssetsWithSignals(assetList = []) {
       }
       const spreadPct = spreadMap[`${symbol}USDT`];
 
+      const momentumSignal = sigEvaluate(symbol, 'MOMENTUM', scalpSnapshot, timestampIso, spreadPct);
       SIGNAL_CACHE.bySymbol[symbol] = {
-        scalp: sigEvaluate(symbol, 'MOMENTUM', scalpSnapshot, timestampIso, spreadPct)
+        scalp: momentumSignal,
+        momentum: momentumSignal
       };
     });
 
@@ -1529,7 +1531,8 @@ async function hydrateAssetsWithSignals(assetList = []) {
     if (!cached) return asset;
 
     const mergedSignals = {
-      scalp: asset?.signals?.scalp?.line ? asset.signals.scalp : cached.scalp
+      scalp: asset?.signals?.scalp?.line ? asset.signals.scalp : cached.scalp,
+      momentum: asset?.signals?.momentum?.line ? asset.signals.momentum : (cached.momentum || cached.scalp)
     };
 
     const scoreFromSignals = Math.round(Number(mergedSignals.scalp?.alpha) || 50);
@@ -1860,7 +1863,7 @@ async function initApp() {
   // Verify Supabase Connectivity
   testSupabase();
 
-  // Real-time market scan polling (every 60 seconds, aligned with SCALP engine)
+  // Real-time market scan polling (every 60 seconds, aligned with momentum engine)
   setInterval(syncLiveApis, SIGNAL_SCAN_INTERVAL_MS);
   
   // UI Visual Heartbeat (flashes text)

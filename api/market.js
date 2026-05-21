@@ -7,6 +7,7 @@
 import { buildLocalStructureLevels, computeStructureAwareTradePlan } from '../lib/trade-plan.js';
 import { createManagedSignal } from '../lib/signal-lifecycle.js';
 import { DEFAULT_MOMENTUM_CONFIG, evaluateMomentumStrategy } from '../lib/momentum-strategy.js';
+import { fetchCcxtCandles } from '../lib/ccxt-market-data.js';
 
 let cachedData = null;
 let cacheTimestamp = 0;
@@ -18,15 +19,16 @@ const MIN_PRICE_USD = 0.001;
 const MAX_ABS_CHANGE_PCT = 20;
 const MAX_INTRADAY_RANGE_PCT = 24;
 const KLINE_LIMIT = 200;
+const SIGNAL_EXCHANGE_ID = String(process.env.SIGNAL_EXCHANGE_ID || 'binance').toLowerCase();
 const FETCH_TIMEOUT_MS = 6000;
 const KLINE_CONCURRENCY = 12;
 const BREAKOUT_VOLUME_SPIKE_MULTIPLIER = 2.0;
 const BREAKOUT_RSI_MIN = 60;
 const BREAKOUT_RSI_MAX = 75;
 const BREAKOUT_RETEST_TOLERANCE_PCT = 0.35;
-const MAX_SCALP_SPREAD_PCT = 0.12;
-const MIN_SCALP_ATR_PCT = 0.06;
-const MAX_SCALP_ATR_PCT = 1.8;
+const MAX_MOMENTUM_SPREAD_PCT = DEFAULT_MOMENTUM_CONFIG.spreadMaxPct;
+const MIN_MOMENTUM_ATR_PCT = DEFAULT_MOMENTUM_CONFIG.atrThreshold * 100;
+const MAX_MOMENTUM_ATR_PCT = 1.8;
 const MIN_SIGNAL_ALPHA = 66;
 const MIN_DIRECTION_EDGE = 1.35;
 const MIN_RR_TO_TP2 = 1.5;
@@ -291,7 +293,7 @@ function detectMacdDivergence(candles = [], histSeries = []) {
   return { bullish, bearish };
 }
 
-function detectPattern(candles = [], timeframe = 'SCALP') {
+function detectPattern(candles = [], timeframe = 'MOMENTUM') {
   if (!Array.isArray(candles) || candles.length < 4) {
     return {
       name: 'NONE',
@@ -445,13 +447,13 @@ function detectPattern(candles = [], timeframe = 'SCALP') {
     type: primary.type,
     reliability: primary.reliability,
     hasPattern: true,
-    highReliability: primary.reliability === 'high' && timeframe === 'SCALP',
+    highReliability: primary.reliability === 'high' && timeframe === 'MOMENTUM',
     list: recentUnique.map(p => p.name),
     summary: recentUnique.map(p => p.name).join(', ')
   };
 }
 
-function computeTechnicalScore(snapshot = {}, direction = 'BUY', timeframe = 'SCALP') {
+function computeTechnicalScore(snapshot = {}, direction = 'BUY', timeframe = 'MOMENTUM') {
   const rsi = Number.isFinite(snapshot.rsi) ? snapshot.rsi : 50;
   const rsiScore = clamp(100 - (Math.abs(rsi - 50) * 2), 0, 100);
 
@@ -494,7 +496,7 @@ function computeTechnicalScore(snapshot = {}, direction = 'BUY', timeframe = 'SC
   const pattern = snapshot.pattern || { hasPattern: false, highReliability: false };
   let patternScore = pattern.hasPattern ? 100 : 50;
   if (pattern.highReliability) {
-    const isAllowedHighReliability = timeframe === 'SCALP';
+    const isAllowedHighReliability = timeframe === 'MOMENTUM';
     patternScore = isAllowedHighReliability ? 120 : 100;
   }
   patternScore = clamp(patternScore, 0, 100);
@@ -632,6 +634,18 @@ async function fetchJsonWithTimeout(url) {
 }
 
 async function fetchKlines(symbol, interval, limit = KLINE_LIMIT) {
+  try {
+    const candles = await fetchCcxtCandles({
+      exchangeId: SIGNAL_EXCHANGE_ID === 'bybit' ? 'bybit' : 'binance',
+      symbol: `${symbol}/USDT`,
+      timeframe: interval,
+      limit
+    });
+    if (Array.isArray(candles) && candles.length) return candles;
+  } catch {
+    // Fall through to Binance REST so the dashboard can still hydrate if CCXT is unavailable.
+  }
+
   const url = `https://api.binance.com/api/v3/klines?symbol=${encodeURIComponent(symbol)}USDT&interval=${encodeURIComponent(interval)}&limit=${limit}`;
   const raw = await fetchJsonWithTimeout(url);
   if (!Array.isArray(raw) || raw.length === 0) return null;
@@ -751,7 +765,7 @@ function detectBreakoutRetest(candles = []) {
   };
 }
 
-function buildTimeframeSnapshot(candles = [], timeframe = 'SCALP') {
+function buildTimeframeSnapshot(candles = [], timeframe = 'MOMENTUM') {
   if (!Array.isArray(candles) || candles.length < 30) return null;
 
   const closes = candles.map(c => c.close);
@@ -938,7 +952,7 @@ function evaluateSignal(symbol, timeframe, snapshot, timestampIso, spreadPct = n
   }
 
   const cleanSpread = Number(spreadPct);
-  if (Number.isFinite(cleanSpread) && cleanSpread > MAX_SCALP_SPREAD_PCT) {
+  if (Number.isFinite(cleanSpread) && cleanSpread > MAX_MOMENTUM_SPREAD_PCT) {
     return buildNoSignalPayload(timeframe, symbol, timestampIso, 'SPREAD_TOO_WIDE', snapshot, 50, null, cleanSpread);
   }
 
@@ -982,11 +996,13 @@ function evaluateSignal(symbol, timeframe, snapshot, timestampIso, spreadPct = n
     return momentum;
   }
 
+  return buildNoSignalPayload(timeframe, symbol, timestampIso, 'INSUFFICIENT_MOMENTUM_CANDLES', snapshot, 50, null, cleanSpread);
+
   const atrPct = Number(snapshot.atrPct);
-  if (!(Number.isFinite(atrPct) && atrPct >= MIN_SCALP_ATR_PCT)) {
+  if (!(Number.isFinite(atrPct) && atrPct >= MIN_MOMENTUM_ATR_PCT)) {
     return buildNoSignalPayload(timeframe, symbol, timestampIso, 'VOLATILITY_TOO_LOW', snapshot, 50, null, cleanSpread);
   }
-  if (atrPct > MAX_SCALP_ATR_PCT) {
+  if (atrPct > MAX_MOMENTUM_ATR_PCT) {
     return buildNoSignalPayload(timeframe, symbol, timestampIso, 'VOLATILITY_TOO_HIGH', snapshot, 50, null, cleanSpread);
   }
 
@@ -1053,7 +1069,7 @@ function evaluateSignal(symbol, timeframe, snapshot, timestampIso, spreadPct = n
     entryLevels: [levels.entry1, levels.entry2, levels.entry3],
     targets: [levels.tp1, levels.tp2, levels.tp3, levels.tp4],
     stopLoss: levels.sl,
-    leverage: String(levels.leverage || '').includes('Cross') ? levels.leverage : `Cross ${levels.leverage || '4X-6X'}`,
+    leverage: levels.leverage || '3x Cross',
     riskPerTradePct: levels.positionRiskPct,
     stopDistancePct: levels.riskPct,
     riskRewardToTp2: rrRatio,
@@ -1192,7 +1208,7 @@ export default async function handler(req, res) {
 
     const klinePairs = [];
     topBinance.forEach((t) => {
-      klinePairs.push({ symbol: t.base, timeframe: 'SCALP', interval: '15m' });
+      klinePairs.push({ symbol: t.base, timeframe: 'MOMENTUM', interval: '15m' });
       klinePairs.push({ symbol: t.base, timeframe: 'TREND', interval: '1h' });
     });
 
@@ -1212,14 +1228,14 @@ export default async function handler(req, res) {
     });
 
     const assets = topBinance.map((t, idx) => {
-      const scalpSnapshot = snapshotMap.get(`${t.base}_SCALP`) || null;
+      const scalpSnapshot = snapshotMap.get(`${t.base}_MOMENTUM`) || null;
       const trendSnapshot = snapshotMap.get(`${t.base}_TREND`) || null;
       if (scalpSnapshot && trendSnapshot?.candles) {
         scalpSnapshot.trendCandles = trendSnapshot.candles;
         scalpSnapshot.trendSnapshot = trendSnapshot;
       }
       const spreadPct = spreadBySymbol[`${t.base}USDT`];
-      const scalpSignal = evaluateSignal(t.base, 'SCALP', scalpSnapshot, timestampIso, spreadPct);
+      const scalpSignal = evaluateSignal(t.base, 'MOMENTUM', scalpSnapshot, timestampIso, spreadPct);
       const combinedAlpha = Math.round(Number(scalpSignal.alpha) || 50);
       const preferred = scalpSignal;
 
@@ -1247,7 +1263,8 @@ export default async function handler(req, res) {
         spreadPct: Number.isFinite(spreadPct) ? spreadPct : null,
         scanTimestamp: timestampIso,
         signals: {
-          scalp: scalpSignal
+          scalp: scalpSignal,
+          momentum: scalpSignal
         }
       };
     });
@@ -1270,13 +1287,19 @@ export default async function handler(req, res) {
           maxIntradayRangePct: MAX_INTRADAY_RANGE_PCT
         },
         mandatoryChecks: {
-          mode: 'RISK_FIRST_15M_SCALP',
-          direction: `Winner must beat opposite side by ${MIN_DIRECTION_EDGE}+ edge points`,
-          spread: `Spread <= ${MAX_SCALP_SPREAD_PCT}%`,
-          volatility: `${MIN_SCALP_ATR_PCT}% <= ATR <= ${MAX_SCALP_ATR_PCT}%`,
-          alpha: `Alpha >= ${MIN_SIGNAL_ALPHA}`,
-          minRiskReward: `TP2 R:R >= ${MIN_RR_TO_TP2}`,
-          stopDistance: `Stop distance <= ${MAX_STOP_DISTANCE_PCT}%`
+          mode: 'MOMENTUM_INTRADAY_SWING',
+          direction: 'EMA20/50, RSI, breakout/retest, and 1h trend must agree',
+          spread: `Spread <= ${MAX_MOMENTUM_SPREAD_PCT}%`,
+          volatility: `${MIN_MOMENTUM_ATR_PCT}% <= ATR <= ${MAX_MOMENTUM_ATR_PCT}%`,
+          minRiskReward: `TP2 R:R >= ${DEFAULT_MOMENTUM_CONFIG.minRr}`,
+          tp1RiskReward: `TP1 R:R >= ${DEFAULT_MOMENTUM_CONFIG.minTp1Rr}`,
+          entryWidth: `${DEFAULT_MOMENTUM_CONFIG.entryZoneMinWidthPct}% to ${DEFAULT_MOMENTUM_CONFIG.entryZoneMaxWidthPct}%`,
+          volume: `Breakout/retest volume >= ${DEFAULT_MOMENTUM_CONFIG.volumeMultiplier}x avg`,
+          stopRule: `Structural stop ${DEFAULT_MOMENTUM_CONFIG.minStopPct}% to ${DEFAULT_MOMENTUM_CONFIG.maxStopPct}%`,
+          invalidation: '15m candle BODY close through stop',
+          expiry: `${DEFAULT_MOMENTUM_CONFIG.expiryCandles} candles or ${DEFAULT_MOMENTUM_CONFIG.expiryMinutes} minutes`,
+          leverage: '3x Cross if stop <0.6%; otherwise 2x Cross',
+          risk: `${DEFAULT_MOMENTUM_CONFIG.riskPerTrade}% per trade`
         }
       }
     });
