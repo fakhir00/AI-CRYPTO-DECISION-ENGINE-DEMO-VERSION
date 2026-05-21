@@ -47,7 +47,7 @@ let CURRENT_MARKET_TIMEFRAME = '24H';
 const MAX_TRADABLE_ASSETS = 50;
 const MAX_TOP_OPPORTUNITIES = MAX_TRADABLE_ASSETS;
 const SIGNAL_SCAN_INTERVAL_MS = 60 * 1000;
-const SCALP_SCAN_SYMBOLS = ['BTC', 'ETH', 'SOL', 'BNB'];
+const MOMENTUM_SCAN_SYMBOLS = ['BTC', 'ETH', 'SOL', 'BNB'];
 const SIGNAL_KLINE_LIMIT = 200;
 const SIGNAL_FETCH_TIMEOUT_MS = 6000;
 const SIGNAL_KLINE_CONCURRENCY = 10;
@@ -55,9 +55,9 @@ const BREAKOUT_VOLUME_SPIKE_MULTIPLIER = 2.0;
 const BREAKOUT_RSI_MIN = 60;
 const BREAKOUT_RSI_MAX = 75;
 const BREAKOUT_RETEST_TOLERANCE_PCT = 0.35;
-const MAX_SCALP_SPREAD_PCT = 0.12;
-const MIN_SCALP_ATR_PCT = 0.04;
-const MAX_SCALP_ATR_PCT = 1.6;
+const MAX_MOMENTUM_SPREAD_PCT = DEFAULT_MOMENTUM_CONFIG.spreadMaxPct;
+const MIN_MOMENTUM_ATR_PCT = DEFAULT_MOMENTUM_CONFIG.atrThreshold * 100;
+const MAX_MOMENTUM_ATR_PCT = 1.6;
 const MIN_SIGNAL_ALPHA = 66;
 const MIN_DIRECTION_EDGE = 1.35;
 const MIN_RR_TO_TP2 = 1.5;
@@ -98,16 +98,18 @@ function buildManagedSignalFromScalp(symbol, scalp, asset = null) {
   if (!scalp || scalp.status !== 'SIGNAL') return null;
   const generatedAt = scalp.generatedAt || new Date().toISOString();
   return createManagedSignal({
+    strategyPreset: 'MOMENTUM_INTRADAY',
     symbol,
     direction: scalp.direction === 'SELL' ? 'SHORT' : 'LONG',
     timeframe: '15m',
     generatedAt,
-    keyLevel: `${scalp.setupType || scalp.patternSummary || 'SCALP'} (${scalp.direction === 'SELL' ? 'Resistance' : 'Support'})`,
-    strategySource: scalp.setupType || scalp.patternSummary || 'SCALP',
+    keyLevel: `${scalp.setupType || scalp.patternSummary || 'MOMENTUM_INTRADAY_SWING'} (${scalp.direction === 'SELL' ? 'Resistance' : 'Support'})`,
+    strategySource: scalp.setupType || scalp.patternSummary || 'MOMENTUM_INTRADAY_SWING',
+    signalType: `Momentum Intraday Swing ${scalp.direction === 'SELL' ? 'Short' : 'Long'}`,
     entryLevels: [scalp.entry1, scalp.entry2, scalp.entry3],
     targets: [scalp.tp1, scalp.tp2, scalp.tp3, scalp.tp4],
     stopLoss: scalp.sl,
-    leverage: String(scalp.leverage || '').includes('Cross') ? scalp.leverage : `Cross ${scalp.leverage || '4X-6X'}`,
+    leverage: scalp.leverage || '3x Cross',
     riskPerTradePct: Number(scalp.positionRiskPct) || 0.5,
     stopDistancePct: Number(scalp.riskPct) || 0,
     riskRewardToTp2: Number(scalp.rrRatio) || 0,
@@ -115,6 +117,9 @@ function buildManagedSignalFromScalp(symbol, scalp, asset = null) {
     invalidationMode: 'BODY_CLOSE',
     invalidationPrice: scalp.sl,
     confidence: Number(scalp.alpha ?? asset?.opportunityScore ?? asset?.score ?? 50),
+    entryZoneWidthPct: Number(scalp.entryZoneWidthPct) || null,
+    stopReason: scalp.stopReason || null,
+    volumeConfirmation: scalp.volumeConfirmation || null,
     source: 'client_rebuild'
   });
 }
@@ -1167,7 +1172,7 @@ function sigEvaluate(symbol, timeframe, snapshot, timestamp, spreadPct = null) {
   if (!snapshot) return sigNoSignal(timeframe, symbol, timestamp, 'DATA_UNAVAILABLE');
 
   const cleanSpread = Number(spreadPct);
-  if (Number.isFinite(cleanSpread) && cleanSpread > MAX_SCALP_SPREAD_PCT) {
+  if (Number.isFinite(cleanSpread) && cleanSpread > MAX_MOMENTUM_SPREAD_PCT) {
     return sigNoSignal(timeframe, symbol, timestamp, 'SPREAD_TOO_WIDE', 50, null, snapshot, cleanSpread);
   }
 
@@ -1211,11 +1216,13 @@ function sigEvaluate(symbol, timeframe, snapshot, timestamp, spreadPct = null) {
     return momentum;
   }
 
+  return sigNoSignal(timeframe, symbol, timestamp, 'INSUFFICIENT_MOMENTUM_CANDLES', 50, null, snapshot, cleanSpread);
+
   const atrPct = Number(snapshot.atrPct);
-  if (!(Number.isFinite(atrPct) && atrPct >= MIN_SCALP_ATR_PCT)) {
+  if (!(Number.isFinite(atrPct) && atrPct >= MIN_MOMENTUM_ATR_PCT)) {
     return sigNoSignal(timeframe, symbol, timestamp, 'VOLATILITY_TOO_LOW', 50, null, snapshot, cleanSpread);
   }
-  if (atrPct > MAX_SCALP_ATR_PCT) {
+  if (atrPct > MAX_MOMENTUM_ATR_PCT) {
     return sigNoSignal(timeframe, symbol, timestamp, 'VOLATILITY_TOO_HIGH', 50, null, snapshot, cleanSpread);
   }
 
@@ -1463,21 +1470,21 @@ async function hydrateAssetsWithSignals(assetList = []) {
     return !(cached?.scalp?.line && !stale);
   });
 
-  if (missingSymbols.length > 0 || stale || SCALP_SCAN_SYMBOLS.some(s => !SIGNAL_CACHE.bySymbol[s]?.scalp?.line)) {
-    const scanSymbols = [...new Set([...SCALP_SCAN_SYMBOLS, ...missingSymbols])];
+  if (missingSymbols.length > 0 || stale || MOMENTUM_SCAN_SYMBOLS.some(s => !SIGNAL_CACHE.bySymbol[s]?.scalp?.line)) {
+    const scanSymbols = [...new Set([...MOMENTUM_SCAN_SYMBOLS, ...missingSymbols])];
     const spreadMap = await sigFetchSpreadMap(scanSymbols);
     const tasks = [];
     
     // Rule: Always scan primary pairs for signals every 60s
-    SCALP_SCAN_SYMBOLS.forEach((symbol) => {
-      tasks.push({ symbol, timeframe: 'SCALP', interval: '15m' });
+    MOMENTUM_SCAN_SYMBOLS.forEach((symbol) => {
+      tasks.push({ symbol, timeframe: 'MOMENTUM', interval: '15m' });
       tasks.push({ symbol, timeframe: 'TREND', interval: '1h' });
     });
     
     // Also scan any other symbols that are in the top list but missing data
     missingSymbols.forEach((symbol) => {
-      if (!SCALP_SCAN_SYMBOLS.includes(symbol)) {
-        tasks.push({ symbol, timeframe: 'SCALP', interval: '15m' });
+      if (!MOMENTUM_SCAN_SYMBOLS.includes(symbol)) {
+        tasks.push({ symbol, timeframe: 'MOMENTUM', interval: '15m' });
         tasks.push({ symbol, timeframe: 'TREND', interval: '1h' });
       }
     });
@@ -1496,9 +1503,9 @@ async function hydrateAssetsWithSignals(assetList = []) {
 
     const timestampIso = new Date().toISOString();
     missingSymbols.forEach((symbol) => {
-      const scalpCandles = grouped[symbol]?.SCALP || null;
+      const scalpCandles = grouped[symbol]?.MOMENTUM || null;
       const trendCandles = grouped[symbol]?.TREND || null;
-      const scalpSnapshot = sigBuildSnapshot(scalpCandles || [], 'SCALP');
+      const scalpSnapshot = sigBuildSnapshot(scalpCandles || [], 'MOMENTUM');
       const trendSnapshot = sigBuildSnapshot(trendCandles || [], 'TREND');
       if (scalpSnapshot && trendSnapshot?.candles) {
         scalpSnapshot.trendCandles = trendSnapshot.candles;
@@ -1507,7 +1514,7 @@ async function hydrateAssetsWithSignals(assetList = []) {
       const spreadPct = spreadMap[`${symbol}USDT`];
 
       SIGNAL_CACHE.bySymbol[symbol] = {
-        scalp: sigEvaluate(symbol, 'SCALP', scalpSnapshot, timestampIso, spreadPct)
+        scalp: sigEvaluate(symbol, 'MOMENTUM', scalpSnapshot, timestampIso, spreadPct)
       };
     });
 
@@ -2220,7 +2227,7 @@ async function syncLiveApis() {
     }
 
     if (assets.length > 0) {
-      if (statusEl) statusEl.textContent = 'Running SCALP signal scan...';
+      if (statusEl) statusEl.textContent = 'Running momentum intraday swing scan...';
       assets = await hydrateAssetsWithSignals(assets);
       assets = applyDirectionalBiasToAssets(assets);
       assets = enforceTopAssetUniverse(assets);
@@ -2705,7 +2712,7 @@ function renderOpportunitiesPage() {
     tbody.innerHTML = `
       <tr>
         <td colspan="8" style="text-align:center;padding:1.25rem;color:var(--text-muted);">
-          No SCALP opportunities are currently available.
+          No momentum intraday swing opportunities are currently available.
         </td>
       </tr>
     `;
@@ -2756,20 +2763,21 @@ function renderOpportunitiesPage() {
       setTimeout(() => {
         if (scalpSignal?.status === 'SIGNAL') {
           triggerMcp(
-            `Generate a SCALP-only trade plan for ${symbol}/USDT. `
+            `Generate a momentum intraday swing trade plan for ${symbol}/USDT. `
             + `Use these mandatory algorithmic values exactly: `
             + `direction=${scalpSignal.direction}, `
             + `entry1=${scalpSignal.entry1 ?? scalpSignal.entry}, entry2=${scalpSignal.entry2}, entry3=${scalpSignal.entry3}, `
             + `tp1=${scalpSignal.tp1}, tp2=${scalpSignal.tp2}, tp3=${scalpSignal.tp3}, tp4=${scalpSignal.tp4}, `
             + `sl=${scalpSignal.sl}, leverage=${scalpSignal.leverage}, `
-            + `alpha=${scalpSignal.alpha}, setupType=${scalpSignal.setupType || 'SCALP'}, `
+            + `alpha=${scalpSignal.alpha}, setupType=${scalpSignal.setupType || 'MOMENTUM_INTRADAY_SWING'}, `
             + `riskPct=${scalpSignal.riskPct}, positionRiskPct=${scalpSignal.positionRiskPct || 0.5}, rrToTp2=${scalpSignal.rrRatio}, `
-            + `stopBasis=${scalpSignal.stopBasis || 'N/A'}, targetBasis=${(scalpSignal.targetBasis || []).join('/') || 'N/A'}, `
+            + `stopBasis=${scalpSignal.stopBasis || 'N/A'}, stopReason=${scalpSignal.stopReason || 'N/A'}, targetBasis=${(scalpSignal.targetBasis || []).join('/') || 'N/A'}, `
+            + `volume=${scalpSignal.volumeConfirmation?.text || `${Number(scalpSignal.volumeMultiple || 0).toFixed(2)}x avg`}, entryZoneWidthPct=${scalpSignal.entryZoneWidthPct || 'N/A'}, `
             + `invalidation="${scalpSignal.invalidation || 'stop loss'}", line="${scalpSignal.line}". `
             + `Do not alter these numbers.`
           );
         } else {
-          triggerMcp(`No valid SCALP signal exists for ${symbol}/USDT right now. Explain why and what must change before entry.`);
+          triggerMcp(`No valid momentum intraday swing signal exists for ${symbol}/USDT right now. Explain why and what must change before entry.`);
         }
       }, 100);
     });
@@ -3102,8 +3110,8 @@ function setupAiResearchChat() {
           const managed = tracked || sig?.managedSignal || null;
           const quoteSafe = (value = '') => String(value || '').replace(/"/g, "'");
           const signalCtx = sig?.status === 'SIGNAL'
-            ? `SCALP_SIGNAL=${sig.direction} id=${sig.signalId || managed?.signalId || 'N/A'} generatedAt=${sig.generatedAt || managed?.generatedAt || 'N/A'} validUntil=${sig.validUntil || managed?.validUntil || 'N/A'} lifecycle=${managed?.status || sig.lifecycleStatus || 'ACTIVE'} setup=${sig.setupType || sig.patternSummary || 'SCALP'} entries=${sig.entry1}/${sig.entry2}/${sig.entry3} tp=${sig.tp1}/${sig.tp2}/${sig.tp3}/${sig.tp4} sl=${sig.sl} leverage=${sig.leverage || 'N/A'} rrTp2=${sig.rrRatio} riskPct=${sig.riskPct || 0} positionRiskPct=${sig.positionRiskPct || 0.5} stopBasis=${sig.stopBasis || 'N/A'} targetBasis=${(sig.targetBasis || []).join('/') || 'N/A'} priceInvalidation="${quoteSafe(sig.priceInvalidation?.text || managed?.priceInvalidation?.text || sig.invalidation || 'stop')}" timeInvalidation="${quoteSafe(sig.timeInvalidation?.text || managed?.timeInvalidation?.text || 'Cancel if entry not triggered before expiry')}" invalidation=${sig.invalidation || 'stop'}`
-            : `SCALP_SIGNAL=WAIT reason=${sig?.reason || 'DATA_UNAVAILABLE'}`;
+            ? `MOMENTUM_SWING_SIGNAL=${sig.direction} id=${sig.signalId || managed?.signalId || 'N/A'} generatedAt=${sig.generatedAt || managed?.generatedAt || 'N/A'} validUntil=${sig.validUntil || managed?.validUntil || 'N/A'} lifecycle=${managed?.status || sig.lifecycleStatus || 'ACTIVE'} setup=${sig.setupType || sig.patternSummary || 'MOMENTUM_INTRADAY_SWING'} entries=${sig.entry1}/${sig.entry2}/${sig.entry3} tp=${sig.tp1}/${sig.tp2}/${sig.tp3}/${sig.tp4} sl=${sig.sl} leverage=${sig.leverage || 'N/A'} rrTp1=${sig.rrToTp1 || 'N/A'} rrTp2=${sig.rrRatio} riskPct=${sig.riskPct || 0} positionRiskPct=${sig.positionRiskPct || 0.5} entryWidthPct=${sig.entryZoneWidthPct || 'N/A'} volume="${quoteSafe(sig.volumeConfirmation?.text || managed?.volumeConfirmation?.text || `${Number(sig.volumeMultiple || 0).toFixed(2)}x avg`)}" stopBasis=${sig.stopBasis || 'N/A'} stopReason="${quoteSafe(sig.stopReason || managed?.stopReason || 'N/A')}" targetBasis=${(sig.targetBasis || []).join('/') || 'N/A'} priceInvalidation="${quoteSafe(sig.priceInvalidation?.text || managed?.priceInvalidation?.text || sig.invalidation || 'stop')}" timeInvalidation="${quoteSafe(sig.timeInvalidation?.text || managed?.timeInvalidation?.text || 'Cancel if entry not triggered before expiry')}" invalidation=${sig.invalidation || 'stop'}`
+            : `MOMENTUM_SWING_SIGNAL=WAIT reason=${sig?.reason || 'DATA_UNAVAILABLE'}`;
           return `${a.symbol}: CURRENT_PRICE=$${a.price} (${a.change >= 0 ? '+' : ''}${a.change.toFixed(2)}%) - ${signalCtx} - Rationale: ${a.reason}`;
         })
         .join(' | ');
@@ -3197,7 +3205,7 @@ function generateSignalForAsset(asset) {
       leverage: 'None',
       entry1: 0, entry2: 0, entry3: 0,
       t1: 0, t2: 0, t3: 0, t4: 0, sl: 0, rrRatio: '0.0',
-      waitReason: `SCALP gate failed: ${scalp?.reason || 'DATA_UNAVAILABLE'}`
+      waitReason: `Momentum gate failed: ${scalp?.reason || 'DATA_UNAVAILABLE'}`
     };
   }
 
@@ -3227,7 +3235,7 @@ function generateSignalForAsset(asset) {
   const rewardT2 = Math.abs(t2 - avgEntry);
   const rrRatio = Number(scalp.rrRatio) || (risk > 0 ? Number((rewardT2 / risk).toFixed(2)) : 1.9);
   const atrPct = Number.isFinite(Number(scalp.atrPct)) ? Number(scalp.atrPct) : ((avgEntry > 0 ? (risk / avgEntry) * 100 : 0));
-  const leverage = scalp.leverage || (atrPct > 1 ? '2X-3X' : atrPct > 0.55 ? '3X-5X' : '4X-6X');
+  const leverage = scalp.leverage || (Number(scalp.riskPct) < 0.6 ? '3x Cross' : '2x Cross');
   const managedSignal = trackManagedSignal(asset?.symbol, scalp, asset);
 
   const strength = score >= 80
@@ -3258,13 +3266,18 @@ function generateSignalForAsset(asset) {
     managedSignal,
     formattedSignal: managedSignal ? formatManagedSignalText(managedSignal) : '',
     isBull,
-    type: 'SCALP',
+    type: 'INTRADAY SWING',
     rrRatio,
     atrPct,
-    setupType: scalp.setupType || scalp.patternSummary || 'MOMENTUM_CONTINUATION',
+    setupType: scalp.setupType || scalp.patternSummary || 'MOMENTUM_INTRADAY_SWING',
     invalidation: scalp.invalidation || (isBull ? `15m close below ${formatPrice(sl)}` : `15m close above ${formatPrice(sl)}`),
     riskPct: Number(scalp.riskPct) || ((risk / avgEntry) * 100),
     positionRiskPct: Number(scalp.positionRiskPct) || 0.5,
+    entryZoneWidthPct: Number(scalp.entryZoneWidthPct) || managedSignal?.entryZoneWidthPct || managedSignal?.entryZone?.widthPct || null,
+    stopReason: scalp.stopReason || managedSignal?.stopReason || null,
+    volumeConfirmation: scalp.volumeConfirmation || managedSignal?.volumeConfirmation || null,
+    volumeMultiple: Number(scalp.volumeMultiple) || Number(managedSignal?.volumeConfirmation?.ratio) || null,
+    rrToTp1: Number(scalp.rrToTp1) || null,
     confirmations: Array.isArray(scalp.confirmations) ? scalp.confirmations : []
   };
 }
@@ -3376,6 +3389,16 @@ function renderProSignals() {
           <span class="signal-value text-warning">${sig.leverage}</span>
         </div>
 
+        <div class="signal-row">
+          <span class="signal-label">VOLUME</span>
+          <span class="signal-value">${sig.volumeConfirmation?.text || (Number.isFinite(Number(sig.volumeMultiple)) ? `${Number(sig.volumeMultiple).toFixed(2)}x avg` : 'N/A')}</span>
+        </div>
+
+        <div class="signal-row">
+          <span class="signal-label">STOP REASON</span>
+          <span class="signal-value">${sig.stopReason || 'N/A'}</span>
+        </div>
+
         <!-- Divider -->
         <div class="signal-divider"></div>
 
@@ -3394,6 +3417,11 @@ function renderProSignals() {
             <div class="signal-row">
               <span class="signal-label">Avg Entry</span>
               <span class="signal-value signal-mono">${formatPrice(sig.avgEntry)}</span>
+            </div>
+
+            <div class="signal-row">
+              <span class="signal-label">Entry Width</span>
+              <span class="signal-value">${Number.isFinite(Number(sig.entryZoneWidthPct)) ? `${Number(sig.entryZoneWidthPct).toFixed(2)}%` : 'N/A'}</span>
             </div>
 
             <!-- Targets -->
@@ -3447,6 +3475,7 @@ function renderProSignals() {
         <!-- Footer -->
         <div class="signal-footer">
           <span>Alpha: <strong class="text-primary">${asset.opportunityScore ?? asset.score}/100</strong></span>
+          <span>TP1 R:R <strong class="text-green">${Number(sig.rrToTp1 || 0).toFixed(2)}</strong></span>
           <span>TP2 R:R <strong class="text-green">${Number(sig.rrRatio).toFixed(2)}</strong></span>
           <span>Risk <strong class="text-warning">${Number(sig.positionRiskPct || 0.5).toFixed(2)}%</strong></span>
           <span>Stop <strong class="text-red">${Number(sig.riskPct || 0).toFixed(2)}%</strong></span>
