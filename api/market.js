@@ -12,7 +12,7 @@ import {
   computeStructureAwareTradePlan
 } from '../lib/trade-plan.js';
 import { createManagedSignal } from '../lib/signal-lifecycle.js';
-import { DEFAULT_MOMENTUM_CONFIG, evaluateMomentumStrategy } from '../lib/momentum-strategy.js';
+import { DEFAULT_MOMENTUM_CONFIG, SIGNAL_HARD_REJECTS, evaluateMomentumStrategy } from '../lib/momentum-strategy.js';
 import { fetchCcxtCandles } from '../lib/ccxt-market-data.js';
 
 let cachedData = null;
@@ -629,6 +629,20 @@ function buildRequiredSignalOutputMeta(levels = {}, snapshot = {}, direction = '
   };
 }
 
+function getSignalHardRejectReason(outputMeta = {}) {
+  const volumeRatio = Number(outputMeta?.volumeConfirmation?.ratio);
+  if (Number.isFinite(volumeRatio) && volumeRatio < SIGNAL_HARD_REJECTS.minVolumeRatio) {
+    return SIGNAL_HARD_REJECTS.volumeTooLow;
+  }
+
+  const entryWidthPct = Number(outputMeta?.entryZone?.widthPct);
+  if (Number.isFinite(entryWidthPct) && entryWidthPct > SIGNAL_HARD_REJECTS.maxEntryWidthPct) {
+    return SIGNAL_HARD_REJECTS.entryZoneTooWide;
+  }
+
+  return null;
+}
+
 function buildNoSignalLine(timeframe, symbol, timestamp, reason) {
   return `NO_SIGNAL|${timeframe}|${symbol}/USDT|${timestamp}|${reason}`;
 }
@@ -1048,6 +1062,19 @@ function evaluateSignal(symbol, timeframe, snapshot, timestampIso, spreadPct = n
 
   const emaConfluenceScore = computeEmaConfluenceScore(direction, snapshot);
   const volumeRatio = Math.max(Number(snapshot.volumeRatio5) || 0, Number(snapshot.breakout?.volumeSpikeRatio) || 0);
+  if (!(Number.isFinite(volumeRatio) && volumeRatio >= SIGNAL_HARD_REJECTS.minVolumeRatio)) {
+    return buildNoSignalPayload(
+      timeframe,
+      symbol,
+      timestampIso,
+      SIGNAL_HARD_REJECTS.volumeTooLow,
+      snapshot,
+      50,
+      direction,
+      cleanSpread,
+      [SIGNAL_HARD_REJECTS.volumeTooLow]
+    );
+  }
   const volumeScore = computeVolumeScore(volumeRatio);
 
   const pillars = {
@@ -1083,6 +1110,10 @@ function evaluateSignal(symbol, timeframe, snapshot, timestampIso, spreadPct = n
   const outputMeta = buildRequiredSignalOutputMeta(levels, snapshot, direction);
   if (!outputMeta) {
     return buildNoSignalPayload(timeframe, symbol, timestampIso, 'SIGNAL_METADATA_MISSING', snapshot, alpha, direction, cleanSpread);
+  }
+  const hardRejectReason = getSignalHardRejectReason(outputMeta);
+  if (hardRejectReason) {
+    return buildNoSignalPayload(timeframe, symbol, timestampIso, hardRejectReason, snapshot, alpha, direction, cleanSpread, [hardRejectReason]);
   }
 
   const patternName = snapshot.pattern?.name || 'NONE';
@@ -1331,8 +1362,8 @@ export default async function handler(req, res) {
           volatility: `${MIN_MOMENTUM_ATR_PCT}% <= ATR <= ${MAX_MOMENTUM_ATR_PCT}%`,
           minRiskReward: `TP2 R:R >= ${DEFAULT_MOMENTUM_CONFIG.minRr}`,
           tp1RiskReward: `TP1 R:R >= ${DEFAULT_MOMENTUM_CONFIG.minTp1Rr}`,
-          entryWidth: `${DEFAULT_MOMENTUM_CONFIG.entryZoneMinWidthPct}% to ${DEFAULT_MOMENTUM_CONFIG.entryZoneMaxWidthPct}%`,
-          volume: `Breakout/retest volume >= ${DEFAULT_MOMENTUM_CONFIG.volumeMultiplier}x avg`,
+          entryWidth: `Entry width <= ${SIGNAL_HARD_REJECTS.maxEntryWidthPct}%`,
+          volume: `Breakout/retest volume >= ${SIGNAL_HARD_REJECTS.minVolumeRatio}x avg`,
           stopRule: `Structural stop ${DEFAULT_MOMENTUM_CONFIG.minStopPct}% to ${DEFAULT_MOMENTUM_CONFIG.maxStopPct}%`,
           invalidation: '15m candle BODY close through stop',
           expiry: `${DEFAULT_MOMENTUM_CONFIG.expiryCandles} candles or ${DEFAULT_MOMENTUM_CONFIG.expiryMinutes} minutes`,

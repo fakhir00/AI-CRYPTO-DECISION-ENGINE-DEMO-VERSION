@@ -3,6 +3,7 @@
 // ====================================================
 
 import { createManagedSignal, formatManagedSignalText } from './lib/signal-lifecycle.js';
+import { SIGNAL_HARD_REJECTS } from './lib/momentum-strategy.js';
 
 const KEYS = {
   coingecko: import.meta.env?.VITE_COINGECKO_API_KEY || 'CG-7gTv8kk2qS7r8kj515m2rVQJ',
@@ -2213,6 +2214,9 @@ function buildScannerDrivenTradePlan(snapshot = null) {
   const volumeConfirmation = signal.volumeConfirmation?.text ? signal.volumeConfirmation : null;
   const stopReason = signal.stopReason || null;
   if (!Number.isFinite(entryZoneWidthPct) || !volumeConfirmation || !stopReason) return null;
+  const volumeRatio = toNumber(volumeConfirmation.ratio);
+  if (volumeRatio !== null && volumeRatio < SIGNAL_HARD_REJECTS.minVolumeRatio) return null;
+  if (entryZoneWidthPct > SIGNAL_HARD_REJECTS.maxEntryWidthPct) return null;
   const managedSignal = createManagedSignal({
     signalId: signal.signalId || undefined,
     symbol: snapshot?.symbol,

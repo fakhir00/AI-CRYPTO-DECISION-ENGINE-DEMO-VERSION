@@ -10,7 +10,7 @@ import {
   computeStructureAwareTradePlan
 } from './lib/trade-plan.js';
 import { createManagedSignal, formatManagedSignalText, updateSignalLifecycle } from './lib/signal-lifecycle.js';
-import { DEFAULT_MOMENTUM_CONFIG, evaluateMomentumStrategy } from './lib/momentum-strategy.js';
+import { DEFAULT_MOMENTUM_CONFIG, SIGNAL_HARD_REJECTS, evaluateMomentumStrategy } from './lib/momentum-strategy.js';
 
 
 // --- Navigation & Setup ---
@@ -436,12 +436,29 @@ function sigBuildRequiredSignalOutputMeta(levels = {}, snapshot = {}, direction 
   };
 }
 
+function sigGetSignalHardRejectReason(outputMeta = {}) {
+  const volumeRatio = Number(outputMeta?.volumeConfirmation?.ratio);
+  if (Number.isFinite(volumeRatio) && volumeRatio < SIGNAL_HARD_REJECTS.minVolumeRatio) {
+    return SIGNAL_HARD_REJECTS.volumeTooLow;
+  }
+
+  const entryWidthPct = Number(outputMeta?.entryZone?.widthPct);
+  if (Number.isFinite(entryWidthPct) && entryWidthPct > SIGNAL_HARD_REJECTS.maxEntryWidthPct) {
+    return SIGNAL_HARD_REJECTS.entryZoneTooWide;
+  }
+
+  return null;
+}
+
 function getRequiredSignalOutputFields(signal = {}) {
   const entryZone = computeEntryZoneMeta([signal.entry1, signal.entry2, signal.entry3]);
   const widthPct = Number(signal.entryZoneWidthPct ?? entryZone?.widthPct);
   const volumeText = signal.volumeConfirmation?.text || signal.managedSignal?.volumeConfirmation?.text || null;
+  const volumeRatio = Number(signal.volumeConfirmation?.ratio ?? signal.managedSignal?.volumeConfirmation?.ratio);
   const stopReason = signal.stopReason || signal.managedSignal?.stopReason || null;
   if (!entryZone || !Number.isFinite(widthPct) || !volumeText || !stopReason) return null;
+  if (widthPct > SIGNAL_HARD_REJECTS.maxEntryWidthPct) return null;
+  if (Number.isFinite(volumeRatio) && volumeRatio < SIGNAL_HARD_REJECTS.minVolumeRatio) return null;
   return {
     entryZone,
     entryZoneRange: `${formatEntryZonePrice(entryZone.min)} - ${formatEntryZonePrice(entryZone.max)}`,
@@ -1290,6 +1307,19 @@ function sigEvaluate(symbol, timeframe, snapshot, timestamp, spreadPct = null) {
   const technicalScore = sigClamp((technical.score * 0.62) + (directionEdgeScore * 0.38), 0, 100);
   const emaConfluence = sigComputeEmaConfluence(direction, snapshot);
   const volumeRatio = Math.max(Number(snapshot.volumeRatio5) || 0, Number(snapshot.breakout?.volumeSpikeRatio) || 0);
+  if (!(Number.isFinite(volumeRatio) && volumeRatio >= SIGNAL_HARD_REJECTS.minVolumeRatio)) {
+    return sigNoSignal(
+      timeframe,
+      symbol,
+      timestamp,
+      SIGNAL_HARD_REJECTS.volumeTooLow,
+      50,
+      direction,
+      snapshot,
+      cleanSpread,
+      [SIGNAL_HARD_REJECTS.volumeTooLow]
+    );
+  }
   const volumeScore = sigComputeVolumeScore(volumeRatio);
 
   // Neutral defaults when external source is unavailable in fallback path.
@@ -1324,6 +1354,10 @@ function sigEvaluate(symbol, timeframe, snapshot, timestamp, spreadPct = null) {
   const outputMeta = sigBuildRequiredSignalOutputMeta(levels, snapshot, direction);
   if (!outputMeta) {
     return sigNoSignal(timeframe, symbol, timestamp, 'SIGNAL_METADATA_MISSING', Math.round(alpha), direction, snapshot, cleanSpread);
+  }
+  const hardRejectReason = sigGetSignalHardRejectReason(outputMeta);
+  if (hardRejectReason) {
+    return sigNoSignal(timeframe, symbol, timestamp, hardRejectReason, Math.round(alpha), direction, snapshot, cleanSpread, [hardRejectReason]);
   }
 
   const patternName = snapshot.pattern?.name || 'NONE';
