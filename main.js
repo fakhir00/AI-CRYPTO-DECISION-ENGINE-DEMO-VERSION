@@ -3,6 +3,7 @@ import { fetchMarketData, fetchCandlePatterns, fetchGlobalMarketData, fetchWhale
 import { setupAuth, openSignIn, logout, openUserProfile, clerk } from './lib/auth.js';
 import { supabase } from './lib/supabase.js';
 import { buildLocalStructureLevels, computeStructureAwareTradePlan } from './lib/trade-plan.js';
+import { createManagedSignal, formatManagedSignalText, updateSignalLifecycle } from './lib/signal-lifecycle.js';
 
 
 // --- Navigation & Setup ---
@@ -71,6 +72,74 @@ const SIGNAL_CACHE = {
   lastScanAt: 0,
   bySymbol: {}
 };
+const SIGNAL_LEDGER_KEY = 'nexus_signal_ledger_v1';
+
+function loadSignalLedger() {
+  try {
+    const raw = localStorage.getItem(SIGNAL_LEDGER_KEY);
+    const parsed = raw ? JSON.parse(raw) : {};
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveSignalLedger(ledger = {}) {
+  try {
+    localStorage.setItem(SIGNAL_LEDGER_KEY, JSON.stringify(ledger));
+  } catch (error) {
+    console.warn('Signal ledger persistence failed:', error.message);
+  }
+}
+
+function buildManagedSignalFromScalp(symbol, scalp, asset = null) {
+  if (scalp?.managedSignal?.signalId) return scalp.managedSignal;
+  if (!scalp || scalp.status !== 'SIGNAL') return null;
+  const generatedAt = scalp.generatedAt || new Date().toISOString();
+  return createManagedSignal({
+    symbol,
+    direction: scalp.direction === 'SELL' ? 'SHORT' : 'LONG',
+    timeframe: '15m',
+    generatedAt,
+    keyLevel: `${scalp.setupType || scalp.patternSummary || 'SCALP'} (${scalp.direction === 'SELL' ? 'Resistance' : 'Support'})`,
+    strategySource: scalp.setupType || scalp.patternSummary || 'SCALP',
+    entryLevels: [scalp.entry1, scalp.entry2, scalp.entry3],
+    targets: [scalp.tp1, scalp.tp2, scalp.tp3, scalp.tp4],
+    stopLoss: scalp.sl,
+    leverage: String(scalp.leverage || '').includes('Cross') ? scalp.leverage : `Cross ${scalp.leverage || '4X-6X'}`,
+    riskPerTradePct: Number(scalp.positionRiskPct) || 0.5,
+    stopDistancePct: Number(scalp.riskPct) || 0,
+    riskRewardToTp2: Number(scalp.rrRatio) || 0,
+    invalidationTimeframe: '15m',
+    invalidationMode: 'BODY_CLOSE',
+    invalidationPrice: scalp.sl,
+    confidence: Number(scalp.alpha ?? asset?.opportunityScore ?? asset?.score ?? 50),
+    source: 'client_rebuild'
+  });
+}
+
+function trackManagedSignal(symbol, scalp, asset = null) {
+  const managed = buildManagedSignalFromScalp(symbol, scalp, asset);
+  if (!managed?.signalId) return null;
+
+  const ledger = loadSignalLedger();
+  const existing = ledger[managed.signalId];
+  const tracked = updateSignalLifecycle(existing || managed, {
+    price: Number(asset?.price),
+    now: new Date()
+  });
+  ledger[tracked.signalId] = tracked;
+  saveSignalLedger(ledger);
+  return tracked;
+}
+
+if (typeof window !== 'undefined') {
+  window.NEXUS_SIGNAL_LEDGER = {
+    load: () => Object.values(loadSignalLedger()).sort((a, b) => String(b.generatedAt || '').localeCompare(String(a.generatedAt || ''))),
+    exportJson: () => JSON.stringify(Object.values(loadSignalLedger()), null, 2)
+  };
+}
+
 const STABLE_SYMBOLS = new Set([
   'USDT', 'USDC', 'DAI', 'BUSD', 'FDUSD', 'TUSD', 'PYUSD', 'USDE', 'USDD',
   'GUSD', 'LUSD', 'EURC', 'FRAX', 'USD1', 'USDS', 'USDP', 'USDB', 'RLUSD',
@@ -1153,9 +1222,36 @@ function sigEvaluate(symbol, timeframe, snapshot, timestamp, spreadPct = null) {
   const patternName = snapshot.pattern?.name || 'NONE';
   const patternSummary = snapshot.pattern?.summary || patternName;
   const setupType = directionChoice.winner.reasons.find(r => /RETEST|CONFIRM|PATTERN/.test(r)) || 'MOMENTUM_CONTINUATION';
+  const managedSignal = createManagedSignal({
+    symbol,
+    direction: direction === 'SELL' ? 'SHORT' : 'LONG',
+    timeframe: '15m',
+    generatedAt: timestamp,
+    keyLevel: `${setupType} (${direction === 'SELL' ? 'Resistance' : 'Support'})`,
+    strategySource: setupType,
+    entryLevels: [levels.entry1, levels.entry2, levels.entry3],
+    targets: [levels.tp1, levels.tp2, levels.tp3, levels.tp4],
+    stopLoss: levels.sl,
+    leverage: String(levels.leverage || '').includes('Cross') ? levels.leverage : `Cross ${levels.leverage || '4X-6X'}`,
+    riskPerTradePct: levels.positionRiskPct,
+    stopDistancePct: levels.riskPct,
+    riskRewardToTp2: rrRatio,
+    invalidationTimeframe: '15m',
+    invalidationMode: 'BODY_CLOSE',
+    invalidationPrice: levels.sl,
+    confidence: Math.round(alpha),
+    source: 'browser_scanner'
+  });
 
   return {
     status: 'SIGNAL',
+    signalId: managedSignal.signalId,
+    generatedAt: managedSignal.generatedAt,
+    generatedAtLabel: managedSignal.generatedAtLabel,
+    validUntil: managedSignal.validUntil,
+    validUntilLabel: managedSignal.validUntilLabel,
+    lifecycleStatus: managedSignal.status,
+    managedSignal,
     direction,
     reason: null,
     alpha: Math.round(alpha),
@@ -1178,6 +1274,8 @@ function sigEvaluate(symbol, timeframe, snapshot, timestamp, spreadPct = null) {
     targetBasis: levels.targetBasis,
     priceOrder: levels.priceOrder,
     priceOrderValid: levels.priceOrderValid,
+    priceInvalidation: managedSignal.priceInvalidation,
+    timeInvalidation: managedSignal.timeInvalidation,
     localSupport: levels.localSupport,
     localResistance: levels.localResistance,
     riskPct: Number(levels.riskPct.toFixed(2)),
@@ -2941,8 +3039,11 @@ function setupAiResearchChat() {
         .slice(0, 24)
         .map((a) => {
           const sig = a?.signals?.scalp;
+          const tracked = sig?.status === 'SIGNAL' ? trackManagedSignal(a.symbol, sig, a) : null;
+          const managed = tracked || sig?.managedSignal || null;
+          const quoteSafe = (value = '') => String(value || '').replace(/"/g, "'");
           const signalCtx = sig?.status === 'SIGNAL'
-            ? `SCALP_SIGNAL=${sig.direction} setup=${sig.setupType || sig.patternSummary || 'SCALP'} entries=${sig.entry1}/${sig.entry2}/${sig.entry3} tp=${sig.tp1}/${sig.tp2}/${sig.tp3}/${sig.tp4} sl=${sig.sl} leverage=${sig.leverage || 'N/A'} rrTp2=${sig.rrRatio} riskPct=${sig.riskPct || 0} positionRiskPct=${sig.positionRiskPct || 0.5} stopBasis=${sig.stopBasis || 'N/A'} targetBasis=${(sig.targetBasis || []).join('/') || 'N/A'} invalidation=${sig.invalidation || 'stop'}`
+            ? `SCALP_SIGNAL=${sig.direction} id=${sig.signalId || managed?.signalId || 'N/A'} generatedAt=${sig.generatedAt || managed?.generatedAt || 'N/A'} validUntil=${sig.validUntil || managed?.validUntil || 'N/A'} lifecycle=${managed?.status || sig.lifecycleStatus || 'ACTIVE'} setup=${sig.setupType || sig.patternSummary || 'SCALP'} entries=${sig.entry1}/${sig.entry2}/${sig.entry3} tp=${sig.tp1}/${sig.tp2}/${sig.tp3}/${sig.tp4} sl=${sig.sl} leverage=${sig.leverage || 'N/A'} rrTp2=${sig.rrRatio} riskPct=${sig.riskPct || 0} positionRiskPct=${sig.positionRiskPct || 0.5} stopBasis=${sig.stopBasis || 'N/A'} targetBasis=${(sig.targetBasis || []).join('/') || 'N/A'} priceInvalidation="${quoteSafe(sig.priceInvalidation?.text || managed?.priceInvalidation?.text || sig.invalidation || 'stop')}" timeInvalidation="${quoteSafe(sig.timeInvalidation?.text || managed?.timeInvalidation?.text || 'Cancel if entry not triggered before expiry')}" invalidation=${sig.invalidation || 'stop'}`
             : `SCALP_SIGNAL=WAIT reason=${sig?.reason || 'DATA_UNAVAILABLE'}`;
           return `${a.symbol}: CURRENT_PRICE=$${a.price} (${a.change >= 0 ? '+' : ''}${a.change.toFixed(2)}%) - ${signalCtx} - Rationale: ${a.reason}`;
         })
@@ -3068,6 +3169,7 @@ function generateSignalForAsset(asset) {
   const rrRatio = Number(scalp.rrRatio) || (risk > 0 ? Number((rewardT2 / risk).toFixed(2)) : 1.9);
   const atrPct = Number.isFinite(Number(scalp.atrPct)) ? Number(scalp.atrPct) : ((avgEntry > 0 ? (risk / avgEntry) * 100 : 0));
   const leverage = scalp.leverage || (atrPct > 1 ? '2X-3X' : atrPct > 0.55 ? '3X-5X' : '4X-6X');
+  const managedSignal = trackManagedSignal(asset?.symbol, scalp, asset);
 
   const strength = score >= 80
     ? { label: 'HIGH CONVICTION', cls: 'text-green' }
@@ -3088,6 +3190,14 @@ function generateSignalForAsset(asset) {
     exchanges: ['Binance'],
     leverage,
     strength,
+    signalId: managedSignal?.signalId || scalp.signalId || null,
+    generatedAtLabel: managedSignal?.generatedAtLabel || scalp.generatedAtLabel || null,
+    validUntilLabel: managedSignal?.validUntilLabel || scalp.validUntilLabel || null,
+    lifecycleStatus: managedSignal?.status || scalp.lifecycleStatus || 'ACTIVE',
+    priceInvalidation: managedSignal?.priceInvalidation || scalp.priceInvalidation || null,
+    timeInvalidation: managedSignal?.timeInvalidation || scalp.timeInvalidation || null,
+    managedSignal,
+    formattedSignal: managedSignal ? formatManagedSignalText(managedSignal) : '',
     isBull,
     type: 'SCALP',
     rrRatio,
@@ -3137,6 +3247,16 @@ function renderProSignals() {
     }
 
     const dirLabel = sig.isBull ? 'LONG' : 'SHORT';
+    const lifecycleStatus = sig.lifecycleStatus || 'ACTIVE';
+    const lifecycleColor = lifecycleStatus === 'ACTIVE'
+      ? 'var(--primary)'
+      : lifecycleStatus === 'TRIGGERED'
+        ? 'var(--green)'
+        : lifecycleStatus === 'COMPLETED'
+          ? 'var(--green)'
+          : lifecycleStatus === 'EXPIRED'
+            ? 'var(--text-muted)'
+            : 'var(--red)';
     const targetMovePct = (target) => {
       const base = Number(sig.avgEntry) || Number(asset.price) || 1;
       const pct = sig.isBull
@@ -3165,8 +3285,24 @@ function renderProSignals() {
             <span class="signal-symbol">#${asset.symbol}/USDT</span>
             <span class="signal-dir-badge ${sig.isBull ? 'sig-long' : 'sig-short'}">${dirLabel}</span>
             <span class="badge bg-primary ml-2" style="font-size: 0.65rem; border: 1px solid rgba(255,255,255,0.1)">${sig.type}</span>
+            <span class="badge ml-2" style="font-size:0.65rem;border:1px solid rgba(255,255,255,0.12);color:${lifecycleColor};background:rgba(255,255,255,0.04);">${lifecycleStatus}</span>
           </div>
           <div class="signal-strength ${sig.strength.cls}">${sig.strength.label}</div>
+        </div>
+
+        <div class="signal-row">
+          <span class="signal-label">Signal ID</span>
+          <span class="signal-value signal-mono">${sig.signalId || 'PENDING'}</span>
+        </div>
+
+        <div class="signal-row">
+          <span class="signal-label">Generated</span>
+          <span class="signal-value">${sig.generatedAtLabel || 'UTC pending'}</span>
+        </div>
+
+        <div class="signal-row">
+          <span class="signal-label">Valid Until</span>
+          <span class="signal-value">${sig.validUntilLabel || 'UTC pending'}</span>
         </div>
 
         <!-- Exchanges -->
@@ -3235,6 +3371,16 @@ function renderProSignals() {
             <div class="signal-row">
               <span class="signal-label">Invalidation</span>
               <span class="signal-value">${sig.invalidation}</span>
+            </div>
+
+            <div class="signal-row">
+              <span class="signal-label">Price Invalid.</span>
+              <span class="signal-value">${sig.priceInvalidation?.text || sig.invalidation}</span>
+            </div>
+
+            <div class="signal-row">
+              <span class="signal-label">Time Invalid.</span>
+              <span class="signal-value">${sig.timeInvalidation?.text || 'Cancel if entry is not triggered before expiry'}</span>
             </div>
           </div>
         </div>

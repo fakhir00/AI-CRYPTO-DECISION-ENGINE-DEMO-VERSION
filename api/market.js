@@ -5,6 +5,7 @@
 // Cached for 60s so every client sees the same scan window.
 
 import { buildLocalStructureLevels, computeStructureAwareTradePlan } from '../lib/trade-plan.js';
+import { createManagedSignal } from '../lib/signal-lifecycle.js';
 
 let cachedData = null;
 let cacheTimestamp = 0;
@@ -1000,9 +1001,36 @@ function evaluateSignal(symbol, timeframe, snapshot, timestampIso, spreadPct = n
   const patternName = snapshot.pattern?.name || 'NONE';
   const patternSummary = snapshot.pattern?.summary || patternName;
   const setupType = directionChoice.winner.reasons.find(r => /RETEST|CONFIRM|PATTERN/.test(r)) || 'MOMENTUM_CONTINUATION';
+  const managedSignal = createManagedSignal({
+    symbol,
+    direction: direction === 'SELL' ? 'SHORT' : 'LONG',
+    timeframe: '15m',
+    generatedAt: timestampIso,
+    keyLevel: `${setupType} (${direction === 'SELL' ? 'Resistance' : 'Support'})`,
+    strategySource: setupType,
+    entryLevels: [levels.entry1, levels.entry2, levels.entry3],
+    targets: [levels.tp1, levels.tp2, levels.tp3, levels.tp4],
+    stopLoss: levels.sl,
+    leverage: String(levels.leverage || '').includes('Cross') ? levels.leverage : `Cross ${levels.leverage || '4X-6X'}`,
+    riskPerTradePct: levels.positionRiskPct,
+    stopDistancePct: levels.riskPct,
+    riskRewardToTp2: rrRatio,
+    invalidationTimeframe: '15m',
+    invalidationMode: 'BODY_CLOSE',
+    invalidationPrice: levels.sl,
+    confidence: Math.round(alpha),
+    source: 'market_api'
+  });
 
   return {
     status: 'SIGNAL',
+    signalId: managedSignal.signalId,
+    generatedAt: managedSignal.generatedAt,
+    generatedAtLabel: managedSignal.generatedAtLabel,
+    validUntil: managedSignal.validUntil,
+    validUntilLabel: managedSignal.validUntilLabel,
+    lifecycleStatus: managedSignal.status,
+    managedSignal,
     direction,
     reason: null,
     entry: levels.entry1,
@@ -1022,6 +1050,8 @@ function evaluateSignal(symbol, timeframe, snapshot, timestampIso, spreadPct = n
     targetBasis: levels.targetBasis,
     priceOrder: levels.priceOrder,
     priceOrderValid: levels.priceOrderValid,
+    priceInvalidation: managedSignal.priceInvalidation,
+    timeInvalidation: managedSignal.timeInvalidation,
     localSupport: levels.localSupport,
     localResistance: levels.localResistance,
     riskPct: Number(levels.riskPct.toFixed(2)),

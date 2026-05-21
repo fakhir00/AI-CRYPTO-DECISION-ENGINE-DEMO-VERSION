@@ -2,6 +2,8 @@
 // NEXUS API Engine — All external data integrations
 // ====================================================
 
+import { createManagedSignal, formatManagedSignalText } from './lib/signal-lifecycle.js';
+
 const KEYS = {
   coingecko: import.meta.env?.VITE_COINGECKO_API_KEY || 'CG-7gTv8kk2qS7r8kj515m2rVQJ',
   cmc: import.meta.env?.VITE_CMC_API_KEY || 'e7080786d0f14b3abfc6c58de5f61adc',
@@ -1768,33 +1770,29 @@ function buildCanonicalSignalText(rawSignalText = '', fallbackSymbol = 'BTC', op
     const forcedPlanValid = normalizedPlan.valid;
 
     if (forcedPlanValid) {
-      const formattedEntries = normalizedPlan.entries.map(v => formatSignalPrice(v, options.candleData?.currentPrice || v));
-      const formattedTargets = normalizedPlan.targets.map(v => formatSignalPrice(v, options.candleData?.currentPrice || v));
-      const formattedStop = formatSignalPrice(normalizedPlan.stop, options.candleData?.currentPrice || normalizedPlan.stop);
-
-      return `#${symbol}/USDT
-
-Key Level: Fibonacci ${keyLevelFibLabel} (${keyLevelType})
-
-Signal Type: Regular (${directionLabel})
-
-Entry :
-(${formattedEntries[0]}, ${formattedEntries[1]}, ${formattedEntries[2]})
-
-Take-Profit Targets:
-1) ${formattedTargets[0]}
-2) ${formattedTargets[1]}
-3) ${formattedTargets[2]}
-4) ${formattedTargets[3]}
-
-Stop Targets:
-1) ${formattedStop}
-
-Leverage: ${forcedPlan.leverageLabel || 'Cross (2X-3X)'}
-Risk Per Trade: ${Number(forcedPlan.positionRiskPct || 0.5).toFixed(2)}%
-Stop Distance: ${Number(forcedPlan.riskPct || 0).toFixed(2)}%
-Invalidation: ${forcedPlan.invalidation || `15m close ${direction === 'SHORT' ? 'above' : 'below'} stop`}
-Risk-Reward: ${forcedPlan.riskRewardLabel || 'TP2 1:1.90'}`;
+      const canonicalSignal = forcedPlan.managedSignal || createManagedSignal({
+        signalId: forcedPlan.signalId || undefined,
+        symbol,
+        direction,
+        timeframe: '15m',
+        generatedAt: forcedPlan.generatedAt || new Date().toISOString(),
+        validUntil: forcedPlan.validUntil || undefined,
+        keyLevel: `Fibonacci ${keyLevelFibLabel} (${keyLevelType})`,
+        strategySource: forcedPlan.setupType || 'API_DERIVED_EXECUTION_PLAN',
+        entryLevels: normalizedPlan.entries,
+        targets: normalizedPlan.targets,
+        stopLoss: normalizedPlan.stop,
+        leverage: forcedPlan.leverageLabel || 'Cross (2X-3X)',
+        riskPerTradePct: forcedPlan.positionRiskPct || 0.5,
+        stopDistancePct: forcedPlan.riskPct || normalizedPlan.riskPct,
+        riskRewardToTp2: forcedPlan.rrToTp2 || 1.9,
+        invalidationTimeframe: '15m',
+        invalidationMode: 'BODY_CLOSE',
+        invalidationPrice: normalizedPlan.stop,
+        status: forcedPlan.lifecycleStatus || 'ACTIVE',
+        source: forcedPlan.source || 'api'
+      });
+      return formatManagedSignalText(canonicalSignal);
     }
   }
 
@@ -1894,6 +1892,27 @@ Risk-Reward: ${forcedPlan.riskRewardLabel || 'TP2 1:1.90'}`;
 
   const fallbackKeyMeta = deriveKeyLevelMeta(direction, options.candleData, entryLadderNums[0] ?? null);
   const fallbackFibLabel = fallbackKeyMeta.fibLabel || '0.618';
+  const parsedManagedSignal = createManagedSignal({
+    symbol,
+    direction,
+    timeframe: '15m',
+    generatedAt: new Date().toISOString(),
+    keyLevel: `Fibonacci ${fallbackFibLabel} (${fallbackKeyMeta.levelType})`,
+    strategySource: 'AI_PARSED_SIGNAL',
+    entryLevels: normalizedParsedPlan.entries,
+    targets: normalizedParsedPlan.targets,
+    stopLoss: normalizedParsedPlan.stop,
+    leverage: deriveRiskFirstLeverageLabel(null, 0.5, options.tradeMeta?.confidence),
+    riskPerTradePct: 0.5,
+    stopDistancePct: normalizedParsedPlan.riskPct,
+    riskRewardToTp2: 3.0,
+    invalidationTimeframe: '15m',
+    invalidationMode: 'BODY_CLOSE',
+    invalidationPrice: normalizedParsedPlan.stop,
+    status: 'ACTIVE',
+    source: 'ai_parsed'
+  });
+  if (normalizedParsedPlan.valid) return formatManagedSignalText(parsedManagedSignal);
 
   // If parsing fails, still return a cleaned copy-ready signal without forbidden annotations.
   if (!normalizedParsedPlan.valid || entryLadder.length < 3 || targets.length < 4 || !stop) {
@@ -1908,58 +1927,29 @@ Risk-Reward: ${forcedPlan.riskRewardLabel || 'TP2 1:1.90'}`;
       candleData: options.candleData,
       confidence: options.tradeMeta?.confidence
     });
-    const autoEntries = autoPlan.entries.map(v => formatSignalPrice(v, refPrice));
-    const autoTargets = autoPlan.targets.map(v => formatSignalPrice(v, refPrice));
-    const autoStop = formatSignalPrice(autoPlan.stop, refPrice);
-
-      return `#${symbol}/USDT
-
-Key Level: Fibonacci ${fallbackFibLabel} (${fallbackKeyMeta.levelType})
-
-Signal Type: Regular (${directionLabel})
-
-Entry :
-(${autoEntries[0]}, ${autoEntries[1]}, ${autoEntries[2]})
-
-Take-Profit Targets:
-1) ${autoTargets[0]}
-2) ${autoTargets[1]}
-3) ${autoTargets[2]}
-4) ${autoTargets[3] || autoTargets[2]}
-
-Stop Targets:
-1) ${autoStop}
-
-Leverage: ${deriveRiskFirstLeverageLabel(null, 0.5, options.tradeMeta?.confidence)}
-Risk Per Trade: 0.50%
-Stop Distance: 0.50%
-Invalidation: 15m close ${direction === 'SHORT' ? 'above' : 'below'} stop
-Risk-Reward: TP2 1:3.00`;
+    return formatManagedSignalText(createManagedSignal({
+      symbol,
+      direction,
+      timeframe: '15m',
+      generatedAt: new Date().toISOString(),
+      keyLevel: `Fibonacci ${fallbackFibLabel} (${fallbackKeyMeta.levelType})`,
+      strategySource: 'AI_AUTO_REPAIR',
+      entryLevels: autoPlan.entries,
+      targets: autoPlan.targets,
+      stopLoss: autoPlan.stop,
+      leverage: deriveRiskFirstLeverageLabel(null, 0.5, options.tradeMeta?.confidence),
+      riskPerTradePct: 0.5,
+      stopDistancePct: autoPlan.riskPct,
+      riskRewardToTp2: 3.0,
+      invalidationTimeframe: '15m',
+      invalidationMode: 'BODY_CLOSE',
+      invalidationPrice: autoPlan.stop,
+      status: 'ACTIVE',
+      source: 'ai_auto_repair'
+    }));
   }
 
-  return `#${symbol}/USDT
-
-Key Level: Fibonacci ${fallbackFibLabel} (${fallbackKeyMeta.levelType})
-
-Signal Type: Regular (${directionLabel})
-
-Entry :
-(${entryLadder[0]}, ${entryLadder[1]}, ${entryLadder[2]})
-
-Take-Profit Targets:
-1) ${targets[0]}
-2) ${targets[1]}
-3) ${targets[2]}
-4) ${targets[3] || targets[2]}
-
-Stop Targets:
-1) ${stop}
-
-Leverage: ${deriveRiskFirstLeverageLabel(null, 0.5, options.tradeMeta?.confidence)}
-Risk Per Trade: 0.50%
-Stop Distance: 0.50%
-Invalidation: 15m close ${direction === 'SHORT' ? 'above' : 'below'} stop
-Risk-Reward: TP2 1:3.00`;
+  return formatManagedSignalText(parsedManagedSignal);
 }
 
 function extractTradeRationales(text = '', symbol = 'COIN') {
@@ -2040,6 +2030,12 @@ function parseAssetContextSnapshots(assetContext = '') {
       const rrMatch = segment.match(/\brrTp2\s*=\s*([0-9.]+)/i);
       const riskMatch = segment.match(/\briskPct\s*=\s*([0-9.]+)/i);
       const positionRiskMatch = segment.match(/\bpositionRiskPct\s*=\s*([0-9.]+)/i);
+      const signalIdMatch = segment.match(/\bid\s*=\s*([A-Z0-9-]+)/i);
+      const generatedAtMatch = segment.match(/\bgeneratedAt\s*=\s*([^\s|]+)/i);
+      const validUntilMatch = segment.match(/\bvalidUntil\s*=\s*([^\s|]+)/i);
+      const lifecycleMatch = segment.match(/\blifecycle\s*=\s*([A-Z_]+)/i);
+      const priceInvalidationMatch = segment.match(/\bpriceInvalidation\s*=\s*"([^"]+)"/i);
+      const timeInvalidationMatch = segment.match(/\btimeInvalidation\s*=\s*"([^"]+)"/i);
       const setupMatch = segment.match(/\bsetup\s*=\s*([A-Z0-9_,.-]+)/i);
       const invalidationMatch = segment.match(/\binvalidation\s*=\s*([^|]+?)(?:\s+-\s+Rationale:|$)/i);
       const waitReasonMatch = segment.match(/\breason\s*=\s*([^|]+?)(?:\s+-\s+Rationale:|$)/i);
@@ -2054,6 +2050,12 @@ function parseAssetContextSnapshots(assetContext = '') {
         rrToTp2: toNumber(rrMatch?.[1]),
         riskPct: toNumber(riskMatch?.[1]),
         positionRiskPct: toNumber(positionRiskMatch?.[1]),
+        signalId: signalIdMatch?.[1] ? signalIdMatch[1].trim() : null,
+        generatedAt: generatedAtMatch?.[1] ? generatedAtMatch[1].trim() : null,
+        validUntil: validUntilMatch?.[1] ? validUntilMatch[1].trim() : null,
+        lifecycleStatus: lifecycleMatch?.[1] ? lifecycleMatch[1].trim() : null,
+        priceInvalidationText: priceInvalidationMatch?.[1] ? priceInvalidationMatch[1].trim() : null,
+        timeInvalidationText: timeInvalidationMatch?.[1] ? timeInvalidationMatch[1].trim() : null,
         setupType: setupMatch?.[1] ? setupMatch[1].trim() : null,
         invalidation: invalidationMatch?.[1] ? invalidationMatch[1].trim() : null,
         waitReason: waitReasonMatch?.[1] ? waitReasonMatch[1].trim() : null
@@ -2188,6 +2190,30 @@ function buildScannerDrivenTradePlan(snapshot = null) {
 
   const normalizedPlan = normalizeAssistantTradePlan(direction, entries, targets, stop, snapshot?.price);
   if (!normalizedPlan.valid) return null;
+  const managedSignal = createManagedSignal({
+    signalId: signal.signalId || undefined,
+    symbol: snapshot?.symbol,
+    direction,
+    timeframe: '15m',
+    generatedAt: signal.generatedAt || new Date().toISOString(),
+    validUntil: signal.validUntil || undefined,
+    keyLevel: `${signal.setupType || 'Scanner'} (${direction === 'SHORT' ? 'Resistance' : 'Support'})`,
+    strategySource: signal.setupType || 'SCANNER_CONFIRMED',
+    entryLevels: normalizedPlan.entries,
+    targets: normalizedPlan.targets,
+    stopLoss: normalizedPlan.stop,
+    leverage: normalizeLeverageLabel(signal.leverage, null, null),
+    riskPerTradePct: signal.positionRiskPct || 0.5,
+    stopDistancePct: signal.riskPct ?? normalizedPlan.riskPct,
+    riskRewardToTp2: signal.rrToTp2 || 1.9,
+    invalidationTimeframe: '15m',
+    invalidationMode: 'BODY_CLOSE',
+    invalidationPrice: normalizedPlan.stop,
+    status: signal.lifecycleStatus || 'ACTIVE',
+    source: 'scanner_context'
+  });
+  if (signal.priceInvalidationText) managedSignal.priceInvalidation.text = signal.priceInvalidationText;
+  if (signal.timeInvalidationText) managedSignal.timeInvalidation.text = signal.timeInvalidationText;
 
   return {
     symbol: String(snapshot?.symbol || '').toUpperCase(),
@@ -2213,6 +2239,11 @@ function buildScannerDrivenTradePlan(snapshot = null) {
     riskPct: signal.riskPct ?? normalizedPlan.riskPct,
     positionRiskPct: signal.positionRiskPct || 0.5,
     invalidation: signal.invalidation || (direction === 'SHORT' ? `15m close above ${normalizedPlan.stop}` : `15m close below ${normalizedPlan.stop}`),
+    signalId: managedSignal.signalId,
+    generatedAt: managedSignal.generatedAt,
+    validUntil: managedSignal.validUntil,
+    lifecycleStatus: managedSignal.status,
+    managedSignal,
     source: 'scanner'
   };
 }
@@ -2287,6 +2318,26 @@ function buildApiDrivenTradePlan({ symbol = 'BTC', userQuery = '', assetContext 
 
   const planSymbol = String(symbol || '').toUpperCase();
   const planChangePct = toNumber(snap?.changePct) ?? toNumber(candleData?.changePct);
+  const managedSignal = createManagedSignal({
+    symbol: planSymbol,
+    direction,
+    timeframe: '15m',
+    generatedAt: new Date().toISOString(),
+    keyLevel: `${keyMeta.fibLabel || '0.618'} (${keyMeta.levelType})`,
+    strategySource: 'AI_RISK_FALLBACK',
+    entryLevels: normalizedPlan.entries,
+    targets: normalizedPlan.targets,
+    stopLoss: normalizedPlan.stop,
+    leverage: leverageLabel,
+    riskPerTradePct: 0.5,
+    stopDistancePct: normalizedRiskPct,
+    riskRewardToTp2: 1.9,
+    invalidationTimeframe: '15m',
+    invalidationMode: 'BODY_CLOSE',
+    invalidationPrice: normalizedPlan.stop,
+    confidence: bias.confidence * 100,
+    source: 'ai_fallback'
+  });
 
   return {
     symbol: planSymbol,
@@ -2310,6 +2361,11 @@ function buildApiDrivenTradePlan({ symbol = 'BTC', userQuery = '', assetContext 
     invalidation: direction === 'SHORT'
       ? `15m close above ${formatSignalPrice(normalizedPlan.stop, current)}`
       : `15m close below ${formatSignalPrice(normalizedPlan.stop, current)}`,
+    signalId: managedSignal.signalId,
+    generatedAt: managedSignal.generatedAt,
+    validUntil: managedSignal.validUntil,
+    lifecycleStatus: managedSignal.status,
+    managedSignal,
     source: 'ai_fallback'
   };
 }
@@ -2343,12 +2399,16 @@ CRITICAL SCALP RULE: Every signal is SCALPING only. Keep stop-loss disciplined a
 MANDATORY SIGNAL FORMAT (FOLLOW STRICTLY):
 # [SYMBOL]/USDT
 
+Signal ID: [UNIQUE_ID]
+Generated: [UTC_TIMESTAMP]
+Valid Until: [UTC_TIMESTAMP]
+
 Key Level: Fibonacci [0.236/0.382/0.5/0.618/0.786/0.886] (support/resistance)
 
 Signal Type: Regular ([Long/Short])
 
-Entry :
-([Price 1], [Price 2], [Price 3])
+Entry Zone:
+[Price 1] - [Price 2] - [Price 3]
 
 Take-Profit Targets:
 1) [Price]
@@ -2356,14 +2416,29 @@ Take-Profit Targets:
 3) [Price]
 4) [Price]
 
-Stop Targets:
-1) [Price]
+Stop Loss:
+[Price]
 
-Leverage: Cross ([X])
-Risk Per Trade: [Percent]
-Stop Distance: [Percent]
-Invalidation: [15m close above/below stop]
-Risk-Reward: [TP2 R:R]
+Price Invalidation:
+[Timeframe] candle BODY close [above/below] [Invalidation Price]
+
+Time Invalidation:
+Cancel if entry not triggered within [X] x [timeframe] candles
+
+Leverage:
+Cross ([X])
+
+Risk Per Trade:
+[Percent]
+
+Stop Distance:
+[Percent]
+
+Risk-Reward:
+1:[TP2 RR] to TP2
+
+Status:
+ACTIVE
 
 CRITICAL: NEVER add "(1:1 R:R)", "(1:1.5 R:R)", "(1:3 R:R)", "(1:4 R:R)" or "(1.5 ATR)" anywhere in the signal. 
 CRITICAL ENTRY ORDER RULE:
@@ -2663,6 +2738,14 @@ export async function fetchDualAI(userQuery, assetContext = '') {
     changePct: apiTradePlan?.changePct ?? toNumber(activeSnapshot?.changePct),
     patternBias: apiTradePlan?.patternBias ?? getPatternBiasScore(candleData)
   };
+  const lifecycleStatus = String(apiTradePlan?.lifecycleStatus || apiTradePlan?.managedSignal?.status || '').toUpperCase();
+  if (signalMode && ['INVALIDATED', 'EXPIRED', 'COMPLETED'].includes(lifecycleStatus)) {
+    return buildNoTradeSetupHtml(
+      planSymbol || extractedSymbol || 'COIN',
+      lifecycleStatus,
+      activeSnapshot
+    );
+  }
 
   if (
     signalMode &&
@@ -2768,7 +2851,12 @@ CRITICAL: Do NOT claim specific candlestick pattern names. Base rationale on pri
   if (apiTradePlan && Array.isArray(apiTradePlan.entries) && Array.isArray(apiTradePlan.targets)) {
     const cp = toNumber(candleData?.currentPrice) ?? apiTradePlan.entries[0];
     const fmtPlan = (n) => formatSignalPrice(n, cp);
+    const managed = apiTradePlan.managedSignal || null;
     enhancedContext += `\n\n🧮 API-DERIVED EXECUTION PLAN (HIGHEST PRIORITY):
+- Signal ID: ${apiTradePlan.signalId || managed?.signalId || 'N/A'}
+- Generated: ${managed?.generatedAtLabel || apiTradePlan.generatedAt || 'N/A'}
+- Valid Until: ${managed?.validUntilLabel || apiTradePlan.validUntil || 'N/A'}
+- Lifecycle Status: ${apiTradePlan.lifecycleStatus || managed?.status || 'ACTIVE'}
 - Direction: ${apiTradePlan.direction}
 - Setup Source: ${apiTradePlan.source || 'api'}
 - Setup Type: ${apiTradePlan.setupType || 'SCALP'}
@@ -2779,7 +2867,8 @@ CRITICAL: Do NOT claim specific candlestick pattern names. Base rationale on pri
 - Leverage: ${apiTradePlan.leverageLabel || 'Cross (2X-3X)'}
 - Risk Per Trade: ${Number(apiTradePlan.positionRiskPct || 0.5).toFixed(2)}%
 - Stop Distance: ${Number(apiTradePlan.riskPct || 0).toFixed(2)}%
-- Invalidation: ${apiTradePlan.invalidation || '15m close beyond stop'}
+- Price Invalidation: ${managed?.priceInvalidation?.text || apiTradePlan.invalidation || '15m candle BODY close beyond stop'}
+- Time Invalidation: ${managed?.timeInvalidation?.text || 'Cancel if entry not triggered within 4 x 15m candles'}
 - Risk-Reward: ${apiTradePlan.riskRewardLabel || 'TP2 1:1.90'}
 - Confidence: ${formatPercentValue(apiTradePlan.confidence || 0)}
 CRITICAL: Use this plan exactly in the final signal format.`;
