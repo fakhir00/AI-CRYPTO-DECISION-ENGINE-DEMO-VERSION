@@ -6,6 +6,7 @@
 
 import { buildLocalStructureLevels, computeStructureAwareTradePlan } from '../lib/trade-plan.js';
 import { createManagedSignal } from '../lib/signal-lifecycle.js';
+import { DEFAULT_MOMENTUM_CONFIG, evaluateMomentumStrategy } from '../lib/momentum-strategy.js';
 
 let cachedData = null;
 let cacheTimestamp = 0;
@@ -16,7 +17,7 @@ const MIN_QUOTE_VOLUME_USD = 5_000_000;
 const MIN_PRICE_USD = 0.001;
 const MAX_ABS_CHANGE_PCT = 20;
 const MAX_INTRADAY_RANGE_PCT = 24;
-const KLINE_LIMIT = 80;
+const KLINE_LIMIT = 200;
 const FETCH_TIMEOUT_MS = 6000;
 const KLINE_CONCURRENCY = 12;
 const BREAKOUT_VOLUME_SPIKE_MULTIPLIER = 2.0;
@@ -780,6 +781,7 @@ function buildTimeframeSnapshot(candles = [], timeframe = 'SCALP') {
   const structureLevels = buildLocalStructureLevels(candles, price, atrPct);
 
   return {
+    candles: candles.slice(-200),
     price,
     ema9,
     ema21,
@@ -938,6 +940,46 @@ function evaluateSignal(symbol, timeframe, snapshot, timestampIso, spreadPct = n
   const cleanSpread = Number(spreadPct);
   if (Number.isFinite(cleanSpread) && cleanSpread > MAX_SCALP_SPREAD_PCT) {
     return buildNoSignalPayload(timeframe, symbol, timestampIso, 'SPREAD_TOO_WIDE', snapshot, 50, null, cleanSpread);
+  }
+
+  if (Array.isArray(snapshot.candles) && snapshot.candles.length >= 80) {
+    const momentum = evaluateMomentumStrategy(
+      symbol,
+      snapshot.candles,
+      snapshot.trendCandles || [],
+      DEFAULT_MOMENTUM_CONFIG,
+      {
+        spreadPct: Number.isFinite(cleanSpread) ? cleanSpread : 0,
+        generatedAt: timestampIso
+      }
+    );
+
+    if (momentum.status !== 'SIGNAL') {
+      return buildNoSignalPayload(
+        timeframe,
+        symbol,
+        timestampIso,
+        momentum.reason || 'NO_MOMENTUM_SETUP',
+        snapshot,
+        momentum.alpha || 50,
+        momentum.direction || null,
+        cleanSpread
+      );
+    }
+
+    momentum.reason = null;
+    momentum.pattern = momentum.setupType || momentum.patternSummary || 'MOMENTUM_BREAKOUT';
+    momentum.patternSummary = momentum.patternSummary || momentum.setupType || 'MOMENTUM_BREAKOUT';
+    momentum.line = buildSignalLine(
+      timeframe,
+      symbol,
+      momentum.direction,
+      momentum,
+      momentum.pattern,
+      timestampIso,
+      momentum.alpha
+    );
+    return momentum;
   }
 
   const atrPct = Number(snapshot.atrPct);
@@ -1151,6 +1193,7 @@ export default async function handler(req, res) {
     const klinePairs = [];
     topBinance.forEach((t) => {
       klinePairs.push({ symbol: t.base, timeframe: 'SCALP', interval: '15m' });
+      klinePairs.push({ symbol: t.base, timeframe: 'TREND', interval: '1h' });
     });
 
     const klineResults = await mapWithConcurrency(klinePairs, KLINE_CONCURRENCY, async (task) => {
@@ -1170,6 +1213,11 @@ export default async function handler(req, res) {
 
     const assets = topBinance.map((t, idx) => {
       const scalpSnapshot = snapshotMap.get(`${t.base}_SCALP`) || null;
+      const trendSnapshot = snapshotMap.get(`${t.base}_TREND`) || null;
+      if (scalpSnapshot && trendSnapshot?.candles) {
+        scalpSnapshot.trendCandles = trendSnapshot.candles;
+        scalpSnapshot.trendSnapshot = trendSnapshot;
+      }
       const spreadPct = spreadBySymbol[`${t.base}USDT`];
       const scalpSignal = evaluateSignal(t.base, 'SCALP', scalpSnapshot, timestampIso, spreadPct);
       const combinedAlpha = Math.round(Number(scalpSignal.alpha) || 50);

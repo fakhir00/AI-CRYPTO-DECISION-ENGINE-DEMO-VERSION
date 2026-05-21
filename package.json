@@ -7,7 +7,8 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "test:trade-setups": "node scripts/validate-trade-setups.mjs"
+    "test:trade-setups": "node scripts/validate-trade-setups.mjs",
+    "backtest:momentum": "node scripts/backtest-momentum-strategy.mjs"
   },
   "devDependencies": {
     "vite": "^8.0.10"

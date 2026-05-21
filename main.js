@@ -4,6 +4,7 @@ import { setupAuth, openSignIn, logout, openUserProfile, clerk } from './lib/aut
 import { supabase } from './lib/supabase.js';
 import { buildLocalStructureLevels, computeStructureAwareTradePlan } from './lib/trade-plan.js';
 import { createManagedSignal, formatManagedSignalText, updateSignalLifecycle } from './lib/signal-lifecycle.js';
+import { DEFAULT_MOMENTUM_CONFIG, evaluateMomentumStrategy } from './lib/momentum-strategy.js';
 
 
 // --- Navigation & Setup ---
@@ -47,7 +48,7 @@ const MAX_TRADABLE_ASSETS = 50;
 const MAX_TOP_OPPORTUNITIES = MAX_TRADABLE_ASSETS;
 const SIGNAL_SCAN_INTERVAL_MS = 60 * 1000;
 const SCALP_SCAN_SYMBOLS = ['BTC', 'ETH', 'SOL', 'BNB'];
-const SIGNAL_KLINE_LIMIT = 80;
+const SIGNAL_KLINE_LIMIT = 200;
 const SIGNAL_FETCH_TIMEOUT_MS = 6000;
 const SIGNAL_KLINE_CONCURRENCY = 10;
 const BREAKOUT_VOLUME_SPIKE_MULTIPLIER = 2.0;
@@ -870,6 +871,7 @@ function sigBuildSnapshot(candles = [], timeframe = 'SCALP') {
   const structureLevels = buildLocalStructureLevels(candles, price, atrPct);
 
   return {
+    candles: candles.slice(-200),
     price,
     ema9,
     ema21,
@@ -1169,6 +1171,46 @@ function sigEvaluate(symbol, timeframe, snapshot, timestamp, spreadPct = null) {
     return sigNoSignal(timeframe, symbol, timestamp, 'SPREAD_TOO_WIDE', 50, null, snapshot, cleanSpread);
   }
 
+  if (Array.isArray(snapshot.candles) && snapshot.candles.length >= 80) {
+    const momentum = evaluateMomentumStrategy(
+      symbol,
+      snapshot.candles,
+      snapshot.trendCandles || [],
+      DEFAULT_MOMENTUM_CONFIG,
+      {
+        spreadPct: Number.isFinite(cleanSpread) ? cleanSpread : 0,
+        generatedAt: timestamp
+      }
+    );
+
+    if (momentum.status !== 'SIGNAL') {
+      return sigNoSignal(
+        timeframe,
+        symbol,
+        timestamp,
+        momentum.reason || 'NO_MOMENTUM_SETUP',
+        momentum.alpha || 50,
+        momentum.direction || null,
+        snapshot,
+        cleanSpread
+      );
+    }
+
+    momentum.reason = null;
+    momentum.pattern = momentum.setupType || momentum.patternSummary || 'MOMENTUM_BREAKOUT';
+    momentum.patternSummary = momentum.patternSummary || momentum.setupType || 'MOMENTUM_BREAKOUT';
+    momentum.line = sigBuildSignalLine(
+      timeframe,
+      symbol,
+      momentum.direction,
+      momentum,
+      momentum.pattern,
+      timestamp,
+      momentum.alpha
+    );
+    return momentum;
+  }
+
   const atrPct = Number(snapshot.atrPct);
   if (!(Number.isFinite(atrPct) && atrPct >= MIN_SCALP_ATR_PCT)) {
     return sigNoSignal(timeframe, symbol, timestamp, 'VOLATILITY_TOO_LOW', 50, null, snapshot, cleanSpread);
@@ -1429,12 +1471,14 @@ async function hydrateAssetsWithSignals(assetList = []) {
     // Rule: Always scan primary pairs for signals every 60s
     SCALP_SCAN_SYMBOLS.forEach((symbol) => {
       tasks.push({ symbol, timeframe: 'SCALP', interval: '15m' });
+      tasks.push({ symbol, timeframe: 'TREND', interval: '1h' });
     });
     
     // Also scan any other symbols that are in the top list but missing data
     missingSymbols.forEach((symbol) => {
       if (!SCALP_SCAN_SYMBOLS.includes(symbol)) {
         tasks.push({ symbol, timeframe: 'SCALP', interval: '15m' });
+        tasks.push({ symbol, timeframe: 'TREND', interval: '1h' });
       }
     });
 
@@ -1453,7 +1497,13 @@ async function hydrateAssetsWithSignals(assetList = []) {
     const timestampIso = new Date().toISOString();
     missingSymbols.forEach((symbol) => {
       const scalpCandles = grouped[symbol]?.SCALP || null;
+      const trendCandles = grouped[symbol]?.TREND || null;
       const scalpSnapshot = sigBuildSnapshot(scalpCandles || [], 'SCALP');
+      const trendSnapshot = sigBuildSnapshot(trendCandles || [], 'TREND');
+      if (scalpSnapshot && trendSnapshot?.candles) {
+        scalpSnapshot.trendCandles = trendSnapshot.candles;
+        scalpSnapshot.trendSnapshot = trendSnapshot;
+      }
       const spreadPct = spreadMap[`${symbol}USDT`];
 
       SIGNAL_CACHE.bySymbol[symbol] = {
