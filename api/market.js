@@ -4,7 +4,13 @@
 // Fetches Binance market universe + deterministic 15m breakout signal snapshots.
 // Cached for 60s so every client sees the same scan window.
 
-import { buildLocalStructureLevels, computeStructureAwareTradePlan } from '../lib/trade-plan.js';
+import {
+  buildLocalStructureLevels,
+  classifyStructuralStopReason,
+  computeBreakoutVolumeConfirmation,
+  computeEntryZoneMeta,
+  computeStructureAwareTradePlan
+} from '../lib/trade-plan.js';
 import { createManagedSignal } from '../lib/signal-lifecycle.js';
 import { DEFAULT_MOMENTUM_CONFIG, evaluateMomentumStrategy } from '../lib/momentum-strategy.js';
 import { fetchCcxtCandles } from '../lib/ccxt-market-data.js';
@@ -610,6 +616,19 @@ function formatLineNumber(v) {
   return v >= 1000 ? v.toFixed(2) : v.toFixed(4);
 }
 
+function buildRequiredSignalOutputMeta(levels = {}, snapshot = {}, direction = 'BUY') {
+  const entryZone = computeEntryZoneMeta([levels.entry1, levels.entry2, levels.entry3]);
+  const volumeConfirmation = computeBreakoutVolumeConfirmation(snapshot?.candles || []);
+  const stopMeta = classifyStructuralStopReason(snapshot?.candles || [], direction, levels.sl);
+  if (!entryZone || !volumeConfirmation || !stopMeta?.reason) return null;
+  return {
+    entryZone,
+    volumeConfirmation,
+    stopReason: stopMeta.reason,
+    stopMeta
+  };
+}
+
 function buildNoSignalLine(timeframe, symbol, timestamp, reason) {
   return `NO_SIGNAL|${timeframe}|${symbol}/USDT|${timestamp}|${reason}`;
 }
@@ -1061,6 +1080,11 @@ function evaluateSignal(symbol, timeframe, snapshot, timestampIso, spreadPct = n
     return buildNoSignalPayload(timeframe, symbol, timestampIso, 'RR_FAIL', snapshot, alpha, direction, cleanSpread);
   }
 
+  const outputMeta = buildRequiredSignalOutputMeta(levels, snapshot, direction);
+  if (!outputMeta) {
+    return buildNoSignalPayload(timeframe, symbol, timestampIso, 'SIGNAL_METADATA_MISSING', snapshot, alpha, direction, cleanSpread);
+  }
+
   const patternName = snapshot.pattern?.name || 'NONE';
   const patternSummary = snapshot.pattern?.summary || patternName;
   const setupType = directionChoice.winner.reasons.find(r => /RETEST|CONFIRM|PATTERN/.test(r)) || 'MOMENTUM_CONTINUATION';
@@ -1082,6 +1106,9 @@ function evaluateSignal(symbol, timeframe, snapshot, timestampIso, spreadPct = n
     invalidationMode: 'BODY_CLOSE',
     invalidationPrice: levels.sl,
     confidence: Math.round(alpha),
+    entryZoneWidthPct: outputMeta.entryZone.widthPct,
+    stopReason: outputMeta.stopReason,
+    volumeConfirmation: outputMeta.volumeConfirmation,
     source: 'market_api'
   });
 
@@ -1110,6 +1137,7 @@ function evaluateSignal(symbol, timeframe, snapshot, timestampIso, spreadPct = n
     setupType,
     invalidation: levels.invalidation,
     stopBasis: levels.stopBasis,
+    stopReason: outputMeta.stopReason,
     targetBasis: levels.targetBasis,
     priceOrder: levels.priceOrder,
     priceOrderValid: levels.priceOrderValid,
@@ -1117,6 +1145,9 @@ function evaluateSignal(symbol, timeframe, snapshot, timestampIso, spreadPct = n
     timeInvalidation: managedSignal.timeInvalidation,
     localSupport: levels.localSupport,
     localResistance: levels.localResistance,
+    entryZoneMin: outputMeta.entryZone.min,
+    entryZoneMax: outputMeta.entryZone.max,
+    entryZoneWidthPct: outputMeta.entryZone.widthPct,
     riskPct: Number(levels.riskPct.toFixed(2)),
     positionRiskPct: levels.positionRiskPct,
     rrToTp1: Number(rrToTp1.toFixed(2)),
@@ -1126,6 +1157,8 @@ function evaluateSignal(symbol, timeframe, snapshot, timestampIso, spreadPct = n
     alpha: Math.round(alpha),
     spreadPct: Number.isFinite(cleanSpread) ? cleanSpread : null,
     atrPct,
+    volumeMultiple: outputMeta.volumeConfirmation.ratio,
+    volumeConfirmation: outputMeta.volumeConfirmation,
     regime: alphaMeta.regime,
     directionEdge: Number(directionChoice.edge.toFixed(2)),
     confirmations: directionChoice.winner.reasons,

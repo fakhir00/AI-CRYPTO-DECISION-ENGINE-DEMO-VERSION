@@ -2,7 +2,13 @@ import './style.css';
 import { fetchMarketData, fetchCandlePatterns, fetchGlobalMarketData, fetchWhaleActivity, fetchSentiment, fetchFearAndGreed, fetchAIAnalysis, fetchHermesAnalysis, fetchDualAI, calculateAlphaScore, fetchDefiPools, fetchNews, fetchTechnicalSignals, fetchTrendingNarratives, fetchChartData, fetchFundingRates, fetchOpenInterest, fetchOrderBookDepth, fetchBtcOnChain, fetchDuneMarketPulse, fetchRuntimeApiHealth, addToAIMemory, clearAIMemory, getAIMemory, getApiHealthSummary, getApiHealthPromptSummary } from './api.js';
 import { setupAuth, openSignIn, logout, openUserProfile, clerk } from './lib/auth.js';
 import { supabase } from './lib/supabase.js';
-import { buildLocalStructureLevels, computeStructureAwareTradePlan } from './lib/trade-plan.js';
+import {
+  buildLocalStructureLevels,
+  classifyStructuralStopReason,
+  computeBreakoutVolumeConfirmation,
+  computeEntryZoneMeta,
+  computeStructureAwareTradePlan
+} from './lib/trade-plan.js';
 import { createManagedSignal, formatManagedSignalText, updateSignalLifecycle } from './lib/signal-lifecycle.js';
 import { DEFAULT_MOMENTUM_CONFIG, evaluateMomentumStrategy } from './lib/momentum-strategy.js';
 
@@ -94,8 +100,12 @@ function saveSignalLedger(ledger = {}) {
 }
 
 function buildManagedSignalFromScalp(symbol, scalp, asset = null) {
-  if (scalp?.managedSignal?.signalId) return scalp.managedSignal;
+  if (scalp?.managedSignal?.signalId) {
+    return getRequiredSignalOutputFields(scalp) ? scalp.managedSignal : null;
+  }
   if (!scalp || scalp.status !== 'SIGNAL') return null;
+  const requiredFields = getRequiredSignalOutputFields(scalp);
+  if (!requiredFields) return null;
   const generatedAt = scalp.generatedAt || new Date().toISOString();
   return createManagedSignal({
     strategyPreset: 'MOMENTUM_INTRADAY',
@@ -117,9 +127,9 @@ function buildManagedSignalFromScalp(symbol, scalp, asset = null) {
     invalidationMode: 'BODY_CLOSE',
     invalidationPrice: scalp.sl,
     confidence: Number(scalp.alpha ?? asset?.opportunityScore ?? asset?.score ?? 50),
-    entryZoneWidthPct: Number(scalp.entryZoneWidthPct) || null,
-    stopReason: scalp.stopReason || null,
-    volumeConfirmation: scalp.volumeConfirmation || null,
+    entryZoneWidthPct: requiredFields.widthPct,
+    stopReason: requiredFields.stopReason,
+    volumeConfirmation: scalp.volumeConfirmation || scalp.managedSignal?.volumeConfirmation,
     source: 'client_rebuild'
   });
 }
@@ -402,6 +412,44 @@ function sigAvg(values = []) {
 function sigFormatLineNumber(v) {
   if (!Number.isFinite(v)) return '0';
   return v >= 1000 ? v.toFixed(2) : v.toFixed(4);
+}
+
+function formatEntryZonePrice(value) {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return '0.00000';
+  if (num < 1) return num.toFixed(5);
+  if (num < 10) return num.toFixed(4);
+  if (num < 1000) return num.toFixed(2);
+  return num.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+function sigBuildRequiredSignalOutputMeta(levels = {}, snapshot = {}, direction = 'BUY') {
+  const entryZone = computeEntryZoneMeta([levels.entry1, levels.entry2, levels.entry3]);
+  const volumeConfirmation = computeBreakoutVolumeConfirmation(snapshot?.candles || []);
+  const stopMeta = classifyStructuralStopReason(snapshot?.candles || [], direction, levels.sl);
+  if (!entryZone || !volumeConfirmation || !stopMeta?.reason) return null;
+  return {
+    entryZone,
+    volumeConfirmation,
+    stopReason: stopMeta.reason,
+    stopMeta
+  };
+}
+
+function getRequiredSignalOutputFields(signal = {}) {
+  const entryZone = computeEntryZoneMeta([signal.entry1, signal.entry2, signal.entry3]);
+  const widthPct = Number(signal.entryZoneWidthPct ?? entryZone?.widthPct);
+  const volumeText = signal.volumeConfirmation?.text || signal.managedSignal?.volumeConfirmation?.text || null;
+  const stopReason = signal.stopReason || signal.managedSignal?.stopReason || null;
+  if (!entryZone || !Number.isFinite(widthPct) || !volumeText || !stopReason) return null;
+  return {
+    entryZone,
+    entryZoneRange: `${formatEntryZonePrice(entryZone.min)} - ${formatEntryZonePrice(entryZone.max)}`,
+    entryWidthText: `${widthPct.toFixed(2)}%`,
+    widthPct,
+    volumeText,
+    stopReason
+  };
 }
 
 function sigBuildNoSignalLine(timeframe, symbol, timestamp, reason) {
@@ -1273,6 +1321,11 @@ function sigEvaluate(symbol, timeframe, snapshot, timestamp, spreadPct = null) {
     return sigNoSignal(timeframe, symbol, timestamp, 'RR_FAIL', Math.round(alpha), direction, snapshot, cleanSpread);
   }
 
+  const outputMeta = sigBuildRequiredSignalOutputMeta(levels, snapshot, direction);
+  if (!outputMeta) {
+    return sigNoSignal(timeframe, symbol, timestamp, 'SIGNAL_METADATA_MISSING', Math.round(alpha), direction, snapshot, cleanSpread);
+  }
+
   const patternName = snapshot.pattern?.name || 'NONE';
   const patternSummary = snapshot.pattern?.summary || patternName;
   const setupType = directionChoice.winner.reasons.find(r => /RETEST|CONFIRM|PATTERN/.test(r)) || 'MOMENTUM_CONTINUATION';
@@ -1294,6 +1347,9 @@ function sigEvaluate(symbol, timeframe, snapshot, timestamp, spreadPct = null) {
     invalidationMode: 'BODY_CLOSE',
     invalidationPrice: levels.sl,
     confidence: Math.round(alpha),
+    entryZoneWidthPct: outputMeta.entryZone.widthPct,
+    stopReason: outputMeta.stopReason,
+    volumeConfirmation: outputMeta.volumeConfirmation,
     source: 'browser_scanner'
   });
 
@@ -1325,6 +1381,7 @@ function sigEvaluate(symbol, timeframe, snapshot, timestamp, spreadPct = null) {
     setupType,
     invalidation: levels.invalidation,
     stopBasis: levels.stopBasis,
+    stopReason: outputMeta.stopReason,
     targetBasis: levels.targetBasis,
     priceOrder: levels.priceOrder,
     priceOrderValid: levels.priceOrderValid,
@@ -1332,12 +1389,17 @@ function sigEvaluate(symbol, timeframe, snapshot, timestamp, spreadPct = null) {
     timeInvalidation: managedSignal.timeInvalidation,
     localSupport: levels.localSupport,
     localResistance: levels.localResistance,
+    entryZoneMin: outputMeta.entryZone.min,
+    entryZoneMax: outputMeta.entryZone.max,
+    entryZoneWidthPct: outputMeta.entryZone.widthPct,
     riskPct: Number(levels.riskPct.toFixed(2)),
     positionRiskPct: levels.positionRiskPct,
     rrToTp1: Number(rrToTp1.toFixed(2)),
     rrRatio: Number(rrRatio.toFixed(2)),
     spreadPct: Number.isFinite(cleanSpread) ? cleanSpread : null,
     atrPct,
+    volumeMultiple: outputMeta.volumeConfirmation.ratio,
+    volumeConfirmation: outputMeta.volumeConfirmation,
     directionEdge: Number(directionChoice.edge.toFixed(2)),
     confirmations: directionChoice.winner.reasons,
     line: sigBuildSignalLine(
@@ -2697,13 +2759,22 @@ function renderOpportunitiesPage() {
       `;
     }
 
-    if (signal.status === 'SIGNAL') {
+    if (signal.status === 'SIGNAL' && getRequiredSignalOutputFields(signal)) {
       const dirIsBuy = signal.direction === 'BUY';
       return `
         <div style="display:flex;flex-direction:column;gap:0.25rem;">
           <span class="badge ${dirIsBuy ? 'sig-long' : 'sig-short'}" style="font-size: 0.62rem; padding: 0.15rem 0.45rem; width: fit-content;">
             ${dirIsBuy ? 'BUY' : 'SELL'} - ${Number(signal.alpha ?? 50).toFixed(0)}
           </span>
+        </div>
+      `;
+    }
+
+    if (signal.status === 'SIGNAL') {
+      return `
+        <div style="display:flex;flex-direction:column;gap:0.25rem;">
+          <span class="badge" style="background: rgba(255,255,255,0.05); color: var(--text-muted); font-size: 0.62rem; padding: 0.15rem 0.4rem; width: fit-content;">NO_SIGNAL</span>
+          <span class="text-red" style="font-size: 0.68rem;">SIGNAL_METADATA_MISSING</span>
         </div>
       `;
     }
@@ -2770,17 +2841,22 @@ function renderOpportunitiesPage() {
       navigateToPage('ai-research'); // Switch to AI Research Analyst Page
       setTimeout(() => {
         if (scalpSignal?.status === 'SIGNAL') {
+          const required = getRequiredSignalOutputFields(scalpSignal);
+          if (!required) {
+            triggerMcp(`No valid momentum intraday swing signal exists for ${symbol}/USDT right now. Explain why and what must change before entry.`);
+            return;
+          }
           triggerMcp(
             `Generate a momentum intraday swing trade plan for ${symbol}/USDT. `
             + `Use these mandatory algorithmic values exactly: `
             + `direction=${scalpSignal.direction}, `
-            + `entry1=${scalpSignal.entry1 ?? scalpSignal.entry}, entry2=${scalpSignal.entry2}, entry3=${scalpSignal.entry3}, `
+            + `entryZone="${required.entryZoneRange}", entry1=${scalpSignal.entry1 ?? scalpSignal.entry}, entry2=${scalpSignal.entry2}, entry3=${scalpSignal.entry3}, `
             + `tp1=${scalpSignal.tp1}, tp2=${scalpSignal.tp2}, tp3=${scalpSignal.tp3}, tp4=${scalpSignal.tp4}, `
             + `sl=${scalpSignal.sl}, leverage=${scalpSignal.leverage}, `
             + `alpha=${scalpSignal.alpha}, setupType=${scalpSignal.setupType || 'MOMENTUM_INTRADAY_SWING'}, `
             + `riskPct=${scalpSignal.riskPct}, positionRiskPct=${scalpSignal.positionRiskPct || 0.5}, rrToTp2=${scalpSignal.rrRatio}, `
-            + `stopBasis=${scalpSignal.stopBasis || 'N/A'}, stopReason=${scalpSignal.stopReason || 'N/A'}, targetBasis=${(scalpSignal.targetBasis || []).join('/') || 'N/A'}, `
-            + `volume=${scalpSignal.volumeConfirmation?.text || `${Number(scalpSignal.volumeMultiple || 0).toFixed(2)}x avg`}, entryZoneWidthPct=${scalpSignal.entryZoneWidthPct || 'N/A'}, `
+            + `stopBasis=${scalpSignal.stopBasis || 'N/A'}, STOP REASON="${required.stopReason}", targetBasis=${(scalpSignal.targetBasis || []).join('/') || 'N/A'}, `
+            + `VOLUME="${required.volumeText}", ENTRY WIDTH: ${required.entryWidthText}, `
             + `invalidation="${scalpSignal.invalidation || 'stop loss'}", line="${scalpSignal.line}". `
             + `Do not alter these numbers.`
           );
@@ -3117,8 +3193,9 @@ function setupAiResearchChat() {
           const tracked = sig?.status === 'SIGNAL' ? trackManagedSignal(a.symbol, sig, a) : null;
           const managed = tracked || sig?.managedSignal || null;
           const quoteSafe = (value = '') => String(value || '').replace(/"/g, "'");
-          const signalCtx = sig?.status === 'SIGNAL'
-            ? `MOMENTUM_SWING_SIGNAL=${sig.direction} id=${sig.signalId || managed?.signalId || 'N/A'} generatedAt=${sig.generatedAt || managed?.generatedAt || 'N/A'} validUntil=${sig.validUntil || managed?.validUntil || 'N/A'} lifecycle=${managed?.status || sig.lifecycleStatus || 'ACTIVE'} setup=${sig.setupType || sig.patternSummary || 'MOMENTUM_INTRADAY_SWING'} entries=${sig.entry1}/${sig.entry2}/${sig.entry3} tp=${sig.tp1}/${sig.tp2}/${sig.tp3}/${sig.tp4} sl=${sig.sl} leverage=${sig.leverage || 'N/A'} rrTp1=${sig.rrToTp1 || 'N/A'} rrTp2=${sig.rrRatio} riskPct=${sig.riskPct || 0} positionRiskPct=${sig.positionRiskPct || 0.5} entryWidthPct=${sig.entryZoneWidthPct || 'N/A'} volume="${quoteSafe(sig.volumeConfirmation?.text || managed?.volumeConfirmation?.text || `${Number(sig.volumeMultiple || 0).toFixed(2)}x avg`)}" stopBasis=${sig.stopBasis || 'N/A'} stopReason="${quoteSafe(sig.stopReason || managed?.stopReason || 'N/A')}" targetBasis=${(sig.targetBasis || []).join('/') || 'N/A'} priceInvalidation="${quoteSafe(sig.priceInvalidation?.text || managed?.priceInvalidation?.text || sig.invalidation || 'stop')}" timeInvalidation="${quoteSafe(sig.timeInvalidation?.text || managed?.timeInvalidation?.text || 'Cancel if entry not triggered before expiry')}" invalidation=${sig.invalidation || 'stop'}`
+          const required = sig?.status === 'SIGNAL' ? getRequiredSignalOutputFields(sig) : null;
+          const signalCtx = sig?.status === 'SIGNAL' && required
+            ? `MOMENTUM_SWING_SIGNAL=${sig.direction} id=${sig.signalId || managed?.signalId || 'N/A'} generatedAt=${sig.generatedAt || managed?.generatedAt || 'N/A'} validUntil=${sig.validUntil || managed?.validUntil || 'N/A'} lifecycle=${managed?.status || sig.lifecycleStatus || 'ACTIVE'} setup=${sig.setupType || sig.patternSummary || 'MOMENTUM_INTRADAY_SWING'} entryZone="${required.entryZoneRange}" entry1=${sig.entry1} entry2=${sig.entry2} entry3=${sig.entry3} tp=${sig.tp1}/${sig.tp2}/${sig.tp3}/${sig.tp4} sl=${sig.sl} leverage=${sig.leverage || 'N/A'} rrTp1=${sig.rrToTp1 || 'N/A'} rrTp2=${sig.rrRatio} riskPct=${sig.riskPct || 0} positionRiskPct=${sig.positionRiskPct || 0.5} ENTRY WIDTH="${required.entryWidthText}" VOLUME="${quoteSafe(required.volumeText)}" stopBasis=${sig.stopBasis || 'N/A'} STOP REASON="${quoteSafe(required.stopReason)}" targetBasis=${(sig.targetBasis || []).join('/') || 'N/A'} priceInvalidation="${quoteSafe(sig.priceInvalidation?.text || managed?.priceInvalidation?.text || sig.invalidation || 'stop')}" timeInvalidation="${quoteSafe(sig.timeInvalidation?.text || managed?.timeInvalidation?.text || 'Cancel if entry not triggered before expiry')}" invalidation=${sig.invalidation || 'stop'}`
             : `MOMENTUM_SWING_SIGNAL=WAIT reason=${sig?.reason || 'DATA_UNAVAILABLE'}`;
           return `${a.symbol}: CURRENT_PRICE=$${a.price} (${a.change >= 0 ? '+' : ''}${a.change.toFixed(2)}%) - ${signalCtx} - Rationale: ${a.reason}`;
         })
@@ -3216,6 +3293,19 @@ function generateSignalForAsset(asset) {
       waitReason: `Momentum gate failed: ${scalp?.reason || 'DATA_UNAVAILABLE'}`
     };
   }
+  const requiredFields = getRequiredSignalOutputFields(scalp);
+  if (!requiredFields) {
+    return {
+      type: 'WAIT',
+      isBull: null,
+      strength: { label: 'NO TRADE ZONE', cls: 'text-muted' },
+      exchanges: ['Binance'],
+      leverage: 'None',
+      entry1: 0, entry2: 0, entry3: 0,
+      t1: 0, t2: 0, t3: 0, t4: 0, sl: 0, rrRatio: '0.0',
+      waitReason: 'Momentum gate failed: SIGNAL_METADATA_MISSING'
+    };
+  }
 
   const isBull = scalp.direction === 'BUY';
   const rawEntry = Number(scalp.entry1 ?? scalp.entry) || Number(asset.price) || 0;
@@ -3281,8 +3371,11 @@ function generateSignalForAsset(asset) {
     invalidation: scalp.invalidation || (isBull ? `15m close below ${formatPrice(sl)}` : `15m close above ${formatPrice(sl)}`),
     riskPct: Number(scalp.riskPct) || ((risk / avgEntry) * 100),
     positionRiskPct: Number(scalp.positionRiskPct) || 0.5,
-    entryZoneWidthPct: Number(scalp.entryZoneWidthPct) || managedSignal?.entryZoneWidthPct || managedSignal?.entryZone?.widthPct || null,
-    stopReason: scalp.stopReason || managedSignal?.stopReason || null,
+    entryZoneMin: requiredFields.entryZone.min,
+    entryZoneMax: requiredFields.entryZone.max,
+    entryZoneRange: requiredFields.entryZoneRange,
+    entryZoneWidthPct: requiredFields.widthPct,
+    stopReason: requiredFields.stopReason,
     volumeConfirmation: scalp.volumeConfirmation || managedSignal?.volumeConfirmation || null,
     volumeMultiple: Number(scalp.volumeMultiple) || Number(managedSignal?.volumeConfirmation?.ratio) || null,
     rrToTp1: Number(scalp.rrToTp1) || null,
@@ -3399,12 +3492,12 @@ function renderProSignals() {
 
         <div class="signal-row">
           <span class="signal-label">VOLUME</span>
-          <span class="signal-value">${sig.volumeConfirmation?.text || (Number.isFinite(Number(sig.volumeMultiple)) ? `${Number(sig.volumeMultiple).toFixed(2)}x avg` : 'N/A')}</span>
+          <span class="signal-value">${sig.volumeConfirmation.text}</span>
         </div>
 
         <div class="signal-row">
           <span class="signal-label">STOP REASON</span>
-          <span class="signal-value">${sig.stopReason || 'N/A'}</span>
+          <span class="signal-value">${sig.stopReason}</span>
         </div>
 
         <!-- Divider -->
@@ -3418,7 +3511,7 @@ function renderProSignals() {
             <div class="signal-row">
               <span class="signal-label">Entry Zone</span>
               <span class="signal-value signal-mono">
-                (${formatPrice(sig.entry1)}, ${formatPrice(sig.entry2)}, ${formatPrice(sig.entry3)})
+                ${sig.entryZoneRange}
               </span>
             </div>
 
@@ -3429,7 +3522,7 @@ function renderProSignals() {
 
             <div class="signal-row">
               <span class="signal-label">Entry Width</span>
-              <span class="signal-value">${Number.isFinite(Number(sig.entryZoneWidthPct)) ? `${Number(sig.entryZoneWidthPct).toFixed(2)}%` : 'N/A'}</span>
+              <span class="signal-value">${Number(sig.entryZoneWidthPct).toFixed(2)}%</span>
             </div>
 
             <!-- Targets -->

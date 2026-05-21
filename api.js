@@ -1789,6 +1789,9 @@ function buildCanonicalSignalText(rawSignalText = '', fallbackSymbol = 'BTC', op
         invalidationTimeframe: '15m',
         invalidationMode: 'BODY_CLOSE',
         invalidationPrice: normalizedPlan.stop,
+        entryZoneWidthPct: forcedPlan.entryZoneWidthPct,
+        stopReason: forcedPlan.stopReason,
+        volumeConfirmation: forcedPlan.volumeConfirmation,
         status: forcedPlan.lifecycleStatus || 'ACTIVE',
         source: forcedPlan.source || 'api'
       });
@@ -2012,7 +2015,7 @@ function parseAssetContextSnapshots(assetContext = '') {
     const changePct = toNumber(m[3]);
     const reasonMatch = segment.match(/Rationale:\s*(.+)$/i);
     const reason = reasonMatch ? reasonMatch[1].trim() : '';
-    const signalMatch = segment.match(/\bSCALP_SIGNAL\s*=\s*([A-Z_]+)/i);
+    const signalMatch = segment.match(/\b(?:SCALP_SIGNAL|MOMENTUM_SWING_SIGNAL)\s*=\s*([A-Z_]+)/i);
     let signal = null;
 
     if (signalMatch) {
@@ -2024,6 +2027,9 @@ function parseAssetContextSnapshots(assetContext = '') {
           ? 'LONG'
           : null;
       const entriesMatch = segment.match(/\bentries\s*=\s*([0-9.,/]+)/i);
+      const entry1Match = segment.match(/\bentry1\s*=\s*([0-9.,]+)/i);
+      const entry2Match = segment.match(/\bentry2\s*=\s*([0-9.,]+)/i);
+      const entry3Match = segment.match(/\bentry3\s*=\s*([0-9.,]+)/i);
       const targetsMatch = segment.match(/\btp\s*=\s*([0-9.,/]+)/i);
       const stopMatch = segment.match(/\bsl\s*=\s*([0-9.,]+)/i);
       const leverageMatch = segment.match(/\bleverage\s*=\s*([^\s|]+)/i);
@@ -2039,11 +2045,18 @@ function parseAssetContextSnapshots(assetContext = '') {
       const setupMatch = segment.match(/\bsetup\s*=\s*([A-Z0-9_,.-]+)/i);
       const invalidationMatch = segment.match(/\binvalidation\s*=\s*([^|]+?)(?:\s+-\s+Rationale:|$)/i);
       const waitReasonMatch = segment.match(/\breason\s*=\s*([^|]+?)(?:\s+-\s+Rationale:|$)/i);
+      const entryWidthMatch = segment.match(/\b(?:entryWidthPct|ENTRY\s+WIDTH)\s*[:=]\s*\"?([0-9.]+)%?\"?/i);
+      const volumeMatch = segment.match(/\bVOLUME\s*[:=]\s*\"?([0-9.]+x\s+avg)\"?/i) || segment.match(/\bvolume\s*=\s*\"?([0-9.]+x\s+avg)\"?/i);
+      const volumeRatioMatch = volumeMatch?.[1] ? volumeMatch[1].match(/([0-9.]+)x/i) : null;
+      const stopReasonMatch = segment.match(/\bSTOP\s+REASON\s*[:=]\s*\"?([^\"|]+)\"?/i) || segment.match(/\bstopReason\s*=\s*\"?([^\"|]+)\"?/i);
+      const explicitEntries = [entry1Match?.[1], entry2Match?.[1], entry3Match?.[1]]
+        .map(toNumber)
+        .filter(n => n !== null && n > 0);
 
       signal = {
         status: isTrade ? 'SIGNAL' : rawStatus,
         direction,
-        entries: parseSignalNumberList(entriesMatch?.[1]),
+        entries: explicitEntries.length === 3 ? explicitEntries : parseSignalNumberList(entriesMatch?.[1]),
         targets: parseSignalNumberList(targetsMatch?.[1]),
         stop: toNumber(stopMatch?.[1]),
         leverage: leverageMatch?.[1] ? leverageMatch[1].trim() : null,
@@ -2058,7 +2071,13 @@ function parseAssetContextSnapshots(assetContext = '') {
         timeInvalidationText: timeInvalidationMatch?.[1] ? timeInvalidationMatch[1].trim() : null,
         setupType: setupMatch?.[1] ? setupMatch[1].trim() : null,
         invalidation: invalidationMatch?.[1] ? invalidationMatch[1].trim() : null,
-        waitReason: waitReasonMatch?.[1] ? waitReasonMatch[1].trim() : null
+        waitReason: waitReasonMatch?.[1] ? waitReasonMatch[1].trim() : null,
+        entryZoneWidthPct: toNumber(entryWidthMatch?.[1]),
+        volumeConfirmation: volumeMatch?.[1] ? {
+          text: volumeMatch[1].trim(),
+          ratio: toNumber(volumeRatioMatch?.[1])
+        } : null,
+        stopReason: stopReasonMatch?.[1] ? stopReasonMatch[1].trim() : null
       };
     }
 
@@ -2190,6 +2209,10 @@ function buildScannerDrivenTradePlan(snapshot = null) {
 
   const normalizedPlan = normalizeAssistantTradePlan(direction, entries, targets, stop, snapshot?.price);
   if (!normalizedPlan.valid) return null;
+  const entryZoneWidthPct = toNumber(signal.entryZoneWidthPct);
+  const volumeConfirmation = signal.volumeConfirmation?.text ? signal.volumeConfirmation : null;
+  const stopReason = signal.stopReason || null;
+  if (!Number.isFinite(entryZoneWidthPct) || !volumeConfirmation || !stopReason) return null;
   const managedSignal = createManagedSignal({
     signalId: signal.signalId || undefined,
     symbol: snapshot?.symbol,
@@ -2209,6 +2232,9 @@ function buildScannerDrivenTradePlan(snapshot = null) {
     invalidationTimeframe: '15m',
     invalidationMode: 'BODY_CLOSE',
     invalidationPrice: normalizedPlan.stop,
+    entryZoneWidthPct,
+    stopReason,
+    volumeConfirmation,
     status: signal.lifecycleStatus || 'ACTIVE',
     source: 'scanner_context'
   });
@@ -2238,6 +2264,9 @@ function buildScannerDrivenTradePlan(snapshot = null) {
     setupType: signal.setupType || 'SCANNER_CONFIRMED',
     riskPct: signal.riskPct ?? normalizedPlan.riskPct,
     positionRiskPct: signal.positionRiskPct || 0.5,
+    entryZoneWidthPct,
+    volumeConfirmation,
+    stopReason,
     invalidation: signal.invalidation || (direction === 'SHORT' ? `15m close above ${normalizedPlan.stop}` : `15m close below ${normalizedPlan.stop}`),
     signalId: managedSignal.signalId,
     generatedAt: managedSignal.generatedAt,
@@ -2390,7 +2419,7 @@ CRITICAL: You have conversation memory. If the user previously mentioned a coin 
 
 Your core decision-making is based on the NEXUS High-Probability Framework. 
 
-CRITICAL: You are a DUAL-DIRECTIONAL risk manager. Use scanner-provided SCALP_SIGNAL values exactly when present. If the scanner says WAIT, do not invent a trade; explain the failed gate and what must improve. Never promise guaranteed profit or no-loss trading.
+CRITICAL: You are a DUAL-DIRECTIONAL risk manager. Use scanner-provided SCALP_SIGNAL or MOMENTUM_SWING_SIGNAL values exactly when present. If the scanner says WAIT, do not invent a trade; explain the failed gate and what must improve. Never promise guaranteed profit or no-loss trading.
 
 MATHEMATICAL TARGET GENERATION (STRICT): You will be provided with PRE-CALCULATED MANDATORY targets based on live volatility, scanner gates, and risk-reward constraints. 
 CRITICAL: You MUST use the exact Entry, Stop Loss, TP1-TP4, leverage, risk, and invalidation values provided in the context. Do NOT calculate your own. If the context says the Stop Loss is $3.85, you output $3.85. No exceptions. This ensures all devices show identical signals.
@@ -2408,7 +2437,9 @@ Key Level: Fibonacci [0.236/0.382/0.5/0.618/0.786/0.886] (support/resistance)
 Signal Type: Regular ([Long/Short])
 
 Entry Zone:
-[Price 1] - [Price 2] - [Price 3]
+[Min Entry Price] - [Max Entry Price]
+
+ENTRY WIDTH: [X.XX]%
 
 Take-Profit Targets:
 1) [Price]
@@ -2437,13 +2468,20 @@ Stop Distance:
 Risk-Reward:
 1:[TP2 RR] to TP2
 
+VOLUME: [X.XXx avg]
+
+STOP REASON: [below swing low / below breakout candle / above swing high / above breakout candle]
+
 Status:
 ACTIVE
 
 CRITICAL: NEVER add "(1:1 R:R)", "(1:1.5 R:R)", "(1:3 R:R)", "(1:4 R:R)" or "(1.5 ATR)" anywhere in the signal. 
-CRITICAL ENTRY ORDER RULE:
-- LONG entries must be copied exactly from the scanner/API plan and remain ordered high to low.
-- SHORT entries must be copied exactly from the scanner/API plan and remain ordered low to high.
+CRITICAL ENTRY ZONE RULE:
+- Entry Zone must be displayed as min-entry to max-entry range only. Never display the three-price ladder as the Entry Zone.
+- ENTRY WIDTH must be copied from the scanner/API plan and must never be N/A.
+- VOLUME must be copied from the scanner/API plan and must never be N/A.
+- STOP REASON must be copied from the scanner/API plan and must never be N/A.
+- If ENTRY WIDTH, VOLUME, or STOP REASON is unavailable, output NO_SIGNAL instead of a trade.
 - Stop loss must be copied exactly from the scanner/API plan.
 - TP1, TP2, TP3, and TP4 must come from the scanner/API plan exactly. Do not omit TP4.
 - Leverage must come from the scanner/API plan exactly. Never omit leverage.
@@ -2615,8 +2653,8 @@ Your specialization:
 
 CRITICAL: You must ALWAYS provide 5 "Quantitative Rationales" explaining the data-driven basis for the trade. Ensure Risk:Reward ratio is emphasized.
 
-When the user asks for a signal or trade setup, only output a trade if the context contains a valid SCALP_SIGNAL with exact entries, targets, stop, and risk/reward. Never promise guaranteed profit or no-loss trading. When a signal is valid, output in this exact HTML format:
-📪 #[COIN]/USDT<br><br>Direction: <strong style="color:var(--green)">[LONG]</strong> or <strong style="color:var(--red)">[SHORT]</strong><br>Leverage: Cross (2X-5X)<br><br>Entry: ([Price], [Price], [Price])<br><br>Target 1: [Price]<br>Target 2: [Price]<br>Target 3: [Price]<br>Target 4: [Price]<br><br>Stop loss: [Price]<br><br>Risk:Reward Ratio: 1:[Value]<br><br>⚡ NEXUS Pro Autotrade Signals<br><br><strong>5 Quantitative Rationales:</strong><br>1. [Rationale 1]<br>2. [Rationale 2]<br>3. [Rationale 3]<br>4. [Rationale 4]<br>5. [Rationale 5]
+When the user asks for a signal or trade setup, only output a trade if the context contains a valid SCALP_SIGNAL or MOMENTUM_SWING_SIGNAL with exact entries, targets, stop, risk/reward, ENTRY WIDTH, VOLUME, and STOP REASON. Never promise guaranteed profit or no-loss trading. If ENTRY WIDTH, VOLUME, or STOP REASON is missing, output NO_SIGNAL. When a signal is valid, output in this exact HTML format:
+📪 #[COIN]/USDT<br><br>Direction: <strong style="color:var(--green)">[LONG]</strong> or <strong style="color:var(--red)">[SHORT]</strong><br>Leverage: Cross (2X-5X)<br><br>Entry Zone: [Min Price] - [Max Price]<br>ENTRY WIDTH: [X.XX]%<br>VOLUME: [X.XXx avg]<br>STOP REASON: [below swing low / below breakout candle / above swing high / above breakout candle]<br><br>Target 1: [Price]<br>Target 2: [Price]<br>Target 3: [Price]<br>Target 4: [Price]<br><br>Stop loss: [Price]<br><br>Risk:Reward Ratio: 1:[Value]<br><br>⚡ NEXUS Pro Autotrade Signals<br><br><strong>5 Quantitative Rationales:</strong><br>1. [Rationale 1]<br>2. [Rationale 2]<br>3. [Rationale 3]<br>4. [Rationale 4]<br>5. [Rationale 5]
 
 For analysis queries, provide structured output with: Price targets, Probability scores, Key risk factors, and a clear BUY/SELL/HOLD recommendation. Use markdown formatting.`
           },
