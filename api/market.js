@@ -987,6 +987,9 @@ function evaluateSignal(symbol, timeframe, snapshot, timestampIso, spreadPct = n
   const avgEntry = Number(levels.avgEntry) || ((levels.entry1 + levels.entry2 + levels.entry3) / 3);
   const rrToTp1 = computeRiskRewardRatio(avgEntry, levels.tp1, levels.sl);
   const rrRatio = computeRiskRewardRatio(avgEntry, levels.tp2, levels.sl);
+  if (levels.priceOrderValid !== true) {
+    return buildNoSignalPayload(timeframe, symbol, timestampIso, 'PRICE_ORDER_FAIL', snapshot, alpha, direction, cleanSpread);
+  }
   if (!Number.isFinite(Number(levels.riskPct)) || Number(levels.riskPct) > MAX_STOP_DISTANCE_PCT) {
     return buildNoSignalPayload(timeframe, symbol, timestampIso, 'STOP_DISTANCE_FAIL', snapshot, alpha, direction, cleanSpread);
   }
@@ -1017,6 +1020,8 @@ function evaluateSignal(symbol, timeframe, snapshot, timestampIso, spreadPct = n
     invalidation: levels.invalidation,
     stopBasis: levels.stopBasis,
     targetBasis: levels.targetBasis,
+    priceOrder: levels.priceOrder,
+    priceOrderValid: levels.priceOrderValid,
     localSupport: levels.localSupport,
     localResistance: levels.localResistance,
     riskPct: Number(levels.riskPct.toFixed(2)),

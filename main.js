@@ -1140,6 +1140,9 @@ function sigEvaluate(symbol, timeframe, snapshot, timestamp, spreadPct = null) {
   const avgEntry = Number(levels.avgEntry) || ((levels.entry1 + levels.entry2 + levels.entry3) / 3);
   const rrToTp1 = sigComputeRiskRewardRatio(avgEntry, levels.tp1, levels.sl);
   const rrRatio = sigComputeRiskRewardRatio(avgEntry, levels.tp2, levels.sl);
+  if (levels.priceOrderValid !== true) {
+    return sigNoSignal(timeframe, symbol, timestamp, 'PRICE_ORDER_FAIL', Math.round(alpha), direction, snapshot, cleanSpread);
+  }
   if (!Number.isFinite(Number(levels.riskPct)) || Number(levels.riskPct) > MAX_STOP_DISTANCE_PCT) {
     return sigNoSignal(timeframe, symbol, timestamp, 'STOP_DISTANCE_FAIL', Math.round(alpha), direction, snapshot, cleanSpread);
   }
@@ -1173,6 +1176,8 @@ function sigEvaluate(symbol, timeframe, snapshot, timestamp, spreadPct = null) {
     invalidation: levels.invalidation,
     stopBasis: levels.stopBasis,
     targetBasis: levels.targetBasis,
+    priceOrder: levels.priceOrder,
+    priceOrderValid: levels.priceOrderValid,
     localSupport: levels.localSupport,
     localResistance: levels.localResistance,
     riskPct: Number(levels.riskPct.toFixed(2)),

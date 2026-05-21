@@ -1,7 +1,8 @@
 import {
   buildLocalStructureLevels,
   computeStructureAwareTradePlan,
-  formatPlanNumber
+  formatPlanNumber,
+  validateTradePlanPriceOrder
 } from '../lib/trade-plan.js';
 
 const SYMBOLS = process.argv.slice(2).length ? process.argv.slice(2) : ['XTZ', 'BTC', 'ETH', 'SOL'];
@@ -148,6 +149,7 @@ function printSetup(symbol, candles) {
   );
 
   const rrTp2 = riskReward(plan.avgEntry, plan.tp2, plan.sl);
+  const priceOrderOk = validateTradePlanPriceOrder(directionMeta.direction, plan);
   const localSupport = plan.localSupport ? formatPlanNumber(plan.localSupport) : 'none nearby';
   const localResistance = plan.localResistance ? formatPlanNumber(plan.localResistance) : 'none nearby';
   const trend = [
@@ -160,6 +162,7 @@ function printSetup(symbol, candles) {
   console.log(`Entry: ${formatPlanNumber(plan.entry1)} - ${formatPlanNumber(plan.entry2)} - ${formatPlanNumber(plan.entry3)} | avg ${formatPlanNumber(plan.avgEntry)}`);
   console.log(`Targets: ${formatPlanNumber(plan.tp1)} / ${formatPlanNumber(plan.tp2)} / ${formatPlanNumber(plan.tp3)} / ${formatPlanNumber(plan.tp4)}`);
   console.log(`Stop: ${formatPlanNumber(plan.sl)} | risk ${plan.riskPct.toFixed(2)}% | TP2 R:R ${rrTp2.toFixed(2)} | lev ${plan.leverage}`);
+  console.log(`Order: ${priceOrderOk ? 'valid' : 'invalid'} | ${plan.priceOrder}`);
   console.log(`Chart levels: support ${localSupport}, resistance ${localResistance} | stop ${plan.stopBasis} | targets ${plan.targetBasis.join(', ')}`);
 }
 
