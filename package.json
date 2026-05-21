@@ -14,6 +14,8 @@
   },
   "dependencies": {
     "@clerk/clerk-js": "^6.10.1",
-    "@supabase/supabase-js": "^2.105.4"
+    "@supabase/supabase-js": "^2.105.4",
+    "ccxt": "^4.5.54",
+    "yaml": "^2.9.0"
   }
 }
