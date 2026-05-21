@@ -980,6 +980,7 @@ async function fetchBinanceReferencePrice(symbol = 'BTC') {
 }
 
 const MIRROR_SIGNAL_TTL_MS = 90 * 1000; // 90 seconds for scalp freshness
+const SIGNAL_MIRROR_SCHEMA_VERSION = 'v2_price_order';
 const SIGNAL_QUERY_RE = /\b(signal|trade\s*setup|entry|entries|stop\s*loss|targets?|take[-\s]?profit|leverage|long|short)\b/i;
 const PAIR_ONLY_SIGNAL_RE = /^\s*#?\s*[A-Z0-9]{2,10}\s*(?:\/\s*USDT|USDT)\s*$/i;
 const SYMBOL_STOP_WORDS = new Set([
@@ -1053,7 +1054,7 @@ function extractPrimarySymbol(userQuery = '', assetContext = '') {
 }
 
 function getSignalMirrorCacheKey(symbol, interval = '4h') {
-  return `mirror_signal_${symbol}_${interval}`;
+  return `mirror_signal_${SIGNAL_MIRROR_SCHEMA_VERSION}_${symbol}_${interval}`;
 }
 
 function stripLegacyApiStatusBanner(html = '') {
@@ -1180,6 +1181,106 @@ function normalizeTradeConfidence(value = null) {
 
 function clampBetween(value, min, max) {
   return Math.max(min, Math.min(max, value));
+}
+
+const MIN_ASSISTANT_PRICE = 0.0000001;
+
+function assistantPriceOrderGap(referencePrice = 1, candleData = null) {
+  const ref = Math.max(toNumber(referencePrice) || toNumber(candleData?.currentPrice) || 1, MIN_ASSISTANT_PRICE);
+  const atr = toNumber(candleData?.atr);
+  const atrPct = atr && ref ? (atr / ref) * 100 : 0.55;
+  const gapPct = clampBetween(Math.max(atrPct * 0.12, 0.05), 0.05, 0.20);
+  return Math.max(ref * (gapPct / 100), MIN_ASSISTANT_PRICE);
+}
+
+function validateAssistantPriceOrder(direction = 'LONG', entries = [], targets = [], stop = null) {
+  const side = String(direction).toUpperCase() === 'SHORT' ? 'SHORT' : 'LONG';
+  const entryNums = (entries || []).map(toNumber).filter(n => n !== null && n > 0);
+  const targetNums = (targets || []).map(toNumber).filter(n => n !== null && n > 0);
+  const stopNum = toNumber(stop);
+
+  if (entryNums.length !== 3 || targetNums.length !== 4 || !(stopNum > 0)) return false;
+
+  const minEntry = Math.min(...entryNums);
+  const maxEntry = Math.max(...entryNums);
+
+  if (side === 'LONG') {
+    const targetsAscending = targetNums.every((target, index) => index === 0 || target > targetNums[index - 1]);
+    return stopNum < minEntry && maxEntry < Math.min(...targetNums) && targetsAscending;
+  }
+
+  const targetsDescending = targetNums.every((target, index) => index === 0 || target < targetNums[index - 1]);
+  return Math.max(...targetNums) < minEntry && maxEntry < stopNum && targetsDescending;
+}
+
+function normalizeAssistantTradePlan(direction = 'LONG', entries = [], targets = [], stop = null, referencePrice = null, options = {}) {
+  const side = String(direction).toUpperCase() === 'SHORT' ? 'SHORT' : 'LONG';
+  const ref = Math.max(toNumber(referencePrice) || toNumber(options.candleData?.currentPrice) || 1, MIN_ASSISTANT_PRICE);
+  const gap = assistantPriceOrderGap(ref, options.candleData);
+  const parsedEntries = (entries || []).map(toNumber).filter(n => n !== null && n > 0);
+  const base = parsedEntries[0] || ref;
+  const stepPct = clampBetween(((toNumber(options.candleData?.atr) && ref) ? ((toNumber(options.candleData?.atr) / ref) * 100) * 0.16 : 0.12), 0.07, 0.24);
+  const step = base * (stepPct / 100);
+
+  let entryNums = parsedEntries.length >= 3
+    ? parsedEntries.slice(0, 3)
+    : (side === 'SHORT'
+      ? [base, base + step, base + (step * 2)]
+      : [base, Math.max(MIN_ASSISTANT_PRICE, base - step), Math.max(MIN_ASSISTANT_PRICE, base - (step * 2))]);
+
+  entryNums = entryNums
+    .map(n => Math.max(MIN_ASSISTANT_PRICE, n))
+    .sort((a, b) => side === 'SHORT' ? a - b : b - a);
+
+  const minEntry = Math.min(...entryNums);
+  const maxEntry = Math.max(...entryNums);
+  const avgEntry = entryNums.reduce((sum, n) => sum + n, 0) / entryNums.length;
+
+  let stopNum = toNumber(stop);
+  if (!(stopNum > 0)) {
+    stopNum = side === 'SHORT'
+      ? maxEntry + Math.max(gap * 2, avgEntry * 0.005)
+      : Math.max(MIN_ASSISTANT_PRICE, minEntry - Math.max(gap * 2, avgEntry * 0.005));
+  }
+  if (side === 'LONG' && stopNum >= minEntry) stopNum = Math.max(MIN_ASSISTANT_PRICE, minEntry - gap);
+  if (side === 'SHORT' && stopNum <= maxEntry) stopNum = maxEntry + gap;
+
+  const risk = Math.max(Math.abs(avgEntry - stopNum), avgEntry * 0.001);
+  let targetNums = (targets || []).map(toNumber).filter(n => n !== null && n > 0).slice(0, 4);
+  if (targetNums.length < 4) {
+    const generated = [1.15, 1.9, 2.7, 3.5].map(mult => side === 'SHORT'
+      ? Math.max(MIN_ASSISTANT_PRICE, avgEntry - (risk * mult))
+      : avgEntry + (risk * mult));
+    targetNums = [...targetNums, ...generated].slice(0, 4);
+  }
+
+  targetNums = targetNums.sort((a, b) => side === 'SHORT' ? b - a : a - b);
+  const finalTargets = [];
+  if (side === 'LONG') {
+    let floor = maxEntry + gap;
+    for (const target of targetNums) {
+      const finalTarget = Math.max(target, floor);
+      finalTargets.push(finalTarget);
+      floor = finalTarget + gap;
+    }
+  } else {
+    let ceiling = minEntry - gap;
+    for (const target of targetNums) {
+      const finalTarget = Math.max(MIN_ASSISTANT_PRICE, Math.min(target, ceiling));
+      finalTargets.push(finalTarget);
+      ceiling = finalTarget - gap;
+    }
+  }
+
+  return {
+    direction: side,
+    entries: entryNums,
+    targets: finalTargets,
+    stop: stopNum,
+    avgEntry,
+    riskPct: (Math.abs(avgEntry - stopNum) / Math.max(avgEntry, MIN_ASSISTANT_PRICE)) * 100,
+    valid: validateAssistantPriceOrder(side, entryNums, finalTargets, stopNum)
+  };
 }
 
 function getScalpRiskEnvelope(candleData = null, confidenceValue = null) {
@@ -1514,7 +1615,12 @@ function formatSignalPrice(value, reference = 1) {
   const ref = Math.abs(toNumber(reference) ?? Math.abs(n));
 
   let decimals = 2;
-  if (ref < 1) decimals = 5;
+  if (ref < 0.000001) decimals = 12;
+  else if (ref < 0.0001) decimals = 10;
+  else if (ref < 0.001) decimals = 8;
+  else if (ref < 0.01) decimals = 7;
+  else if (ref < 0.1) decimals = 6;
+  else if (ref < 1) decimals = 5;
   else if (ref < 10) decimals = 4;
   else if (ref < 1000) decimals = 2;
   else decimals = 1;
@@ -1648,23 +1754,23 @@ function buildCanonicalSignalText(rawSignalText = '', fallbackSymbol = 'BTC', op
   const keyLevelFibLabel = forcedPlan?.keyLevelFibLabel || planKeyMeta.fibLabel || '0.618';
 
   if (forcedPlan && Array.isArray(forcedPlan.entries) && Array.isArray(forcedPlan.targets) && forcedPlan.targets.length >= 4) {
-    const entryNums = forcedPlan.entries
-      .slice(0, 3)
-      .map(toNumber)
-      .filter(n => n !== null && n > 0)
-      .sort((a, b) => direction === 'SHORT' ? a - b : b - a);
-    const targetNums = forcedPlan.targets.slice(0, 4).map(toNumber).filter(n => n !== null && n > 0);
-    const stopNum = toNumber(forcedPlan.stop);
-    const forcedPlanValid =
-      entryNums.length === 3 &&
-      targetNums.length === 4 &&
-      stopNum !== null &&
-      stopNum > 0;
+    const normalizedPlan = normalizeAssistantTradePlan(
+      direction,
+      forcedPlan.entries,
+      forcedPlan.targets,
+      forcedPlan.stop,
+      options.candleData?.currentPrice || forcedPlan.entries[0],
+      {
+        candleData: options.candleData,
+        confidence: forcedPlan.confidence ?? options.tradeMeta?.confidence
+      }
+    );
+    const forcedPlanValid = normalizedPlan.valid;
 
     if (forcedPlanValid) {
-      const formattedEntries = entryNums.map(v => formatSignalPrice(v, options.candleData?.currentPrice || v));
-      const formattedTargets = targetNums.map(v => formatSignalPrice(v, options.candleData?.currentPrice || v));
-      const formattedStop = formatSignalPrice(stopNum, options.candleData?.currentPrice || stopNum);
+      const formattedEntries = normalizedPlan.entries.map(v => formatSignalPrice(v, options.candleData?.currentPrice || v));
+      const formattedTargets = normalizedPlan.targets.map(v => formatSignalPrice(v, options.candleData?.currentPrice || v));
+      const formattedStop = formatSignalPrice(normalizedPlan.stop, options.candleData?.currentPrice || normalizedPlan.stop);
 
       return `#${symbol}/USDT
 
@@ -1755,7 +1861,6 @@ Risk-Reward: ${forcedPlan.riskRewardLabel || 'TP2 1:1.90'}`;
   stops = [...new Set(stops)];
   let stop = stops[0] || null;
   const entryLadderNums = buildDirectionalEntryLadder(direction, entries, options.candleData);
-  const entryLadder = entryLadderNums.map(v => formatSignalPrice(v, options.candleData?.currentPrice || v));
   const refCandidates = [
     toNumber(options.candleData?.currentPrice),
     entryLadderNums[0],
@@ -1772,34 +1877,26 @@ Risk-Reward: ${forcedPlan.riskRewardLabel || 'TP2 1:1.90'}`;
   const hasPlaceholderStop = parsedStop !== null && (Math.abs(parsedStop - 1) < 1e-9 || Math.abs(parsedStop) < 1e-9);
   const hasInvalidTargets = parsedTargets.length >= 3 && parsedTargets.slice(0, 3).some(n => n <= 0);
 
-  if ((hasPlaceholderTargets && hasPlaceholderStop) || hasInvalidTargets) {
-    const repairedEntries = entryLadderNums.length >= 3
-      ? entryLadderNums
-      : (direction === 'SHORT'
-        ? [refPrice, refPrice * 1.005, refPrice * 1.010025]
-        : [refPrice, Math.max(0.0000001, refPrice * 0.995), Math.max(0.0000001, refPrice * 0.990025)]);
-    const repairedAvg = repairedEntries.reduce((sum, n) => sum + n, 0) / repairedEntries.length;
-    const repairedEntry3 = repairedEntries[2] ?? refPrice;
-    const repairedStop = direction === 'SHORT'
-      ? repairedEntry3 * 1.005
-      : Math.max(0.0000001, repairedEntry3 * 0.995);
-    const risk = Math.max(Math.abs(repairedAvg - repairedStop), repairedAvg * 0.0005);
-    const repairedTargets = direction === 'SHORT'
-      ? [repairedAvg - (risk * 2), repairedAvg - (risk * 3), repairedAvg - (risk * 4)]
-      : [repairedAvg + (risk * 2), repairedAvg + (risk * 3), repairedAvg + (risk * 4)];
-
-    targets = repairedTargets.map(v => formatSignalPrice(v, refPrice));
-    stop = formatSignalPrice(repairedStop, refPrice);
-  } else {
-    targets = targets.map(v => formatSignalPrice(v, refPrice));
-    stop = stop ? formatSignalPrice(stop, refPrice) : stop;
-  }
+  const normalizedParsedPlan = normalizeAssistantTradePlan(
+    direction,
+    entryLadderNums,
+    ((hasPlaceholderTargets && hasPlaceholderStop) || hasInvalidTargets) ? [] : targets,
+    hasPlaceholderStop ? null : stop,
+    refPrice,
+    {
+      candleData: options.candleData,
+      confidence: options.tradeMeta?.confidence
+    }
+  );
+  const entryLadder = normalizedParsedPlan.entries.map(v => formatSignalPrice(v, refPrice));
+  targets = normalizedParsedPlan.targets.map(v => formatSignalPrice(v, refPrice));
+  stop = formatSignalPrice(normalizedParsedPlan.stop, refPrice);
 
   const fallbackKeyMeta = deriveKeyLevelMeta(direction, options.candleData, entryLadderNums[0] ?? null);
   const fallbackFibLabel = fallbackKeyMeta.fibLabel || '0.618';
 
   // If parsing fails, still return a cleaned copy-ready signal without forbidden annotations.
-  if (entryLadder.length < 3 || targets.length < 3 || !stop) {
+  if (!normalizedParsedPlan.valid || entryLadder.length < 3 || targets.length < 4 || !stop) {
     const fallbackBase = refPrice;
     const stepPct = 0.005;
     const autoEntryNums = entryLadderNums.length >= 3
@@ -1807,20 +1904,13 @@ Risk-Reward: ${forcedPlan.riskRewardLabel || 'TP2 1:1.90'}`;
       : (direction === 'SHORT'
         ? [fallbackBase, fallbackBase * (1 + stepPct), fallbackBase * (1 + stepPct) * (1 + stepPct)]
         : [fallbackBase, Math.max(0.0000001, fallbackBase * (1 - stepPct)), Math.max(0.0000001, fallbackBase * (1 - stepPct) * (1 - stepPct))]);
-    const autoEntries = autoEntryNums.map(v => formatSignalPrice(v, refPrice));
-    const entryBase = autoEntryNums.length
-      ? (autoEntryNums.reduce((sum, n) => sum + n, 0) / autoEntryNums.length)
-      : refPrice;
-    const autoRiskPct = 0.50 / 100;
-    const autoStopNum = direction === 'SHORT'
-      ? entryBase * (1 + autoRiskPct)
-      : Math.max(0.0000001, entryBase * (1 - autoRiskPct));
-    const autoRisk = Math.abs(entryBase - autoStopNum);
-    const autoTargets = (direction === 'SHORT'
-      ? [entryBase - (autoRisk * 1.15), entryBase - (autoRisk * 1.9), entryBase - (autoRisk * 2.7), entryBase - (autoRisk * 3.5)]
-      : [entryBase + (autoRisk * 1.15), entryBase + (autoRisk * 1.9), entryBase + (autoRisk * 2.7), entryBase + (autoRisk * 3.5)])
-      .map(v => formatSignalPrice(Math.max(v, 0.0000001), refPrice));
-    const autoStop = formatSignalPrice(autoStopNum, refPrice);
+    const autoPlan = normalizeAssistantTradePlan(direction, autoEntryNums, [], null, refPrice, {
+      candleData: options.candleData,
+      confidence: options.tradeMeta?.confidence
+    });
+    const autoEntries = autoPlan.entries.map(v => formatSignalPrice(v, refPrice));
+    const autoTargets = autoPlan.targets.map(v => formatSignalPrice(v, refPrice));
+    const autoStop = formatSignalPrice(autoPlan.stop, refPrice);
 
       return `#${symbol}/USDT
 
@@ -2096,13 +2186,16 @@ function buildScannerDrivenTradePlan(snapshot = null) {
 
   if (!valid) return null;
 
+  const normalizedPlan = normalizeAssistantTradePlan(direction, entries, targets, stop, snapshot?.price);
+  if (!normalizedPlan.valid) return null;
+
   return {
     symbol: String(snapshot?.symbol || '').toUpperCase(),
     direction,
-    entries,
-    targets,
-    stop,
-    keyLevel: entries[0],
+    entries: normalizedPlan.entries,
+    targets: normalizedPlan.targets,
+    stop: normalizedPlan.stop,
+    keyLevel: normalizedPlan.entries[0],
     keyLevelType: direction === 'SHORT' ? 'resistance' : 'support',
     keyLevelFibLabel: 'scanner',
     levelStrength: 'Strong',
@@ -2117,9 +2210,9 @@ function buildScannerDrivenTradePlan(snapshot = null) {
       `Use ${normalizeLeverageLabel(signal.leverage, null, null)} and keep position risk near ${Number(signal.positionRiskPct || 0.5).toFixed(2)}%.`
     ],
     setupType: signal.setupType || 'SCANNER_CONFIRMED',
-    riskPct: signal.riskPct,
+    riskPct: signal.riskPct ?? normalizedPlan.riskPct,
     positionRiskPct: signal.positionRiskPct || 0.5,
-    invalidation: signal.invalidation || (direction === 'SHORT' ? `15m close above ${stop}` : `15m close below ${stop}`),
+    invalidation: signal.invalidation || (direction === 'SHORT' ? `15m close above ${normalizedPlan.stop}` : `15m close below ${normalizedPlan.stop}`),
     source: 'scanner'
   };
 }
@@ -2167,7 +2260,7 @@ function buildApiDrivenTradePlan({ symbol = 'BTC', userQuery = '', assetContext 
 
   const risk = Math.max(Math.abs(avgEntry - stop), avgEntry * 0.001);
   const riskPct = (risk / avgEntry) * 100;
-  const leverageLabel = deriveRiskFirstLeverageLabel(atrPct, riskPct, bias.confidence);
+  let leverageLabel = deriveRiskFirstLeverageLabel(atrPct, riskPct, bias.confidence);
   const tp1 = direction === 'LONG' ? (avgEntry + (risk * 1.15)) : (avgEntry - (risk * 1.15));
   const tp2 = direction === 'LONG' ? (avgEntry + (risk * 1.9)) : (avgEntry - (risk * 1.9));
   const tp3 = direction === 'LONG' ? (avgEntry + (risk * 2.7)) : (avgEntry - (risk * 2.7));
@@ -2184,6 +2277,13 @@ function buildApiDrivenTradePlan({ symbol = 'BTC', userQuery = '', assetContext 
   const sanitizedEntries = orderedEntries.map(v => sanitizePositive(v, current));
   const sanitizedTargets = targets.map(v => sanitizePositive(v, minPrice));
   const sanitizedStop = sanitizePositive(stop, direction === 'SHORT' ? avgEntry * 1.0075 : avgEntry * 0.9925);
+  const normalizedPlan = normalizeAssistantTradePlan(direction, sanitizedEntries, sanitizedTargets, sanitizedStop, current, {
+    candleData,
+    confidence: bias.confidence
+  });
+  if (!normalizedPlan.valid) return null;
+  const normalizedRiskPct = normalizedPlan.riskPct;
+  leverageLabel = deriveRiskFirstLeverageLabel(atrPct, normalizedRiskPct, bias.confidence);
 
   const planSymbol = String(symbol || '').toUpperCase();
   const planChangePct = toNumber(snap?.changePct) ?? toNumber(candleData?.changePct);
@@ -2191,9 +2291,9 @@ function buildApiDrivenTradePlan({ symbol = 'BTC', userQuery = '', assetContext 
   return {
     symbol: planSymbol,
     direction,
-    entries: sanitizedEntries,
-    targets: sanitizedTargets,
-    stop: sanitizedStop,
+    entries: normalizedPlan.entries,
+    targets: normalizedPlan.targets,
+    stop: normalizedPlan.stop,
     keyLevel: keyMeta.keyLevel,
     keyLevelType: keyMeta.levelType,
     keyLevelFibLabel: keyMeta.fibLabel,
@@ -2205,11 +2305,11 @@ function buildApiDrivenTradePlan({ symbol = 'BTC', userQuery = '', assetContext 
     patternBias: getPatternBiasScore(candleData),
     rationaleHints: bias.reasons,
     setupType: 'AI_RISK_FALLBACK',
-    riskPct,
+    riskPct: normalizedRiskPct,
     positionRiskPct: 0.5,
     invalidation: direction === 'SHORT'
-      ? `15m close above ${formatSignalPrice(sanitizedStop, current)}`
-      : `15m close below ${formatSignalPrice(sanitizedStop, current)}`,
+      ? `15m close above ${formatSignalPrice(normalizedPlan.stop, current)}`
+      : `15m close below ${formatSignalPrice(normalizedPlan.stop, current)}`,
     source: 'ai_fallback'
   };
 }
@@ -2272,6 +2372,10 @@ CRITICAL ENTRY ORDER RULE:
 - Stop loss must be copied exactly from the scanner/API plan.
 - TP1, TP2, TP3, and TP4 must come from the scanner/API plan exactly. Do not omit TP4.
 - Leverage must come from the scanner/API plan exactly. Never omit leverage.
+CRITICAL PRICE ORDER RULE:
+- For LONG signals, every Stop price must be below every Entry/Buy price, and every Entry/Buy price must be below every Take-Profit/Sell price.
+- For SHORT signals, every Take-Profit/Buy-back price must be below every Entry/Sell price, and every Entry/Sell price must be below the Stop price.
+- Never output equal rounded prices. If rounding would make two prices equal, keep more decimals.
 
 For all other queries, provide a single, highly optimized, data-driven response. Use markdown headers, bold text, and bullet points for readability.`
     };
@@ -2609,8 +2713,8 @@ export async function fetchDualAI(userQuery, assetContext = '') {
         shortAvgEntry - (shortRisk * 3.5)
       ];
 
-      // Formatting helper to keep decimals sane
-      const fmt = (n) => p < 1 ? n.toFixed(5) : p < 10 ? n.toFixed(4) : p < 1000 ? n.toFixed(2) : n.toFixed(1);
+      // Formatting helper to keep tiny-cap prices distinct after rounding.
+      const fmt = (n) => formatSignalPrice(n, p);
       const resistancePreview = (Array.isArray(candleData?.localResistances) ? candleData.localResistances : [])
         .map(toNumber)
         .filter(v => v !== null && v > p)
