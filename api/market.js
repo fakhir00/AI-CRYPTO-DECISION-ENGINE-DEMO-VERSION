@@ -933,7 +933,7 @@ function chooseSignalDirection(snapshot = {}) {
   return { winner, loser, edge, buy, sell };
 }
 
-function buildNoSignalPayload(timeframe, symbol, timestampIso, reason, snapshot = null, alpha = 50, direction = null, spreadPct = null) {
+function buildNoSignalPayload(timeframe, symbol, timestampIso, reason, snapshot = null, alpha = 50, direction = null, spreadPct = null, rejectionReasons = []) {
   return {
     status: 'NO_SIGNAL',
     reason,
@@ -942,6 +942,7 @@ function buildNoSignalPayload(timeframe, symbol, timestampIso, reason, snapshot 
     patternSummary: snapshot?.pattern?.summary || snapshot?.pattern?.name || 'NONE',
     spreadPct: Number.isFinite(spreadPct) ? spreadPct : null,
     atrPct: Number.isFinite(Number(snapshot?.atrPct)) ? Number(snapshot.atrPct) : null,
+    rejectionReasons: Array.isArray(rejectionReasons) ? rejectionReasons : [],
     line: buildNoSignalLine(timeframe, symbol, timestampIso, reason)
   };
 }
@@ -952,10 +953,6 @@ function evaluateSignal(symbol, timeframe, snapshot, timestampIso, spreadPct = n
   }
 
   const cleanSpread = Number(spreadPct);
-  if (Number.isFinite(cleanSpread) && cleanSpread > MAX_MOMENTUM_SPREAD_PCT) {
-    return buildNoSignalPayload(timeframe, symbol, timestampIso, 'SPREAD_TOO_WIDE', snapshot, 50, null, cleanSpread);
-  }
-
   if (Array.isArray(snapshot.candles) && snapshot.candles.length >= 80) {
     const momentum = evaluateMomentumStrategy(
       symbol,
@@ -977,7 +974,8 @@ function evaluateSignal(symbol, timeframe, snapshot, timestampIso, spreadPct = n
         snapshot,
         momentum.alpha || 50,
         momentum.direction || null,
-        cleanSpread
+        cleanSpread,
+        momentum.rejectionReasons
       );
     }
 
@@ -994,6 +992,10 @@ function evaluateSignal(symbol, timeframe, snapshot, timestampIso, spreadPct = n
       momentum.alpha
     );
     return momentum;
+  }
+
+  if (Number.isFinite(cleanSpread) && cleanSpread > MAX_MOMENTUM_SPREAD_PCT) {
+    return buildNoSignalPayload(timeframe, symbol, timestampIso, 'SPREAD_TOO_WIDE', snapshot, 50, null, cleanSpread);
   }
 
   return buildNoSignalPayload(timeframe, symbol, timestampIso, 'INSUFFICIENT_MOMENTUM_CANDLES', snapshot, 50, null, cleanSpread);

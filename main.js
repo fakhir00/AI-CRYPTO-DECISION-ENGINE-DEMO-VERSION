@@ -1155,7 +1155,7 @@ function sigChooseDirection(snapshot = {}) {
   return { winner, loser, edge, buy, sell };
 }
 
-function sigNoSignal(timeframe, symbol, timestamp, reason, alpha = 50, direction = null, snapshot = null, spreadPct = null) {
+function sigNoSignal(timeframe, symbol, timestamp, reason, alpha = 50, direction = null, snapshot = null, spreadPct = null, rejectionReasons = []) {
   return {
     status: 'NO_SIGNAL',
     reason,
@@ -1164,6 +1164,7 @@ function sigNoSignal(timeframe, symbol, timestamp, reason, alpha = 50, direction
     patternSummary: snapshot?.pattern?.summary || snapshot?.pattern?.name || 'NONE',
     spreadPct: Number.isFinite(spreadPct) ? spreadPct : null,
     atrPct: Number.isFinite(Number(snapshot?.atrPct)) ? Number(snapshot.atrPct) : null,
+    rejectionReasons: Array.isArray(rejectionReasons) ? rejectionReasons : [],
     line: sigBuildNoSignalLine(timeframe, symbol, timestamp, reason)
   };
 }
@@ -1172,10 +1173,6 @@ function sigEvaluate(symbol, timeframe, snapshot, timestamp, spreadPct = null) {
   if (!snapshot) return sigNoSignal(timeframe, symbol, timestamp, 'DATA_UNAVAILABLE');
 
   const cleanSpread = Number(spreadPct);
-  if (Number.isFinite(cleanSpread) && cleanSpread > MAX_MOMENTUM_SPREAD_PCT) {
-    return sigNoSignal(timeframe, symbol, timestamp, 'SPREAD_TOO_WIDE', 50, null, snapshot, cleanSpread);
-  }
-
   if (Array.isArray(snapshot.candles) && snapshot.candles.length >= 80) {
     const momentum = evaluateMomentumStrategy(
       symbol,
@@ -1197,7 +1194,8 @@ function sigEvaluate(symbol, timeframe, snapshot, timestamp, spreadPct = null) {
         momentum.alpha || 50,
         momentum.direction || null,
         snapshot,
-        cleanSpread
+        cleanSpread,
+        momentum.rejectionReasons
       );
     }
 
@@ -1214,6 +1212,10 @@ function sigEvaluate(symbol, timeframe, snapshot, timestamp, spreadPct = null) {
       momentum.alpha
     );
     return momentum;
+  }
+
+  if (Number.isFinite(cleanSpread) && cleanSpread > MAX_MOMENTUM_SPREAD_PCT) {
+    return sigNoSignal(timeframe, symbol, timestamp, 'SPREAD_TOO_WIDE', 50, null, snapshot, cleanSpread);
   }
 
   return sigNoSignal(timeframe, symbol, timestamp, 'INSUFFICIENT_MOMENTUM_CANDLES', 50, null, snapshot, cleanSpread);
