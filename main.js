@@ -2270,7 +2270,16 @@ function navigateToPage(pageId) {
 
 function updateTime() {
   const now = new Date();
-  document.getElementById('market-time').textContent = now.toLocaleTimeString('en-US', { hour12: false }) + ' UTC';
+  const marketTimeEl = document.getElementById('market-time');
+  if (!marketTimeEl) return;
+  marketTimeEl.textContent = now.toLocaleTimeString('en-US', {
+    hour12: false,
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    timeZone: 'UTC'
+  }) + ' UTC';
+  marketTimeEl.title = now.toISOString();
 }
 
 function getBtcAsset() {
