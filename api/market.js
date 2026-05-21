@@ -953,6 +953,7 @@ function evaluateSignal(symbol, timeframe, snapshot, timestampIso, spreadPct = n
   }
 
   const cleanSpread = Number(spreadPct);
+  let strictMomentumNoSignal = null;
   if (Array.isArray(snapshot.candles) && snapshot.candles.length >= 80) {
     const momentum = evaluateMomentumStrategy(
       symbol,
@@ -966,39 +967,41 @@ function evaluateSignal(symbol, timeframe, snapshot, timestampIso, spreadPct = n
     );
 
     if (momentum.status !== 'SIGNAL') {
-      return buildNoSignalPayload(
+      strictMomentumNoSignal = momentum;
+    } else {
+      momentum.reason = null;
+      momentum.pattern = momentum.setupType || momentum.patternSummary || 'MOMENTUM_BREAKOUT';
+      momentum.patternSummary = momentum.patternSummary || momentum.setupType || 'MOMENTUM_BREAKOUT';
+      momentum.line = buildSignalLine(
         timeframe,
         symbol,
+        momentum.direction,
+        momentum,
+        momentum.pattern,
         timestampIso,
-        momentum.reason || 'NO_MOMENTUM_SETUP',
-        snapshot,
-        momentum.alpha || 50,
-        momentum.direction || null,
-        cleanSpread,
-        momentum.rejectionReasons
+        momentum.alpha
       );
+      return momentum;
     }
+  }
 
-    momentum.reason = null;
-    momentum.pattern = momentum.setupType || momentum.patternSummary || 'MOMENTUM_BREAKOUT';
-    momentum.patternSummary = momentum.patternSummary || momentum.setupType || 'MOMENTUM_BREAKOUT';
-    momentum.line = buildSignalLine(
+  if (strictMomentumNoSignal?.rejectionReasons?.length) {
+    return buildNoSignalPayload(
       timeframe,
       symbol,
-      momentum.direction,
-      momentum,
-      momentum.pattern,
       timestampIso,
-      momentum.alpha
+      strictMomentumNoSignal.reason || 'NO_MOMENTUM_SETUP',
+      snapshot,
+      strictMomentumNoSignal.alpha || 50,
+      strictMomentumNoSignal.direction || null,
+      cleanSpread,
+      strictMomentumNoSignal.rejectionReasons
     );
-    return momentum;
   }
 
   if (Number.isFinite(cleanSpread) && cleanSpread > MAX_MOMENTUM_SPREAD_PCT) {
     return buildNoSignalPayload(timeframe, symbol, timestampIso, 'SPREAD_TOO_WIDE', snapshot, 50, null, cleanSpread);
   }
-
-  return buildNoSignalPayload(timeframe, symbol, timestampIso, 'INSUFFICIENT_MOMENTUM_CANDLES', snapshot, 50, null, cleanSpread);
 
   const atrPct = Number(snapshot.atrPct);
   if (!(Number.isFinite(atrPct) && atrPct >= MIN_MOMENTUM_ATR_PCT)) {

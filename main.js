@@ -1173,6 +1173,7 @@ function sigEvaluate(symbol, timeframe, snapshot, timestamp, spreadPct = null) {
   if (!snapshot) return sigNoSignal(timeframe, symbol, timestamp, 'DATA_UNAVAILABLE');
 
   const cleanSpread = Number(spreadPct);
+  let strictMomentumNoSignal = null;
   if (Array.isArray(snapshot.candles) && snapshot.candles.length >= 80) {
     const momentum = evaluateMomentumStrategy(
       symbol,
@@ -1186,39 +1187,41 @@ function sigEvaluate(symbol, timeframe, snapshot, timestamp, spreadPct = null) {
     );
 
     if (momentum.status !== 'SIGNAL') {
-      return sigNoSignal(
+      strictMomentumNoSignal = momentum;
+    } else {
+      momentum.reason = null;
+      momentum.pattern = momentum.setupType || momentum.patternSummary || 'MOMENTUM_BREAKOUT';
+      momentum.patternSummary = momentum.patternSummary || momentum.setupType || 'MOMENTUM_BREAKOUT';
+      momentum.line = sigBuildSignalLine(
         timeframe,
         symbol,
+        momentum.direction,
+        momentum,
+        momentum.pattern,
         timestamp,
-        momentum.reason || 'NO_MOMENTUM_SETUP',
-        momentum.alpha || 50,
-        momentum.direction || null,
-        snapshot,
-        cleanSpread,
-        momentum.rejectionReasons
+        momentum.alpha
       );
+      return momentum;
     }
+  }
 
-    momentum.reason = null;
-    momentum.pattern = momentum.setupType || momentum.patternSummary || 'MOMENTUM_BREAKOUT';
-    momentum.patternSummary = momentum.patternSummary || momentum.setupType || 'MOMENTUM_BREAKOUT';
-    momentum.line = sigBuildSignalLine(
+  if (strictMomentumNoSignal?.rejectionReasons?.length) {
+    return sigNoSignal(
       timeframe,
       symbol,
-      momentum.direction,
-      momentum,
-      momentum.pattern,
       timestamp,
-      momentum.alpha
+      strictMomentumNoSignal.reason || 'NO_MOMENTUM_SETUP',
+      strictMomentumNoSignal.alpha || 50,
+      strictMomentumNoSignal.direction || null,
+      snapshot,
+      cleanSpread,
+      strictMomentumNoSignal.rejectionReasons
     );
-    return momentum;
   }
 
   if (Number.isFinite(cleanSpread) && cleanSpread > MAX_MOMENTUM_SPREAD_PCT) {
     return sigNoSignal(timeframe, symbol, timestamp, 'SPREAD_TOO_WIDE', 50, null, snapshot, cleanSpread);
   }
-
-  return sigNoSignal(timeframe, symbol, timestamp, 'INSUFFICIENT_MOMENTUM_CANDLES', 50, null, snapshot, cleanSpread);
 
   const atrPct = Number(snapshot.atrPct);
   if (!(Number.isFinite(atrPct) && atrPct >= MIN_MOMENTUM_ATR_PCT)) {
