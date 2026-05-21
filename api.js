@@ -2,7 +2,7 @@
 // NEXUS API Engine — All external data integrations
 // ====================================================
 
-import { createManagedSignal, formatManagedSignalText } from './lib/signal-lifecycle.js';
+import { createManagedSignal, formatManagedSignalText, normalizeSignalStopReason } from './lib/signal-lifecycle.js';
 import { SIGNAL_HARD_REJECTS } from './lib/momentum-strategy.js';
 
 const KEYS = {
@@ -1791,7 +1791,7 @@ function buildCanonicalSignalText(rawSignalText = '', fallbackSymbol = 'BTC', op
         invalidationMode: 'BODY_CLOSE',
         invalidationPrice: normalizedPlan.stop,
         entryZoneWidthPct: forcedPlan.entryZoneWidthPct,
-        stopReason: forcedPlan.stopReason,
+        stopReason: normalizeSignalStopReason(forcedPlan.stopReason),
         volumeConfirmation: forcedPlan.volumeConfirmation,
         status: forcedPlan.lifecycleStatus || 'ACTIVE',
         source: forcedPlan.source || 'api'
@@ -2078,7 +2078,7 @@ function parseAssetContextSnapshots(assetContext = '') {
           text: volumeMatch[1].trim(),
           ratio: toNumber(volumeRatioMatch?.[1])
         } : null,
-        stopReason: stopReasonMatch?.[1] ? stopReasonMatch[1].trim() : null
+        stopReason: normalizeSignalStopReason(stopReasonMatch?.[1])
       };
     }
 
@@ -2211,10 +2211,17 @@ function buildScannerDrivenTradePlan(snapshot = null) {
   const normalizedPlan = normalizeAssistantTradePlan(direction, entries, targets, stop, snapshot?.price);
   if (!normalizedPlan.valid) return null;
   const entryZoneWidthPct = toNumber(signal.entryZoneWidthPct);
-  const volumeConfirmation = signal.volumeConfirmation?.text ? signal.volumeConfirmation : null;
-  const stopReason = signal.stopReason || null;
-  if (!Number.isFinite(entryZoneWidthPct) || !volumeConfirmation || !stopReason) return null;
-  const volumeRatio = toNumber(volumeConfirmation.ratio);
+  const rawVolumeConfirmation = signal.volumeConfirmation?.text ? signal.volumeConfirmation : null;
+  const stopReason = normalizeSignalStopReason(signal.stopReason);
+  if (!Number.isFinite(entryZoneWidthPct) || !rawVolumeConfirmation || !stopReason) return null;
+  const volumeRatio = toNumber(rawVolumeConfirmation.ratio)
+    ?? toNumber(String(rawVolumeConfirmation.text || '').match(/([0-9.]+)\s*x\s*avg/i)?.[1]);
+  if (volumeRatio === null) return null;
+  const volumeConfirmation = {
+    ...rawVolumeConfirmation,
+    ratio: volumeRatio,
+    text: `${volumeRatio.toFixed(2)}x avg`
+  };
   const tp1Pct = normalizedPlan.avgEntry > 0
     ? (Math.abs(normalizedPlan.targets[0] - normalizedPlan.avgEntry) / normalizedPlan.avgEntry) * 100
     : null;
@@ -2294,6 +2301,9 @@ function buildApiDrivenTradePlan({ symbol = 'BTC', userQuery = '', assetContext 
   const scannerPlan = buildScannerDrivenTradePlan(snap);
   if (scannerPlan) return scannerPlan;
   if (snap?.signal?.status === 'WAIT' || snap?.signal?.status === 'NO_SIGNAL') return null;
+  // Signal output now requires scanner-provided ENTRY WIDTH, VOLUME, and STOP REASON.
+  // The older AI fallback cannot prove those fields, so reject instead of emitting placeholders.
+  return null;
 
   let current = toNumber(candleData?.currentPrice);
   if (!(current > 0)) current = toNumber(snap?.price);
@@ -2485,7 +2495,7 @@ Risk-Reward:
 
 VOLUME: [X.XXx avg]
 
-STOP REASON: [below swing low / below breakout candle / above swing high / above breakout candle]
+STOP REASON: [below swing low / below breakout candle / above swing high / above breakdown candle]
 
 Status:
 ACTIVE
@@ -2670,7 +2680,7 @@ Your specialization:
 CRITICAL: You must ALWAYS provide 5 "Quantitative Rationales" explaining the data-driven basis for the trade. Ensure Risk:Reward ratio is emphasized.
 
 When the user asks for a signal or trade setup, only output a trade if the context contains a valid SCALP_SIGNAL or MOMENTUM_SWING_SIGNAL with exact entries, targets, stop, risk/reward, ENTRY WIDTH, VOLUME, and STOP REASON. Never promise guaranteed profit or no-loss trading. If any mandatory field is missing, or if TP1 distance <0.5%, VOLUME <1.2x avg, or Stop Distance <0.35%, output NO_SIGNAL. When a signal is valid, output in this exact HTML format:
-📪 #[COIN]/USDT<br><br>Direction: <strong style="color:var(--green)">[LONG]</strong> or <strong style="color:var(--red)">[SHORT]</strong><br>Leverage: Cross (2X-5X)<br><br>Entry Zone: [Min Price] - [Max Price]<br>ENTRY WIDTH: [X.XX]%<br>VOLUME: [X.XXx avg]<br>STOP REASON: [below swing low / below breakout candle / above swing high / above breakout candle]<br><br>Target 1: [Price]<br>Target 2: [Price]<br>Target 3: [Price]<br>Target 4: [Price]<br><br>Stop loss: [Price]<br><br>Risk:Reward Ratio: 1:[Value]<br><br>⚡ NEXUS Pro Autotrade Signals<br><br><strong>5 Quantitative Rationales:</strong><br>1. [Rationale 1]<br>2. [Rationale 2]<br>3. [Rationale 3]<br>4. [Rationale 4]<br>5. [Rationale 5]
+📪 #[COIN]/USDT<br><br>Direction: <strong style="color:var(--green)">[LONG]</strong> or <strong style="color:var(--red)">[SHORT]</strong><br>Leverage: Cross (2X-5X)<br><br>Entry Zone: [Min Price] - [Max Price]<br>ENTRY WIDTH: [X.XX]%<br>VOLUME: [X.XXx avg]<br>STOP REASON: [below swing low / below breakout candle / above swing high / above breakdown candle]<br><br>Target 1: [Price]<br>Target 2: [Price]<br>Target 3: [Price]<br>Target 4: [Price]<br><br>Stop loss: [Price]<br><br>Risk:Reward Ratio: 1:[Value]<br><br>⚡ NEXUS Pro Autotrade Signals<br><br><strong>5 Quantitative Rationales:</strong><br>1. [Rationale 1]<br>2. [Rationale 2]<br>3. [Rationale 3]<br>4. [Rationale 4]<br>5. [Rationale 5]
 
 For analysis queries, provide structured output with: Price targets, Probability scores, Key risk factors, and a clear BUY/SELL/HOLD recommendation. Use markdown formatting.`
           },
@@ -2814,6 +2824,14 @@ export async function fetchDualAI(userQuery, assetContext = '') {
     );
   }
 
+  if (signalMode && !apiTradePlan) {
+    return buildNoTradeSetupHtml(
+      planSymbol || extractedSymbol || 'COIN',
+      'SIGNAL_METADATA_MISSING',
+      activeSnapshot
+    );
+  }
+
   // 2. Build enhanced context with candle patterns and market structure
   let enhancedContext = `${context}\n\n🛰 API HEALTH SNAPSHOT:\n${getApiHealthPromptSummary()}`;
   if (candleData) {
@@ -2875,8 +2893,8 @@ export async function fetchDualAI(userQuery, assetContext = '') {
 - Local Resistances Above Price: ${resistanceLine}
 - Local Supports Below Price: ${supportLine}
 
-🚨 [CRITICAL: IF SIGNAL IS LONG, YOU MUST USE THESE EXACT VALUES IN THE OUTPUT]
-- Entry Ladder (MUST follow LONG scaling: entry1, entry2, entry3): ($${fmt(longStart)}, $${fmt(longEntry2)}, $${fmt(longEntry3)})
+📌 LONG STRUCTURE REFERENCE (not a valid signal unless API-derived execution plan is present)
+- Entry Zone Reference: $${fmt(Math.min(longStart, longEntry2, longEntry3))} - $${fmt(Math.max(longStart, longEntry2, longEntry3))}
 - Stop Loss: $${fmt(longSl)}
 - TP1: $${fmt(longTargets[0] ?? (longAvgEntry + longRisk * 2))}
 - TP2: $${fmt(longTargets[1] ?? (longAvgEntry + longRisk * 3))}
@@ -2884,8 +2902,8 @@ export async function fetchDualAI(userQuery, assetContext = '') {
 - TP4: $${fmt(longTargets[3] ?? (longAvgEntry + longRisk * 3.5))}
 - Leverage: ${apiTradePlan?.leverageLabel || deriveRiskFirstLeverageLabel((atr / p) * 100, (longRisk / longAvgEntry) * 100, tradeMeta?.confidence)}
 
-🚨 [CRITICAL: IF SIGNAL IS SHORT, YOU MUST USE THESE EXACT VALUES IN THE OUTPUT]
-- Entry Ladder (MUST follow SHORT scaling: entry1, entry2, entry3): ($${fmt(shortStart)}, $${fmt(shortEntry2)}, $${fmt(shortEntry3)})
+📌 SHORT STRUCTURE REFERENCE (not a valid signal unless API-derived execution plan is present)
+- Entry Zone Reference: $${fmt(Math.min(shortStart, shortEntry2, shortEntry3))} - $${fmt(Math.max(shortStart, shortEntry2, shortEntry3))}
 - Stop Loss: $${fmt(shortSl)}
 - TP1: $${fmt(shortTargets[0] ?? (shortAvgEntry - shortRisk * 2))}
 - TP2: $${fmt(shortTargets[1] ?? (shortAvgEntry - shortRisk * 3))}
@@ -2906,16 +2924,26 @@ CRITICAL: Do NOT claim specific candlestick pattern names. Base rationale on pri
     const cp = toNumber(candleData?.currentPrice) ?? apiTradePlan.entries[0];
     const fmtPlan = (n) => formatSignalPrice(n, cp);
     const managed = apiTradePlan.managedSignal || null;
-    enhancedContext += `\n\n🧮 API-DERIVED EXECUTION PLAN (HIGHEST PRIORITY):
-- Signal ID: ${apiTradePlan.signalId || managed?.signalId || 'N/A'}
-- Generated: ${managed?.generatedAtLabel || apiTradePlan.generatedAt || 'N/A'}
-- Valid Until: ${managed?.validUntilLabel || apiTradePlan.validUntil || 'N/A'}
+    const entryMin = Math.min(...apiTradePlan.entries);
+    const entryMax = Math.max(...apiTradePlan.entries);
+    const planSignalId = apiTradePlan.signalId || managed?.signalId;
+    const generatedLabel = managed?.generatedAtLabel || apiTradePlan.generatedAt;
+    const validUntilLabel = managed?.validUntilLabel || apiTradePlan.validUntil;
+    const volumeText = apiTradePlan.volumeConfirmation?.text || managed?.volumeConfirmation?.text;
+    const stopReason = normalizeSignalStopReason(apiTradePlan.stopReason || managed?.stopReason);
+    const entryWidthPct = Number(apiTradePlan.entryZoneWidthPct ?? managed?.entryZoneWidthPct);
+    if (planSignalId && generatedLabel && validUntilLabel && volumeText && stopReason && Number.isFinite(entryWidthPct)) {
+      enhancedContext += `\n\n🧮 API-DERIVED EXECUTION PLAN (HIGHEST PRIORITY):
+- Signal ID: ${planSignalId}
+- Generated: ${generatedLabel}
+- Valid Until: ${validUntilLabel}
 - Lifecycle Status: ${apiTradePlan.lifecycleStatus || managed?.status || 'ACTIVE'}
 - Direction: ${apiTradePlan.direction}
 - Setup Source: ${apiTradePlan.source || 'api'}
 - Setup Type: ${apiTradePlan.setupType || 'SCALP'}
 - Key Level: Fibonacci ${apiTradePlan.keyLevelFibLabel || '0.618'} (${apiTradePlan.keyLevelType || (apiTradePlan.direction === 'SHORT' ? 'resistance' : 'support')})
-- Entry Ladder: (${fmtPlan(apiTradePlan.entries[0])}, ${fmtPlan(apiTradePlan.entries[1])}, ${fmtPlan(apiTradePlan.entries[2])})
+- Entry Zone: ${fmtPlan(entryMin)} - ${fmtPlan(entryMax)}
+- ENTRY WIDTH: ${entryWidthPct.toFixed(2)}%
 - TP1-TP4: (${fmtPlan(apiTradePlan.targets[0])}, ${fmtPlan(apiTradePlan.targets[1])}, ${fmtPlan(apiTradePlan.targets[2])}, ${fmtPlan(apiTradePlan.targets[3])})
 - Stop: ${fmtPlan(apiTradePlan.stop)}
 - Leverage: ${apiTradePlan.leverageLabel || 'Cross (2X-3X)'}
@@ -2924,8 +2952,11 @@ CRITICAL: Do NOT claim specific candlestick pattern names. Base rationale on pri
 - Price Invalidation: ${managed?.priceInvalidation?.text || apiTradePlan.invalidation || '15m candle BODY close beyond stop'}
 - Time Invalidation: ${managed?.timeInvalidation?.text || 'Cancel if entry not triggered within 4 x 15m candles'}
 - Risk-Reward: ${apiTradePlan.riskRewardLabel || 'TP2 1:1.90'}
+- VOLUME: ${volumeText}
+- STOP REASON: ${stopReason}
 - Confidence: ${formatPercentValue(apiTradePlan.confidence || 0)}
 CRITICAL: Use this plan exactly in the final signal format.`;
+    }
   }
 
   const result = await fetchAIAnalysis(enhancedContext, candleData, { useMemory: !signalMode });

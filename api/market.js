@@ -11,7 +11,7 @@ import {
   computeEntryZoneMeta,
   computeStructureAwareTradePlan
 } from '../lib/trade-plan.js';
-import { createManagedSignal } from '../lib/signal-lifecycle.js';
+import { createManagedSignal, normalizeSignalStopReason } from '../lib/signal-lifecycle.js';
 import { DEFAULT_MOMENTUM_CONFIG, SIGNAL_HARD_REJECTS, evaluateMomentumStrategy } from '../lib/momentum-strategy.js';
 import { fetchCcxtCandles } from '../lib/ccxt-market-data.js';
 
@@ -620,11 +620,12 @@ function buildRequiredSignalOutputMeta(levels = {}, snapshot = {}, direction = '
   const entryZone = computeEntryZoneMeta([levels.entry1, levels.entry2, levels.entry3]);
   const volumeConfirmation = computeBreakoutVolumeConfirmation(snapshot?.candles || []);
   const stopMeta = classifyStructuralStopReason(snapshot?.candles || [], direction, levels.sl);
-  if (!entryZone || !volumeConfirmation || !stopMeta?.reason) return null;
+  const stopReason = normalizeSignalStopReason(stopMeta?.reason);
+  if (!entryZone || !volumeConfirmation || !stopReason) return null;
   return {
     entryZone,
     volumeConfirmation,
-    stopReason: stopMeta.reason,
+    stopReason,
     stopMeta
   };
 }
@@ -668,7 +669,8 @@ function buildNoSignalLine(timeframe, symbol, timestamp, reason) {
 }
 
 function buildSignalLine(timeframe, symbol, direction, levels, patternName, timestamp, alpha) {
-  return `SIGNAL|${timeframe}|${symbol}/USDT|${direction}|${formatLineNumber(levels.entry1)}|${formatLineNumber(levels.entry2)}|${formatLineNumber(levels.entry3)}|${formatLineNumber(levels.tp1)}|${formatLineNumber(levels.tp2)}|${formatLineNumber(levels.tp3)}|${formatLineNumber(levels.tp4)}|${formatLineNumber(levels.sl)}|${levels.leverage || 'N/A'}|${patternName || 'NONE'}|${timestamp}|${Math.round(alpha)}`;
+  if (!levels?.leverage) return buildNoSignalLine(timeframe, symbol, timestamp, 'SIGNAL_METADATA_MISSING');
+  return `SIGNAL|${timeframe}|${symbol}/USDT|${direction}|${formatLineNumber(levels.entry1)}|${formatLineNumber(levels.entry2)}|${formatLineNumber(levels.entry3)}|${formatLineNumber(levels.tp1)}|${formatLineNumber(levels.tp2)}|${formatLineNumber(levels.tp3)}|${formatLineNumber(levels.tp4)}|${formatLineNumber(levels.sl)}|${levels.leverage}|${patternName || 'NONE'}|${timestamp}|${Math.round(alpha)}`;
 }
 
 async function fetchJsonWithTimeout(url) {
