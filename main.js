@@ -436,10 +436,30 @@ function sigBuildRequiredSignalOutputMeta(levels = {}, snapshot = {}, direction 
   };
 }
 
-function sigGetSignalHardRejectReason(outputMeta = {}) {
+function sigPctDistanceFromAvgEntry(avgEntry, value) {
+  const entry = Number(avgEntry);
+  const price = Number(value);
+  if (!(entry > 0) || !(price > 0)) return null;
+  return (Math.abs(price - entry) / entry) * 100;
+}
+
+function sigGetSignalHardRejectReason(outputMeta = {}, levels = {}) {
+  const avgEntry = Number(levels?.avgEntry) || sigAvg([levels?.entry1, levels?.entry2, levels?.entry3]);
+  const tp1Pct = sigPctDistanceFromAvgEntry(avgEntry, levels?.tp1);
+  if (Number.isFinite(tp1Pct) && tp1Pct < SIGNAL_HARD_REJECTS.minTp1Pct) {
+    return SIGNAL_HARD_REJECTS.tp1TooLow;
+  }
+
   const volumeRatio = Number(outputMeta?.volumeConfirmation?.ratio);
   if (Number.isFinite(volumeRatio) && volumeRatio < SIGNAL_HARD_REJECTS.minVolumeRatio) {
     return SIGNAL_HARD_REJECTS.volumeTooLow;
+  }
+
+  const stopDistancePct = Number.isFinite(Number(levels?.riskPct))
+    ? Number(levels.riskPct)
+    : sigPctDistanceFromAvgEntry(avgEntry, levels?.sl);
+  if (Number.isFinite(stopDistancePct) && stopDistancePct < SIGNAL_HARD_REJECTS.minStopDistancePct) {
+    return SIGNAL_HARD_REJECTS.stopTooTight;
   }
 
   const entryWidthPct = Number(outputMeta?.entryZone?.widthPct);
@@ -455,10 +475,17 @@ function getRequiredSignalOutputFields(signal = {}) {
   const widthPct = Number(signal.entryZoneWidthPct ?? entryZone?.widthPct);
   const volumeText = signal.volumeConfirmation?.text || signal.managedSignal?.volumeConfirmation?.text || null;
   const volumeRatio = Number(signal.volumeConfirmation?.ratio ?? signal.managedSignal?.volumeConfirmation?.ratio);
+  const avgEntry = Number(signal.avgEntry) || sigAvg([signal.entry1, signal.entry2, signal.entry3]);
+  const tp1Pct = sigPctDistanceFromAvgEntry(avgEntry, signal.tp1 ?? signal.t1);
+  const stopDistancePct = Number.isFinite(Number(signal.riskPct))
+    ? Number(signal.riskPct)
+    : sigPctDistanceFromAvgEntry(avgEntry, signal.sl);
   const stopReason = signal.stopReason || signal.managedSignal?.stopReason || null;
   if (!entryZone || !Number.isFinite(widthPct) || !volumeText || !stopReason) return null;
+  if (Number.isFinite(tp1Pct) && tp1Pct < SIGNAL_HARD_REJECTS.minTp1Pct) return null;
   if (widthPct > SIGNAL_HARD_REJECTS.maxEntryWidthPct) return null;
   if (Number.isFinite(volumeRatio) && volumeRatio < SIGNAL_HARD_REJECTS.minVolumeRatio) return null;
+  if (Number.isFinite(stopDistancePct) && stopDistancePct < SIGNAL_HARD_REJECTS.minStopDistancePct) return null;
   return {
     entryZone,
     entryZoneRange: `${formatEntryZonePrice(entryZone.min)} - ${formatEntryZonePrice(entryZone.max)}`,
@@ -1341,6 +1368,10 @@ function sigEvaluate(symbol, timeframe, snapshot, timestamp, spreadPct = null) {
   const avgEntry = Number(levels.avgEntry) || ((levels.entry1 + levels.entry2 + levels.entry3) / 3);
   const rrToTp1 = sigComputeRiskRewardRatio(avgEntry, levels.tp1, levels.sl);
   const rrRatio = sigComputeRiskRewardRatio(avgEntry, levels.tp2, levels.sl);
+  const levelHardRejectReason = sigGetSignalHardRejectReason(null, levels);
+  if (levelHardRejectReason) {
+    return sigNoSignal(timeframe, symbol, timestamp, levelHardRejectReason, Math.round(alpha), direction, snapshot, cleanSpread, [levelHardRejectReason]);
+  }
   if (levels.priceOrderValid !== true) {
     return sigNoSignal(timeframe, symbol, timestamp, 'PRICE_ORDER_FAIL', Math.round(alpha), direction, snapshot, cleanSpread);
   }
@@ -1355,7 +1386,7 @@ function sigEvaluate(symbol, timeframe, snapshot, timestamp, spreadPct = null) {
   if (!outputMeta) {
     return sigNoSignal(timeframe, symbol, timestamp, 'SIGNAL_METADATA_MISSING', Math.round(alpha), direction, snapshot, cleanSpread);
   }
-  const hardRejectReason = sigGetSignalHardRejectReason(outputMeta);
+  const hardRejectReason = sigGetSignalHardRejectReason(outputMeta, levels);
   if (hardRejectReason) {
     return sigNoSignal(timeframe, symbol, timestamp, hardRejectReason, Math.round(alpha), direction, snapshot, cleanSpread, [hardRejectReason]);
   }

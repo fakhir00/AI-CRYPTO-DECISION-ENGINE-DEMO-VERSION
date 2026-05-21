@@ -629,10 +629,30 @@ function buildRequiredSignalOutputMeta(levels = {}, snapshot = {}, direction = '
   };
 }
 
-function getSignalHardRejectReason(outputMeta = {}) {
+function pctDistanceFromAvgEntry(avgEntry, value) {
+  const entry = Number(avgEntry);
+  const price = Number(value);
+  if (!(entry > 0) || !(price > 0)) return null;
+  return (Math.abs(price - entry) / entry) * 100;
+}
+
+function getSignalHardRejectReason(outputMeta = {}, levels = {}) {
+  const avgEntry = Number(levels?.avgEntry) || avg([levels?.entry1, levels?.entry2, levels?.entry3]);
+  const tp1Pct = pctDistanceFromAvgEntry(avgEntry, levels?.tp1);
+  if (Number.isFinite(tp1Pct) && tp1Pct < SIGNAL_HARD_REJECTS.minTp1Pct) {
+    return SIGNAL_HARD_REJECTS.tp1TooLow;
+  }
+
   const volumeRatio = Number(outputMeta?.volumeConfirmation?.ratio);
   if (Number.isFinite(volumeRatio) && volumeRatio < SIGNAL_HARD_REJECTS.minVolumeRatio) {
     return SIGNAL_HARD_REJECTS.volumeTooLow;
+  }
+
+  const stopDistancePct = Number.isFinite(Number(levels?.riskPct))
+    ? Number(levels.riskPct)
+    : pctDistanceFromAvgEntry(avgEntry, levels?.sl);
+  if (Number.isFinite(stopDistancePct) && stopDistancePct < SIGNAL_HARD_REJECTS.minStopDistancePct) {
+    return SIGNAL_HARD_REJECTS.stopTooTight;
   }
 
   const entryWidthPct = Number(outputMeta?.entryZone?.widthPct);
@@ -1097,6 +1117,10 @@ function evaluateSignal(symbol, timeframe, snapshot, timestampIso, spreadPct = n
   const avgEntry = Number(levels.avgEntry) || ((levels.entry1 + levels.entry2 + levels.entry3) / 3);
   const rrToTp1 = computeRiskRewardRatio(avgEntry, levels.tp1, levels.sl);
   const rrRatio = computeRiskRewardRatio(avgEntry, levels.tp2, levels.sl);
+  const levelHardRejectReason = getSignalHardRejectReason(null, levels);
+  if (levelHardRejectReason) {
+    return buildNoSignalPayload(timeframe, symbol, timestampIso, levelHardRejectReason, snapshot, alpha, direction, cleanSpread, [levelHardRejectReason]);
+  }
   if (levels.priceOrderValid !== true) {
     return buildNoSignalPayload(timeframe, symbol, timestampIso, 'PRICE_ORDER_FAIL', snapshot, alpha, direction, cleanSpread);
   }
@@ -1111,7 +1135,7 @@ function evaluateSignal(symbol, timeframe, snapshot, timestampIso, spreadPct = n
   if (!outputMeta) {
     return buildNoSignalPayload(timeframe, symbol, timestampIso, 'SIGNAL_METADATA_MISSING', snapshot, alpha, direction, cleanSpread);
   }
-  const hardRejectReason = getSignalHardRejectReason(outputMeta);
+  const hardRejectReason = getSignalHardRejectReason(outputMeta, levels);
   if (hardRejectReason) {
     return buildNoSignalPayload(timeframe, symbol, timestampIso, hardRejectReason, snapshot, alpha, direction, cleanSpread, [hardRejectReason]);
   }
@@ -1361,10 +1385,11 @@ export default async function handler(req, res) {
           spread: `Spread <= ${MAX_MOMENTUM_SPREAD_PCT}%`,
           volatility: `${MIN_MOMENTUM_ATR_PCT}% <= ATR <= ${MAX_MOMENTUM_ATR_PCT}%`,
           minRiskReward: `TP2 R:R >= ${DEFAULT_MOMENTUM_CONFIG.minRr}`,
+          tp1Percent: `TP1 distance >= ${SIGNAL_HARD_REJECTS.minTp1Pct}%`,
           tp1RiskReward: `TP1 R:R >= ${DEFAULT_MOMENTUM_CONFIG.minTp1Rr}`,
           entryWidth: `Entry width <= ${SIGNAL_HARD_REJECTS.maxEntryWidthPct}%`,
           volume: `Breakout/retest volume >= ${SIGNAL_HARD_REJECTS.minVolumeRatio}x avg`,
-          stopRule: `Structural stop ${DEFAULT_MOMENTUM_CONFIG.minStopPct}% to ${DEFAULT_MOMENTUM_CONFIG.maxStopPct}%`,
+          stopRule: `Structural stop >= ${SIGNAL_HARD_REJECTS.minStopDistancePct}% and <= ${DEFAULT_MOMENTUM_CONFIG.maxStopPct}%`,
           invalidation: '15m candle BODY close through stop',
           expiry: `${DEFAULT_MOMENTUM_CONFIG.expiryCandles} candles or ${DEFAULT_MOMENTUM_CONFIG.expiryMinutes} minutes`,
           leverage: '3x Cross if stop <0.6%; otherwise 2x Cross',

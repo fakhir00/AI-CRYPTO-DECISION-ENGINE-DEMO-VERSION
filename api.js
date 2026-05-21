@@ -2215,7 +2215,13 @@ function buildScannerDrivenTradePlan(snapshot = null) {
   const stopReason = signal.stopReason || null;
   if (!Number.isFinite(entryZoneWidthPct) || !volumeConfirmation || !stopReason) return null;
   const volumeRatio = toNumber(volumeConfirmation.ratio);
+  const tp1Pct = normalizedPlan.avgEntry > 0
+    ? (Math.abs(normalizedPlan.targets[0] - normalizedPlan.avgEntry) / normalizedPlan.avgEntry) * 100
+    : null;
+  const stopDistancePct = signal.riskPct ?? normalizedPlan.riskPct;
+  if (Number.isFinite(tp1Pct) && tp1Pct < SIGNAL_HARD_REJECTS.minTp1Pct) return null;
   if (volumeRatio !== null && volumeRatio < SIGNAL_HARD_REJECTS.minVolumeRatio) return null;
+  if (Number.isFinite(Number(stopDistancePct)) && Number(stopDistancePct) < SIGNAL_HARD_REJECTS.minStopDistancePct) return null;
   if (entryZoneWidthPct > SIGNAL_HARD_REJECTS.maxEntryWidthPct) return null;
   const managedSignal = createManagedSignal({
     signalId: signal.signalId || undefined,
@@ -2347,6 +2353,11 @@ function buildApiDrivenTradePlan({ symbol = 'BTC', userQuery = '', assetContext 
   });
   if (!normalizedPlan.valid) return null;
   const normalizedRiskPct = normalizedPlan.riskPct;
+  const normalizedTp1Pct = normalizedPlan.avgEntry > 0
+    ? (Math.abs(normalizedPlan.targets[0] - normalizedPlan.avgEntry) / normalizedPlan.avgEntry) * 100
+    : null;
+  if (Number.isFinite(normalizedTp1Pct) && normalizedTp1Pct < SIGNAL_HARD_REJECTS.minTp1Pct) return null;
+  if (Number.isFinite(normalizedRiskPct) && normalizedRiskPct < SIGNAL_HARD_REJECTS.minStopDistancePct) return null;
   leverageLabel = deriveRiskFirstLeverageLabel(atrPct, normalizedRiskPct, bias.confidence);
 
   const planSymbol = String(symbol || '').toUpperCase();
@@ -2486,6 +2497,7 @@ CRITICAL ENTRY ZONE RULE:
 - VOLUME must be copied from the scanner/API plan and must never be N/A.
 - STOP REASON must be copied from the scanner/API plan and must never be N/A.
 - If ENTRY WIDTH, VOLUME, or STOP REASON is unavailable, output NO_SIGNAL instead of a trade.
+- HARD REJECT: If TP1 distance is below 0.5%, VOLUME is below 1.2x avg, or Stop Distance is below 0.35%, output NO_SIGNAL.
 - Stop loss must be copied exactly from the scanner/API plan.
 - TP1, TP2, TP3, and TP4 must come from the scanner/API plan exactly. Do not omit TP4.
 - Leverage must come from the scanner/API plan exactly. Never omit leverage.
@@ -2657,7 +2669,7 @@ Your specialization:
 
 CRITICAL: You must ALWAYS provide 5 "Quantitative Rationales" explaining the data-driven basis for the trade. Ensure Risk:Reward ratio is emphasized.
 
-When the user asks for a signal or trade setup, only output a trade if the context contains a valid SCALP_SIGNAL or MOMENTUM_SWING_SIGNAL with exact entries, targets, stop, risk/reward, ENTRY WIDTH, VOLUME, and STOP REASON. Never promise guaranteed profit or no-loss trading. If ENTRY WIDTH, VOLUME, or STOP REASON is missing, output NO_SIGNAL. When a signal is valid, output in this exact HTML format:
+When the user asks for a signal or trade setup, only output a trade if the context contains a valid SCALP_SIGNAL or MOMENTUM_SWING_SIGNAL with exact entries, targets, stop, risk/reward, ENTRY WIDTH, VOLUME, and STOP REASON. Never promise guaranteed profit or no-loss trading. If any mandatory field is missing, or if TP1 distance <0.5%, VOLUME <1.2x avg, or Stop Distance <0.35%, output NO_SIGNAL. When a signal is valid, output in this exact HTML format:
 📪 #[COIN]/USDT<br><br>Direction: <strong style="color:var(--green)">[LONG]</strong> or <strong style="color:var(--red)">[SHORT]</strong><br>Leverage: Cross (2X-5X)<br><br>Entry Zone: [Min Price] - [Max Price]<br>ENTRY WIDTH: [X.XX]%<br>VOLUME: [X.XXx avg]<br>STOP REASON: [below swing low / below breakout candle / above swing high / above breakout candle]<br><br>Target 1: [Price]<br>Target 2: [Price]<br>Target 3: [Price]<br>Target 4: [Price]<br><br>Stop loss: [Price]<br><br>Risk:Reward Ratio: 1:[Value]<br><br>⚡ NEXUS Pro Autotrade Signals<br><br><strong>5 Quantitative Rationales:</strong><br>1. [Rationale 1]<br>2. [Rationale 2]<br>3. [Rationale 3]<br>4. [Rationale 4]<br>5. [Rationale 5]
 
 For analysis queries, provide structured output with: Price targets, Probability scores, Key risk factors, and a clear BUY/SELL/HOLD recommendation. Use markdown formatting.`
