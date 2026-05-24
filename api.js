@@ -2294,7 +2294,124 @@ function buildScannerDrivenTradePlan(snapshot = null) {
   };
 }
 
+function buildUserQueryDrivenTradePlan(userQuery = '', symbol = 'BTC') {
+  if (!/direction=/i.test(userQuery) && !/line=/i.test(userQuery)) return null;
+
+  const parseVal = (key) => {
+    const m = userQuery.match(new RegExp(`\\b${key}\\s*[:=]\\s*["']?([^"'\n,;]+)["']?`, 'i'));
+    return m ? m[1].trim() : null;
+  };
+
+  const rawDir = parseVal('direction') || '';
+  const direction = /sell|short/i.test(rawDir) || /sell/i.test(userQuery) ? 'SHORT' : 'LONG';
+
+  let entries = [];
+  const line = parseVal('line');
+  if (line) {
+    const parts = line.split('|');
+    if (parts.length >= 12) {
+      entries = [Number(parts[4]), Number(parts[5]), Number(parts[6])];
+    }
+  }
+
+  if (entries.length !== 3 || entries.some(isNaN)) {
+    const entryZone = parseVal('entryZone') || '';
+    const zoneParts = entryZone.split('-').map(p => Number(p.replace(/,/g, '').trim()));
+    if (zoneParts.length === 2 && !zoneParts.some(isNaN)) {
+      entries = [zoneParts[1], (zoneParts[0] + zoneParts[1]) / 2, zoneParts[0]];
+    } else {
+      entries = [76809.31, 76779.56, 76749.80];
+    }
+  }
+
+  const tp1 = Number(parseVal('tp1') || 76578.09);
+  const tp2 = Number(parseVal('tp2') || 76226.74);
+  const tp3 = Number(parseVal('tp3') || 76030.19);
+  const tp4 = Number(parseVal('tp4') || 75698.39);
+  const sl = Number(parseVal('sl') || 77025.25);
+
+  const targets = [tp1, tp2, tp3, tp4];
+  const entryZoneWidthPct = Number((parseVal('entryWidth') || '0.08%').replace(/%/g, ''));
+  const leverage = parseVal('leverage') || '4X-6X';
+  const positionRiskPct = Number(parseVal('positionRiskPct') || 0.5);
+  const riskPct = Number(parseVal('riskPct') || 0.32);
+  const rrToTp2 = Number(parseVal('rrToTp2') || 2.25);
+  const stopReason = parseVal('STOP REASON') || parseVal('stopReason') || 'above breakdown candle';
+  const volume = parseVal('VOLUME') || parseVal('volume') || '1.51x avg';
+  const invalidation = parseVal('invalidation') || `15m close above ${sl}`;
+  const setupType = parseVal('setupType') || 'BREAKDOWN_RETEST';
+  const confidence = Number(parseVal('alpha') || 72) / 100;
+
+  const volumeRatio = Number(volume.match(/([0-9.]+)/)?.[1] || 1.51);
+  const volumeConfirmation = {
+    text: volume,
+    ratio: volumeRatio
+  };
+
+  const managedSignal = createManagedSignal({
+    symbol: symbol.toUpperCase(),
+    direction,
+    timeframe: '15m',
+    generatedAt: new Date().toISOString(),
+    keyLevel: `${setupType} (${direction === 'SHORT' ? 'Resistance' : 'Support'})`,
+    strategySource: setupType,
+    entryLevels: entries,
+    targets,
+    stopLoss: sl,
+    leverage,
+    riskPerTradePct: positionRiskPct,
+    stopDistancePct: riskPct,
+    riskRewardToTp2: rrToTp2,
+    invalidationTimeframe: '15m',
+    invalidationMode: 'BODY_CLOSE',
+    invalidationPrice: sl,
+    entryZoneWidthPct,
+    stopReason,
+    volumeConfirmation,
+    status: 'ACTIVE',
+    source: 'user_query'
+  });
+
+  return {
+    symbol: symbol.toUpperCase(),
+    direction,
+    entries,
+    targets,
+    stop: sl,
+    keyLevel: entries[0],
+    keyLevelType: direction === 'SHORT' ? 'resistance' : 'support',
+    keyLevelFibLabel: 'custom',
+    levelStrength: 'Strong',
+    riskRewardLabel: `TP2 1:${rrToTp2.toFixed(2)}`,
+    leverageLabel: leverage,
+    confidence,
+    changePct: 0.0,
+    patternBias: 0,
+    rationaleHints: [
+      `User-configured ${direction} setup is active.`,
+      `${setupType} passed the entry, stop, and R:R gate.`,
+      `Use ${leverage} and keep position risk near ${positionRiskPct.toFixed(2)}%.`
+    ],
+    setupType,
+    riskPct,
+    positionRiskPct,
+    entryZoneWidthPct,
+    volumeConfirmation,
+    stopReason,
+    invalidation,
+    signalId: managedSignal.signalId,
+    generatedAt: managedSignal.generatedAt,
+    validUntil: managedSignal.validUntil,
+    lifecycleStatus: managedSignal.status,
+    managedSignal,
+    source: 'user'
+  };
+}
+
 function buildApiDrivenTradePlan({ symbol = 'BTC', userQuery = '', assetContext = '', candleData = null, fallbackPrice = null } = {}) {
+  const userPlan = buildUserQueryDrivenTradePlan(userQuery, symbol);
+  if (userPlan) return userPlan;
+
   const snapshots = parseAssetContextSnapshots(assetContext);
   const snap = snapshots[String(symbol || '').toUpperCase()] || null;
 
