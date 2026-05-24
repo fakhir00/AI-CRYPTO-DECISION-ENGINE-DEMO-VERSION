@@ -431,7 +431,7 @@ function sigBuildRequiredSignalOutputMeta(levels = {}, snapshot = {}, direction 
   const entryZone = computeEntryZoneMeta([levels.entry1, levels.entry2, levels.entry3]);
   const volumeConfirmation = computeBreakoutVolumeConfirmation(snapshot?.candles || []);
   const stopMeta = classifyStructuralStopReason(snapshot?.candles || [], direction, levels.sl);
-  const stopReason = normalizeSignalStopReason(stopMeta?.reason);
+  const stopReason = normalizeSignalStopReason(stopMeta?.reason, direction);
   if (!entryZone || !volumeConfirmation || !stopReason) return null;
   return {
     entryZone,
@@ -486,7 +486,7 @@ function getRequiredSignalOutputFields(signal = {}) {
   const stopDistancePct = Number.isFinite(Number(signal.riskPct))
     ? Number(signal.riskPct)
     : sigPctDistanceFromAvgEntry(avgEntry, signal.sl);
-  const stopReason = normalizeSignalStopReason(signal.stopReason || signal.managedSignal?.stopReason);
+  const stopReason = normalizeSignalStopReason(signal.stopReason || signal.managedSignal?.stopReason, signal.direction || signal.managedSignal?.direction);
   if (!entryZone || !Number.isFinite(widthPct) || !Number.isFinite(volumeRatio) || !stopReason) return null;
   if (!Number.isFinite(tp1Pct) || tp1Pct < SIGNAL_HARD_REJECTS.minTp1Pct) return null;
   if (widthPct > SIGNAL_HARD_REJECTS.maxEntryWidthPct) return null;

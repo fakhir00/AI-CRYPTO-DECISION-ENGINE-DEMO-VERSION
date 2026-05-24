@@ -620,7 +620,7 @@ function buildRequiredSignalOutputMeta(levels = {}, snapshot = {}, direction = '
   const entryZone = computeEntryZoneMeta([levels.entry1, levels.entry2, levels.entry3]);
   const volumeConfirmation = computeBreakoutVolumeConfirmation(snapshot?.candles || []);
   const stopMeta = classifyStructuralStopReason(snapshot?.candles || [], direction, levels.sl);
-  const stopReason = normalizeSignalStopReason(stopMeta?.reason);
+  const stopReason = normalizeSignalStopReason(stopMeta?.reason, direction);
   if (!entryZone || !volumeConfirmation || !stopReason) return null;
   return {
     entryZone,

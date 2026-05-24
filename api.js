@@ -1791,7 +1791,7 @@ function buildCanonicalSignalText(rawSignalText = '', fallbackSymbol = 'BTC', op
         invalidationMode: 'BODY_CLOSE',
         invalidationPrice: normalizedPlan.stop,
         entryZoneWidthPct: forcedPlan.entryZoneWidthPct,
-        stopReason: normalizeSignalStopReason(forcedPlan.stopReason),
+        stopReason: normalizeSignalStopReason(forcedPlan.stopReason, direction),
         volumeConfirmation: forcedPlan.volumeConfirmation,
         status: forcedPlan.lifecycleStatus || 'ACTIVE',
         source: forcedPlan.source || 'api'
@@ -2078,7 +2078,7 @@ function parseAssetContextSnapshots(assetContext = '') {
           text: volumeMatch[1].trim(),
           ratio: toNumber(volumeRatioMatch?.[1])
         } : null,
-        stopReason: normalizeSignalStopReason(stopReasonMatch?.[1])
+        stopReason: normalizeSignalStopReason(stopReasonMatch?.[1], direction)
       };
     }
 
@@ -2212,7 +2212,7 @@ function buildScannerDrivenTradePlan(snapshot = null) {
   if (!normalizedPlan.valid) return null;
   const entryZoneWidthPct = toNumber(signal.entryZoneWidthPct);
   const rawVolumeConfirmation = signal.volumeConfirmation?.text ? signal.volumeConfirmation : null;
-  const stopReason = normalizeSignalStopReason(signal.stopReason);
+  const stopReason = normalizeSignalStopReason(signal.stopReason, direction);
   if (!Number.isFinite(entryZoneWidthPct) || !rawVolumeConfirmation || !stopReason) return null;
   const volumeRatio = toNumber(rawVolumeConfirmation.ratio)
     ?? toNumber(String(rawVolumeConfirmation.text || '').match(/([0-9.]+)\s*x\s*avg/i)?.[1]);
@@ -3047,7 +3047,7 @@ CRITICAL: Do NOT claim specific candlestick pattern names. Base rationale on pri
     const generatedLabel = managed?.generatedAtLabel || apiTradePlan.generatedAt;
     const validUntilLabel = managed?.validUntilLabel || apiTradePlan.validUntil;
     const volumeText = apiTradePlan.volumeConfirmation?.text || managed?.volumeConfirmation?.text;
-    const stopReason = normalizeSignalStopReason(apiTradePlan.stopReason || managed?.stopReason);
+    const stopReason = normalizeSignalStopReason(apiTradePlan.stopReason || managed?.stopReason, apiTradePlan.direction || managed?.direction);
     const entryWidthPct = Number(apiTradePlan.entryZoneWidthPct ?? managed?.entryZoneWidthPct);
     if (planSignalId && generatedLabel && validUntilLabel && volumeText && stopReason && Number.isFinite(entryWidthPct)) {
       enhancedContext += `\n\n🧮 API-DERIVED EXECUTION PLAN (HIGHEST PRIORITY):
