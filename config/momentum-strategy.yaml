@@ -17,7 +17,7 @@ consolidation_candles: 5
 consolidation_max_atr: 1.6
 confirmation_closes: 1
 strong_candle_atr: 1.0
-volume_multiplier: 0.8
+volume_multiplier: 0.3
 atr_threshold: 0.0005
 spread_max_pct: 0.15
 rsi_long_max: 88
