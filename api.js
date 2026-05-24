@@ -1768,7 +1768,7 @@ function buildCanonicalSignalText(rawSignalText = '', fallbackSymbol = 'BTC', op
         confidence: forcedPlan.confidence ?? options.tradeMeta?.confidence
       }
     );
-    const forcedPlanValid = normalizedPlan.valid;
+    const forcedPlanValid = normalizedPlan.valid || forcedPlan.source === 'user_query' || forcedPlan.source === 'user';
 
     if (forcedPlanValid) {
       const canonicalSignal = forcedPlan.managedSignal || createManagedSignal({
