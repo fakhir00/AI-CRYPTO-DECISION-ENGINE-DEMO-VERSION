@@ -144,7 +144,96 @@ for (let i = 0; i < symKeys.length; i++) {
 }
 console.log('');
 
-console.log('⛔ CHECKPOINT: Review in-sample vs out-of-sample metrics above.');
+// ========================================================
+// CATEGORY DECAY ANALYSIS
+// ========================================================
+console.log('  ════════ CATEGORY DECAY ANALYSIS ════════');
+const BETA_CLUSTER = ['BTC', 'ETH', 'SOL', 'XRP', 'BNB'];
+const IDIO_CLUSTER = ['TRX', 'KAITO', 'BNB'];
+
+const CATEGORIES = Object.keys(PRODUCTION_CONFIG.weights || {});
+
+function analyzeDecay(clusterSymbols, label) {
+  let isWins = 0, isLosses = 0, oosWins = 0, oosLosses = 0;
+  
+  // Track stats per category. We want:
+  // For IS Wins vs OOS Losses (to find false positive decay)
+  const stats = {};
+  for (const cat of CATEGORIES) {
+    stats[cat] = {
+      isWinsCount: 0, isWinsAgreed: 0, isWinsExcluded: 0, isWinsDisagreed: 0, isWinsScoreSum: 0,
+      oosLossesCount: 0, oosLossesAgreed: 0, oosLossesExcluded: 0, oosLossesDisagreed: 0, oosLossesScoreSum: 0,
+    };
+  }
+
+  for (const sym of clusterSymbols) {
+    if (!fullResults[sym]) continue;
+    
+    for (const sig of fullResults[sym].signals) {
+      if (sig.outcome?.result === 'no_levels') continue;
+      
+      const r = sig.outcome?.rMultiple || 0;
+      if (r === 0) continue; // ignore breakeven/expired
+      
+      const isWin = r > 0;
+      const isOOS = sig.candleTime >= SPLIT;
+      
+      // Update bucket counts
+      if (!isOOS && isWin) isWins++;
+      if (!isOOS && !isWin) isLosses++;
+      if (isOOS && isWin) oosWins++;
+      if (isOOS && !isWin) oosLosses++;
+
+      const targetBucket = (!isOOS && isWin) ? 'isWins' : (isOOS && !isWin) ? 'oosLosses' : null;
+      if (!targetBucket) continue;
+
+      for (const cat of CATEGORIES) {
+        const factorObj = sig.contributingFactors?.[cat] || {};
+        const score = factorObj.score || 0;
+        const factors = factorObj.factors || [];
+        
+        const catStats = stats[cat];
+        
+        if (score === 0 && factors.length === 0) {
+          catStats[`${targetBucket}Excluded`]++;
+        } else {
+          catStats[`${targetBucket}Count`]++;
+          
+          const threshold = PRODUCTION_CONFIG.signal?.category_agreement_threshold ?? 0.3;
+          const agreed = (sig.direction === 'long' && score >= threshold) || (sig.direction === 'short' && score <= -threshold);
+          
+          if (agreed) {
+            catStats[`${targetBucket}Agreed`]++;
+            catStats[`${targetBucket}ScoreSum`] += Math.abs(score);
+          } else {
+            catStats[`${targetBucket}Disagreed`]++;
+          }
+        }
+      }
+    }
+  }
+
+  console.log(`\n  --- ${label} ---`);
+  console.log(`  IS Wins: ${isWins}  |  OOS Losses: ${oosLosses}`);
+  console.log('  | Category | IS Win Involv. | OOS Loss Involv. | Δ Shift | Avg Score (OOS L) | Excl (IS/OOS) |');
+  console.log('  | :--- | :--- | :--- | :--- | :--- | :--- |');
+  
+  for (const cat of CATEGORIES) {
+    const s = stats[cat];
+    const p1 = s.isWinsCount > 0 ? (s.isWinsAgreed / s.isWinsCount) : 0;
+    const p2 = s.oosLossesCount > 0 ? (s.oosLossesAgreed / s.oosLossesCount) : 0;
+    const shift = p2 - p1;
+    
+    const avgScore = s.oosLossesAgreed > 0 ? (s.oosLossesScoreSum / s.oosLossesAgreed) : 0;
+    
+    console.log(`  | **${cat}** | ${(p1*100).toFixed(1)}% (${s.isWinsAgreed}/${s.isWinsCount}) | ${(p2*100).toFixed(1)}% (${s.oosLossesAgreed}/${s.oosLossesCount}) | ${(shift*100).toFixed(1)}% | ${avgScore.toFixed(3)} | ${s.isWinsExcluded}/${s.oosLossesExcluded} |`);
+  }
+}
+
+analyzeDecay(BETA_CLUSTER, 'BETA CLUSTER (BTC, ETH, SOL, XRP, BNB)');
+analyzeDecay(IDIO_CLUSTER, 'IDIOSYNCRATIC CLUSTER (TRX, KAITO, BNB)');
+
+console.log('\n⛔ CHECKPOINT: Review in-sample vs out-of-sample metrics above.');
 console.log('   If OOS performance degrades significantly, consider tuning scoring.yaml.');
 console.log('   Do NOT wire signal delivery until approved.\n');
 
