@@ -93,7 +93,7 @@ function pearsonCorrelation(x, y) {
   return num / den;
 }
 
-console.log('  ════════ OOS DAILY RETURN CORRELATION ════════');
+console.log('  ════════ OOS DAILY REALIZED R CORRELATION ════════');
 const allDays = new Set();
 const dailyReturns = {};
 for (const sym of SYMBOLS) {
@@ -108,20 +108,34 @@ for (const sym of SYMBOLS) {
 const days = Array.from(allDays).sort();
 const symKeys = Object.keys(dailyReturns);
 
+// Print Header
+let header = '      ';
+for (const s of symKeys) {
+  header += s.padStart(6);
+}
+console.log(header);
+
+// Print Matrix
 for (let i = 0; i < symKeys.length; i++) {
-  for (let j = i + 1; j < symKeys.length; j++) {
-    const s1 = symKeys[i];
+  const s1 = symKeys[i];
+  let row = s1.padEnd(6);
+  for (let j = 0; j < symKeys.length; j++) {
     const s2 = symKeys[j];
-    const x = [], y = [];
-    for (const d of days) {
-      if (dailyReturns[s1][d] !== undefined || dailyReturns[s2][d] !== undefined) {
-        x.push(dailyReturns[s1][d] || 0);
-        y.push(dailyReturns[s2][d] || 0);
+    if (i === j) {
+      row += '  1.00';
+    } else {
+      const x = [], y = [];
+      for (const d of days) {
+        if (dailyReturns[s1][d] !== undefined || dailyReturns[s2][d] !== undefined) {
+          x.push(dailyReturns[s1][d] || 0);
+          y.push(dailyReturns[s2][d] || 0);
+        }
       }
+      const corr = pearsonCorrelation(x, y);
+      row += corr.toFixed(2).padStart(6);
     }
-    const corr = pearsonCorrelation(x, y);
-    console.log(`  ${s1} <-> ${s2}: ${corr > 0.5 ? '🔴 ' : corr < 0 ? '🟢 ' : '⚪️ '}${corr.toFixed(3)}`);
   }
+  console.log(row);
 }
 console.log('');
 
