@@ -1,0 +1,96 @@
+# ═══════════════════════════════════════════════════════
+# Scoring Engine Configuration
+# ═══════════════════════════════════════════════════════
+# All weights, thresholds, and category configs.
+# Tune these without changing code.
+
+# ─── Category Weights ─────────────────────────────────
+# Must sum to 1.0. Each category outputs a score from -2 to +2.
+# Final confluence score = weighted sum, range ~ -2 to +2.
+weights:
+  trend:       0.20
+  momentum:    0.20
+  derivatives: 0.15
+  volatility:  0.10
+  sentiment:   0.15
+  onchain:     0.10
+  news:        0.10
+
+# ─── Signal Thresholds ────────────────────────────────
+signal:
+  # Minimum weighted confluence score to fire a signal
+  min_score: 0.80
+  # Minimum number of categories that must agree on direction
+  min_agreeing_categories: 3
+  # Minimum individual category score magnitude to count as "agreeing"
+  category_agreement_threshold: 0.3
+  # Cooldown: minimum seconds between signals for the same symbol
+  cooldown_seconds: 900
+
+# ─── Trade Level Defaults ─────────────────────────────
+levels:
+  # Entry zone: ladder 3 prices around the current price
+  entry_spread_pct: 0.35
+  # Stop-loss: ATR multiplier below/above entry
+  stop_atr_multiplier: 1.5
+  # Take-profit targets: R-multiples from avg entry to stop
+  tp1_r: 1.0
+  tp2_r: 2.0
+  tp3_r: 3.0
+  tp4_r: 5.0
+  # Maximum allowed stop distance (% from entry)
+  max_stop_pct: 3.0
+  # Minimum R:R to TP2 to fire a signal
+  min_rr_tp2: 1.5
+
+# ─── Category-Specific Parameters ────────────────────
+
+trend:
+  # EMA periods for trend detection
+  ema_fast: 50
+  ema_slow: 200
+  # MACD: standard 12/26/9
+  macd_fast: 12
+  macd_slow: 26
+  macd_signal: 9
+
+momentum:
+  rsi_period: 14
+  rsi_overbought: 70
+  rsi_oversold: 30
+  stoch_overbought: 80
+  stoch_oversold: 20
+
+derivatives:
+  # Funding rate thresholds (absolute value)
+  funding_extreme: 0.001
+  funding_elevated: 0.0005
+  # OI change threshold (% change in 24h)
+  oi_change_threshold: 5.0
+
+volatility:
+  atr_period: 14
+  # Bollinger Band width thresholds
+  bb_squeeze_threshold: 0.02
+  bb_expansion_threshold: 0.06
+
+sentiment:
+  # Fear & Greed Index thresholds
+  fng_extreme_fear: 20
+  fng_extreme_greed: 80
+  # LunarCrush Galaxy Score thresholds
+  galaxy_bullish: 70
+  galaxy_bearish: 30
+
+onchain:
+  # Whale transaction value threshold (ETH)
+  whale_min_value: 500
+  # BTC mempool congestion (unconfirmed tx count)
+  mempool_congested: 150000
+
+news:
+  # Number of recent articles to scan for event flags
+  scan_count: 10
+  # Keywords that trigger bullish/bearish event flags
+  bullish_keywords: ["etf approved", "adoption", "partnership", "upgrade", "halving", "bullish"]
+  bearish_keywords: ["hack", "exploit", "regulation", "ban", "lawsuit", "sec", "crash", "bearish"]
