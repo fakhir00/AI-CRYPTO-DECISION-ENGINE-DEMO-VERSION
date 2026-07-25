@@ -2,8 +2,7 @@
 // NEXUS API Engine — All external data integrations
 // ====================================================
 
-import { createManagedSignal, formatManagedSignalText, normalizeSignalStopReason } from './lib/signal-lifecycle.js';
-import { SIGNAL_HARD_REJECTS } from './lib/momentum-strategy.js';
+// DEPRECATED IMPORTS REMOVED — signal-lifecycle.js and momentum-strategy.js are now stubs
 
 const KEYS = {
   coingecko: import.meta.env?.VITE_COINGECKO_API_KEY || 'CG-7gTv8kk2qS7r8kj515m2rVQJ',
@@ -849,43 +848,7 @@ export async function fetchDuneMarketPulse() {
   }
 }
 
-// Helper: Compute Exponential Moving Average
-function computeEMA(data, period) {
-  const k = 2 / (period + 1);
-  let ema = data.slice(0, period).reduce((s, v) => s + v, 0) / period;
-  for (let i = period; i < data.length; i++) {
-    ema = data[i] * k + ema * (1 - k);
-  }
-  return ema;
-}
-
-// Helper: Compute RSI from close-price series
-function computeRSI(closes = [], period = 14) {
-  if (!Array.isArray(closes) || closes.length < period + 1) return null;
-  let gains = 0;
-  let losses = 0;
-
-  for (let i = 1; i <= period; i++) {
-    const delta = closes[i] - closes[i - 1];
-    if (delta >= 0) gains += delta;
-    else losses += Math.abs(delta);
-  }
-
-  let avgGain = gains / period;
-  let avgLoss = losses / period;
-
-  for (let i = period + 1; i < closes.length; i++) {
-    const delta = closes[i] - closes[i - 1];
-    const gain = delta > 0 ? delta : 0;
-    const loss = delta < 0 ? Math.abs(delta) : 0;
-    avgGain = ((avgGain * (period - 1)) + gain) / period;
-    avgLoss = ((avgLoss * (period - 1)) + loss) / period;
-  }
-
-  if (avgLoss === 0) return 100;
-  const rs = avgGain / avgLoss;
-  return 100 - (100 / (1 + rs));
-}
+// [REMOVED] computeEMA and computeRSI — replaced by lib/scoring/categories/ in Step 2
 
 // ─── 4D. CoinGecko Categories: Narratives & Sectors ──────────────────────────
 export async function fetchNarratives() {
@@ -982,8 +945,28 @@ async function fetchBinanceReferencePrice(symbol = 'BTC') {
   }
 }
 
-const MIRROR_SIGNAL_TTL_MS = 90 * 1000; // 90 seconds for scalp freshness
-const SIGNAL_MIRROR_SCHEMA_VERSION = 'v2_price_order';
+// ═══════════════════════════════════════════════════════════════
+// DEPRECATED SIGNAL LOGIC REMOVED (~2200 lines)
+// All signal generation, scoring, prediction, LLM orchestration,
+// signal mirroring, trade plan building, and Fibonacci/pattern
+// analysis has been deleted as part of the v2 revamp.
+//
+// Replacement modules (Steps 1-6):
+//   lib/ingestion/*       — Data ingestion layer
+//   lib/scoring/*         — Composite scoring engine
+//   lib/signals/*         — Signal schema + Supabase logging
+//   lib/llm/narrator.js   — LLM narrative layer
+//   lib/backtest/*        — Backtesting module
+// ═══════════════════════════════════════════════════════════════
+
+// ─── Stub exports (prevent main.js breakage until Step 6) ─────
+export async function fetchAIAnalysis() { return '[AI analysis temporarily offline — engine rebuild in progress]'; }
+export async function fetchHermesAnalysis() { return null; }
+export async function fetchDualAI() { return '<div style="color:#BAC2DE;padding:1rem;">Signal engine is being rebuilt. Check back soon.</div>'; }
+export function calculateAlphaScore() { return 50; }
+
+
+
 const SIGNAL_QUERY_RE = /\b(signal|trade\s*setup|entry|entries|stop\s*loss|targets?|take[-\s]?profit|leverage|long|short)\b/i;
 const PAIR_ONLY_SIGNAL_RE = /^\s*#?\s*[A-Z0-9]{2,10}\s*(?:\/\s*USDT|USDT)\s*$/i;
 const SYMBOL_STOP_WORDS = new Set([
