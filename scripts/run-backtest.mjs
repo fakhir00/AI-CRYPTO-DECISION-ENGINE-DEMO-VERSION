@@ -73,9 +73,9 @@ for (const symbol of SYMBOLS) {
 
   // Report
   console.log(`\n  ══════════════════ ${symbol} ══════════════════`);
-  printMetrics('IN-SAMPLE  (Jan–Apr)', trainMetrics, trainSignals.length);
-  printMetrics('OUT-OF-SAMPLE (May–Jul)', testMetrics, testSignals.length);
-  printMetrics('COMBINED   (Full 6mo)', fullMetrics, fullResult.signals.length);
+  printMetrics('IN-SAMPLE  (Jan–Apr)', trainMetrics);
+  printMetrics('OUT-OF-SAMPLE (May–Jul)', testMetrics);
+  printMetrics('COMBINED   (Full 6mo)', fullMetrics);
   console.log('');
 }
 
@@ -148,9 +148,9 @@ console.log('⛔ CHECKPOINT: Review in-sample vs out-of-sample metrics above.');
 console.log('   If OOS performance degrades significantly, consider tuning scoring.yaml.');
 console.log('   Do NOT wire signal delivery until approved.\n');
 
-function printMetrics(label, m, count) {
+function printMetrics(label, m) {
   console.log(`  ┌─ ${label}`);
-  console.log(`  │  Signals: ${count}  |  WinRate: ${m.winRate}% [95% CI: ${m.winRateCI[0]}% - ${m.winRateCI[1]}%] (W:${m.wins} L:${m.losses} BE:${m.breakevens} Open:${m.expired})`);
+  console.log(`  │  Signals: ${m.totalSignals}  |  WinRate: ${m.winRate}% [95% CI: ${m.winRateCI[0]}% - ${m.winRateCI[1]}%] (W:${m.wins} L:${m.losses} BE:${m.breakevens} Open:${m.expired} Rej:${m.rejected})`);
   console.log(`  │  Avg R: ${m.avgRMultiple}  |  Max DD: ${m.maxDrawdown}R  |  PF: ${m.profitFactor}`);
   if (m.tpDistribution && Object.keys(m.tpDistribution).length > 0) {
     console.log(`  │  TP dist: ${JSON.stringify(m.tpDistribution)}`);
