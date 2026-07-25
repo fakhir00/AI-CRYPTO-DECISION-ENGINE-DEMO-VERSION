@@ -108,6 +108,11 @@ for (const sym of SYMBOLS) {
 const days = Array.from(allDays).sort();
 const symKeys = Object.keys(dailyReturns);
 
+console.log('\\n  ════════ PROOF: DAILY REALIZED R AGGREGATION SAMPLE (OOS) ════════');
+console.log('  BTC (last 5 days with activity):', Object.entries(dailyReturns.BTC || {}).filter(([d]) => d >= '2026-05-01').slice(-5));
+console.log('  XRP (last 5 days with activity):', Object.entries(dailyReturns.XRP || {}).filter(([d]) => d >= '2026-05-01').slice(-5));
+console.log('\\n  ════════ OOS DAILY REALIZED R CORRELATION ════════');
+
 // Print Header
 let header = '      ';
 for (const s of symKeys) {
@@ -145,7 +150,7 @@ console.log('   Do NOT wire signal delivery until approved.\n');
 
 function printMetrics(label, m, count) {
   console.log(`  ┌─ ${label}`);
-  console.log(`  │  Signals: ${count}  |  WinRate: ${m.winRate}% [95% CI: ${m.winRateCI[0]}% - ${m.winRateCI[1]}%] (W:${m.wins} L:${m.losses} BE:${m.breakevens})`);
+  console.log(`  │  Signals: ${count}  |  WinRate: ${m.winRate}% [95% CI: ${m.winRateCI[0]}% - ${m.winRateCI[1]}%] (W:${m.wins} L:${m.losses} BE:${m.breakevens} Open:${m.expired})`);
   console.log(`  │  Avg R: ${m.avgRMultiple}  |  Max DD: ${m.maxDrawdown}R  |  PF: ${m.profitFactor}`);
   if (m.tpDistribution && Object.keys(m.tpDistribution).length > 0) {
     console.log(`  │  TP dist: ${JSON.stringify(m.tpDistribution)}`);
