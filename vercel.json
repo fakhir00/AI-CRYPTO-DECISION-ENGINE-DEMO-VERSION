@@ -1,4 +1,9 @@
 {
+  "functions": {
+    "api/**/*": {
+      "includeFiles": "config/scoring.yaml"
+    }
+  },
   "rewrites": [
     {
       "source": "/api/cmc/:match*",

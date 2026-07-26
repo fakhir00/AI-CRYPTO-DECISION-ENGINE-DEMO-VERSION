@@ -958,10 +958,20 @@ async function fetchBinanceReferencePrice(symbol = 'BTC') {
 //   lib/llm/narrator.js   — LLM narrative layer
 //   lib/backtest/*        — Backtesting module
 // ═══════════════════════════════════════════════════════════════
+// TECHNICAL INDICATOR UTILITIES (Restored)
+// ═══════════════════════════════════════════════════════════════
+function computeEMA(data, period) {
+  if (!data || data.length === 0) return 0;
+  const k = 2 / (period + 1);
+  let ema = data[0];
+  for (let i = 1; i < data.length; i++) {
+    ema = (data[i] * k) + (ema * (1 - k));
+  }
+  return ema;
+}
 
 // ─── Stub exports (prevent main.js breakage until Step 6) ─────
 export async function fetchAIAnalysis() { return '[AI analysis temporarily offline — engine rebuild in progress]'; }
 export async function fetchHermesAnalysis() { return null; }
 export async function fetchDualAI() { return '<div style="color:#BAC2DE;padding:1rem;">Signal engine is being rebuilt. Check back soon.</div>'; }
 export function calculateAlphaScore() { return 50; }
-
