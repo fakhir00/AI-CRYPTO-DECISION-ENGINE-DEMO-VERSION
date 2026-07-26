@@ -16,12 +16,25 @@ weights:
   onchain:     0.10
   news:        0.10
 
+# ─── Category Types ───────────────────────────────────
+# gate: Structurally determines the direction (e.g. Trend).
+# voter: Independently confirms or rejects the direction (e.g. Volatility).
+# Only 'voter' categories count toward min_agreeing_categories.
+category_types:
+  trend:       gate
+  momentum:    gate
+  sentiment:   gate
+  derivatives: voter
+  volatility:  voter
+  onchain:     voter
+  news:        voter
+
 # ─── Signal Thresholds ────────────────────────────────
 signal:
   # Minimum weighted confluence score to fire a signal
   min_score: 0.80
-  # Minimum number of categories that must agree on direction
-  min_agreeing_categories: 3
+  # Minimum number of independent 'voter' categories that must agree on direction
+  min_agreeing_categories: 1
   # Minimum individual category score magnitude to count as "agreeing"
   category_agreement_threshold: 0.3
   # Cooldown: minimum seconds between signals for the same symbol
