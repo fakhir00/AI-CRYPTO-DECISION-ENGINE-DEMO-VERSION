@@ -9,6 +9,7 @@ import { logSignal, fetchOpenSignals, updateSignalOutcome } from '../lib/signals
 import { createSignal } from '../lib/signals/schema.js';
 import { SCORING_CONFIG } from '../lib/config.js';
 import { setCooldown } from '../lib/scoring/signal-generator.js';
+import { fileURLToPath } from 'url';
 
 // Setup environment and overrides for shadow mode
 ensureServerEnv();
@@ -235,13 +236,14 @@ async function run() {
 
 async function start() {
   // Only start the loop if run directly, not if imported for testing
-  import.meta.url === `file://${process.argv[1]}` && (async () => {
+  const isMain = process.argv[1] === fileURLToPath(import.meta.url);
+  if (isMain) {
     console.log(`\n[shadow] Waking up to run shadow evaluation at ${new Date().toISOString()}...`);
     await seedCooldowns();
     await sendHeartbeat();
     run();
     setInterval(run, POLL_INTERVAL_MS);
-  })();
+  }
 }
 
 start();
