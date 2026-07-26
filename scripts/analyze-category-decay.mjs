@@ -1,5 +1,6 @@
 import fs from 'fs';
-import { fetchAllData, backtestSymbol, PRODUCTION_CONFIG } from '../lib/backtest/runner.js';
+import { fetchAllData, fetchAllFNG, backtestSymbol } from '../lib/backtest/runner.js';
+import { SCORING_CONFIG as PRODUCTION_CONFIG } from '../lib/config.js';
 
 // Configuration
 const BETA_CLUSTER = ['BTC', 'ETH', 'SOL', 'XRP', 'BNB'];
@@ -7,7 +8,7 @@ const IDIO_CLUSTER = ['TRX', 'KAITO', 'BNB'];
 const ALL_SYMBOLS = [...new Set([...BETA_CLUSTER, ...IDIO_CLUSTER])];
 
 const START = new Date('2026-01-25T00:00:00Z').getTime();
-const END = Date.now();
+const END = new Date('2026-07-26T00:00:00Z').getTime(); // Pin END time to strictly freeze the baseline
 const SPLIT = new Date('2026-05-01T00:00:00Z').getTime();
 
 const CATEGORIES = ['trend', 'momentum', 'derivatives', 'volatility', 'sentiment', 'onchain', 'news'];
@@ -15,10 +16,12 @@ const CATEGORIES = ['trend', 'momentum', 'derivatives', 'volatility', 'sentiment
 async function runAnalysis() {
   console.log(`[decay-analysis] Fetching data and backtesting ${ALL_SYMBOLS.length} symbols...`);
   
+  const fngRes = await fetchAllFNG();
   const signals = [];
   
   for (const sym of ALL_SYMBOLS) {
-    const { candles, funding, fng } = await fetchAllData(sym, START, END);
+    const { candles, funding } = await fetchAllData(sym, START, END);
+    const fng = fngRes;
     const fullResult = await backtestSymbol({
       symbol: sym, candles, funding, fng,
       cfg: PRODUCTION_CONFIG

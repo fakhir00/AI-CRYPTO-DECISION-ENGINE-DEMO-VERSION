@@ -10,7 +10,8 @@
 // - In-sample: Jan 25 – Apr 30, 2026
 // - Out-of-sample: May 1 – Jul 25, 2026
 
-import { fetchAllData, backtestSymbol, PRODUCTION_CONFIG, COST_PER_SIDE } from '../lib/backtest/runner.js';
+import { fetchAllData, fetchAllFNG, backtestSymbol, COST_PER_SIDE } from '../lib/backtest/runner.js';
+import { SCORING_CONFIG as PRODUCTION_CONFIG } from '../lib/config.js';
 import { computeMetrics } from '../lib/backtest/metrics.js';
 import { getUniverse } from '../lib/ingestion/universe.js';
 
@@ -36,14 +37,8 @@ console.log(`   Out-of-sample:  May 1  – Jul 25, 2026\n`);
 
 // Fetch Fear & Greed once (global, not per-symbol)
 console.log('[backtest] Fetching global Fear & Greed history...');
-let fngRes;
-try {
-  const res = await fetch('https://api.alternative.me/fng/?limit=200&format=json');
-  const json = await res.json();
-  fngRes = (json.data || []).map(d => ({ ts: parseInt(d.timestamp, 10) * 1000, value: +d.value, label: d.value_classification }));
-  fngRes.sort((a, b) => a.ts - b.ts);
-  console.log(`[backtest]   Fear & Greed: ${fngRes.length} daily records\n`);
-} catch { fngRes = []; console.log('[backtest]   Fear & Greed: fetch failed, proceeding without\n'); }
+const fngRes = await fetchAllFNG();
+console.log(`[backtest]   Fear & Greed: ${fngRes.length} daily records\n`);
 
 const fullResults = {};
 

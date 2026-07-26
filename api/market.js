@@ -37,9 +37,10 @@ const MIN_MOMENTUM_ATR_PCT = DEFAULT_MOMENTUM_CONFIG.atrThreshold * 100;
 const MAX_MOMENTUM_ATR_PCT = 1.8;
 const MIN_SIGNAL_ALPHA = 55;
 const MIN_DIRECTION_EDGE = 1.35;
-const MIN_RR_TO_TP2 = 1.5;
-const MAX_STOP_DISTANCE_PCT = 1.85;
+import { SCORING_CONFIG } from '../lib/config.js';
 
+const MIN_RR_TO_TP2 = SCORING_CONFIG.levels.min_rr_tp2;
+const MAX_STOP_DISTANCE_PCT = SCORING_CONFIG.levels.max_stop_pct;
 const STABLECOINS = new Set([
   'USDT', 'USDC', 'DAI', 'BUSD', 'FDUSD', 'TUSD', 'PYUSD', 'USDE', 'USDD',
   'GUSD', 'LUSD', 'EURC', 'FRAX', 'USD1', 'USDS', 'USDP', 'USDB', 'RLUSD',

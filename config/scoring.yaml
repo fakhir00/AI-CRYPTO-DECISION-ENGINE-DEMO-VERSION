@@ -40,6 +40,11 @@ signal:
   # Cooldown: minimum seconds between signals for the same symbol
   cooldown_seconds: 900
 
+# ─── Trade Exits ────────────────────────────────────────
+exits:
+  # Configurable partial TPs
+  scale_out_splits: [0.3, 0.3, 0.2, 0.2]
+
 # ─── Trade Level Defaults ─────────────────────────────
 levels:
   # Entry zone: ladder 3 prices around the current price
