@@ -46,8 +46,8 @@ async function seedCooldowns() {
 }
 
 async function sendHeartbeat() {
-  const token = process.env.TELEGRAM_BOT_TOKEN;
-  const chatId = process.env.SHADOW_TELEGRAM_CHAT_ID;
+  const token = process.env.TELEGRAM_BOT_TOKEN?.trim();
+  const chatId = process.env.SHADOW_TELEGRAM_CHAT_ID?.trim();
   if (!token || !chatId) return;
 
   try {
@@ -59,7 +59,7 @@ async function sendHeartbeat() {
     });
     console.log('[shadow] Telegram heartbeat sent.');
   } catch (err) {
-    console.warn('[shadow] Heartbeat send failed:', err.message);
+    console.warn('[shadow] Heartbeat send failed:', err.message, err.cause);
   }
 }
 
