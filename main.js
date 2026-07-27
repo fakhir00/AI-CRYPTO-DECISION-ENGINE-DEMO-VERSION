@@ -2197,8 +2197,14 @@ async function syncLiveApis() {
     }
     
     if (fearGreedData && Number.isFinite(fearGreedData.value)) LIVE_FNG = fearGreedData;
-    if (defiPoolsData && defiPoolsData.length > 0) DEFI_POOLS = defiPoolsData;
-    if (newsData && newsData.length > 0) NEWS = newsData;
+    if (defiPoolsData && defiPoolsData.length > 0) {
+      DEFI_POOLS.length = 0;
+      defiPoolsData.forEach(p => DEFI_POOLS.push(p));
+    }
+    if (newsData && newsData.length > 0) {
+      NEWS.length = 0;
+      newsData.forEach(n => NEWS.push(n));
+    }
     if (globalMarketData?.data) window._liveGlobalMarketData = globalMarketData.data;
     if (dunePulseData) LIVE_DUNE_PULSE = dunePulseData;
     if (btcChainData) LIVE_BTC_CHAIN = btcChainData;
