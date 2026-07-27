@@ -1,5 +1,5 @@
 import './style.css';
-import { fetchMarketData, fetchCandlePatterns, fetchGlobalMarketData, fetchWhaleActivity, fetchSentiment, fetchFearAndGreed, fetchAIAnalysis, fetchHermesAnalysis, fetchDualAI, calculateAlphaScore, fetchDefiPools, fetchNews, fetchTechnicalSignals, fetchTrendingNarratives, fetchChartData, fetchFundingRates, fetchOpenInterest, fetchOrderBookDepth, fetchBtcOnChain, fetchDuneMarketPulse, fetchRuntimeApiHealth, addToAIMemory, clearAIMemory, getAIMemory, getApiHealthSummary, getApiHealthPromptSummary } from './api.js';
+import { fetchMarketData, fetchActiveSignals, fetchCandlePatterns, fetchGlobalMarketData, fetchWhaleActivity, fetchSentiment, fetchFearAndGreed, fetchAIAnalysis, fetchHermesAnalysis, fetchDualAI, calculateAlphaScore, fetchDefiPools, fetchNews, fetchTechnicalSignals, fetchTrendingNarratives, fetchChartData, fetchFundingRates, fetchOpenInterest, fetchOrderBookDepth, fetchBtcOnChain, fetchDuneMarketPulse, fetchRuntimeApiHealth, addToAIMemory, clearAIMemory, getAIMemory, getApiHealthSummary, getApiHealthPromptSummary } from './api.js';
 import { setupAuth, openSignIn, logout, openUserProfile, clerk } from './lib/auth.js';
 import { supabase } from './lib/supabase.js';
 import {
@@ -2167,227 +2167,71 @@ function simulateMarketTick() {
 
 async function syncLiveApis() {
   const statusEl = document.getElementById('market-time');
-  if(statusEl) statusEl.textContent = "Syncing Live APIs...";
+  if(statusEl) statusEl.textContent = 'Syncing Live APIs...';
   
   try {
-    // 1. Fetch Market Leaderboard First (Top 50)
     const marketData = await fetchMarketData();
-    if (!marketData) throw new Error('Failed to fetch market leaderboard');
+    if (marketData && marketData.length > 0) {
+      assets = marketData;
+    }
 
-    const cappedMarketData = marketData
-      .filter(c => !isStablecoinSymbol(c.symbol, c.name, c.current_price))
-      .filter(c => !isScamLikeAsset({ symbol: c.symbol, name: c.name, total_volume: c.total_volume, current_price: c.current_price }))
-      .slice(0, MAX_TRADABLE_ASSETS);
-
-    const topSymbols = cappedMarketData
-      .filter(c => !isStablecoinSymbol(c.symbol, c.name, c.current_price))
-      .filter(c => !isScamLikeAsset({ symbol: c.symbol, name: c.name, total_volume: c.total_volume, current_price: c.current_price }))
-      .map(c => c.symbol.toUpperCase());
-    const derivativeSymbols = topSymbols.slice(0, 15); // Top 15 for heavy OI/Funding data
-
-    // 2. Fetch all other data using discovered symbols
     const [
-      whales,
-      narrativesData,
-      chartPrices,
-      fundingData,
-      oiData,
-      depthData,
-      dunePulseData,
-      btcChainData,
-      sentimentData,
-      fearGreedData,
-      globalMarketData,
-      defiPoolsData,
-      newsData,
-      technicalData,
-      runtimeHealthData
+      whales, narrativesData, fearGreedData, sentimentData, globalMarketData, defiPoolsData, newsData, btcChainData, dunePulseData, runtimeHealthData
     ] = await Promise.all([
       fetchWhaleActivity(),
       fetchTrendingNarratives(),
-      fetchChartData('BTC'),
-      fetchFundingRates(derivativeSymbols),
-      fetchOpenInterest(derivativeSymbols),
-      fetchOrderBookDepth('BTC'),
-      fetchDuneMarketPulse(),
-      fetchBtcOnChain(),
-      fetchSentiment(),
       fetchFearAndGreed(),
+      fetchSentiment(),
       fetchGlobalMarketData(),
       fetchDefiPools(),
       fetchNews(),
-      fetchTechnicalSignals(derivativeSymbols),
+      fetchBtcOnChain(),
+      fetchDuneMarketPulse(),
       fetchRuntimeApiHealth()
     ]);
 
-    // Update Global Narratives & Sentiment
     if (narrativesData && narrativesData.narratives) {
       NARRATIVES.length = 0;
-      narrativesData.narratives.forEach(n => {
-        // Add a random 'val' for the progress bar (calculated based on change)
-        const progress = Math.min(100, Math.max(20, 50 + (n.change * 3)));
-        NARRATIVES.push({ ...n, val: progress });
-      });
+      narrativesData.narratives.forEach(n => NARRATIVES.push({ ...n, val: Math.min(100, Math.max(20, 50 + (n.change * 3))) }));
       renderNarrativeMomentum();
     }
-
-    if (sentimentData) {
-      LIVE_SENTIMENT = sentimentData;
-      // If data is unavailable or neutral (50), inject dynamic bias from market performance
-      if (LIVE_SENTIMENT.score === 50 && assets.length > 0) {
-        const avgChange = assets.slice(0, 10).reduce((acc, a) => acc + a.change, 0) / 10;
-        LIVE_SENTIMENT.score = Math.min(95, Math.max(5, 50 + (avgChange * 5)));
-        LIVE_SENTIMENT.source = 'Momentum Engine';
-      }
-    }
+    
     if (fearGreedData && Number.isFinite(fearGreedData.value)) LIVE_FNG = fearGreedData;
-
-    if (defiPoolsData && defiPoolsData.length > 0) {
-      DEFI_POOLS.length = 0;
-      defiPoolsData.forEach(pool => DEFI_POOLS.push(pool));
-    }
-
-    if (newsData && newsData.length > 0) {
-      NEWS.length = 0;
-      newsData.forEach(item => NEWS.push(item));
-    }
-
-    if (technicalData?.ema && Object.keys(technicalData.ema).length > 0) {
-      window._liveEmaData = technicalData.ema;
-    }
-
-    if (globalMarketData?.data) {
-      window._liveGlobalMarketData = globalMarketData.data;
-    }
-
-    // Store derivatives data globally
-    if (fundingData && fundingData.length > 0) LIVE_FUNDING = fundingData;
-    if (oiData && oiData.length > 0) LIVE_OI = oiData;
-    if (depthData) LIVE_DEPTH = depthData;
+    if (defiPoolsData && defiPoolsData.length > 0) DEFI_POOLS = defiPoolsData;
+    if (newsData && newsData.length > 0) NEWS = newsData;
+    if (globalMarketData?.data) window._liveGlobalMarketData = globalMarketData.data;
     if (dunePulseData) LIVE_DUNE_PULSE = dunePulseData;
     if (btcChainData) LIVE_BTC_CHAIN = btcChainData;
-    window._liveFundingData = LIVE_FUNDING;
-    window._liveOiData = LIVE_OI;
-    window._liveDepthData = LIVE_DEPTH;
-    window._liveDunePulse = LIVE_DUNE_PULSE;
     if (runtimeHealthData) window._serverApiHealth = runtimeHealthData;
 
-    // Surface API status for debugging + AI context injection
-    const apiHealth = getApiHealthSummary();
-    window._apiHealthSummary = apiHealth;
-    const runtimeHealthPrompt = runtimeHealthData
-      ? `Runtime checks: ${(runtimeHealthData.checks || []).map(check => `${check.name}: ${check.status}${check.httpStatus ? ` HTTP ${check.httpStatus}` : ''}`).join(' | ')}`
-      : '';
-    window._apiHealthPrompt = [getApiHealthPromptSummary(), runtimeHealthPrompt].filter(Boolean).join(' | ');
-    if (apiHealth.degraded > 0 || apiHealth.failed > 0) {
-      const failingApis = apiHealth.services
-        .filter(s => s.status !== 'ok')
-        .map(s => `${s.name}: ${s.status} (${s.detail || 'no detail'})`)
-        .join(' | ');
-      console.warn('⚠️ API health issues detected:', failingApis);
-    }
-
-    // Update Whale & Smart Money Flows
     if (whales && whales.length > 0) {
       WHALE_ACTIONS.length = 0;
       SMART_MONEY_FLOWS.length = 0;
-      ALPHA_SIGNALS.length = 0;
-      
       whales.slice(0, 6).forEach((w, i) => {
         const type = i % 2 === 0 ? 'buy' : 'sell';
         const formattedVal = '$' + w.value.toFixed(1) + 'M';
-        
         WHALE_ACTIONS.push({
-          time: "Live Tx",
-          text: type === 'buy' ? `${formattedVal} transferred to` : `${formattedVal} withdrawn from`,
-          type: type,
-          amount: w.token || "USDC",
-          exchange: "DEX/CEX"
+          time: 'Live Tx', text: type === 'buy' ? `${formattedVal} transferred to` : `${formattedVal} withdrawn from`,
+          type: type, amount: w.token || 'USDC', exchange: 'DEX/CEX'
         });
-
-        if (i < 5) {
-          SMART_MONEY_FLOWS.push({
-            amount: formattedVal,
-            asset: w.token || "USDC",
-            type: type === 'buy' ? 'inflow' : 'outflow',
-            wallet: "Whale " + w.from.slice(0,6),
-            time: "Live",
-            tag: type === 'buy' ? 'accumulation' : 'distribution'
-          });
-        }
+        if (i < 5) SMART_MONEY_FLOWS.push({
+          amount: formattedVal, asset: w.token || 'USDC', type: type === 'buy' ? 'inflow' : 'outflow',
+          wallet: 'Whale ' + w.from.slice(0,6), time: 'Live', tag: type === 'buy' ? 'accumulation' : 'distribution'
+        });
       });
       renderSmartMoneyFlow();
-      renderWhalePage(); // Update the dedicated whale page
-      
-      ALPHA_SIGNALS.push({ time: "Live Alert", text: "Heavy on-chain crypto asset rotation detected across smart money addresses.", impact: "high" });
-      ALPHA_SIGNALS.push({ time: "Live Alert", text: `Top whale executed a massive ${whales[0].token || 'ETH'} transaction worth $${whales[0].value.toFixed(1)}M.`, impact: "high" });
-      ALPHA_SIGNALS.push({ time: "Live Alert", text: "Institutional flow algorithms detect accumulation in top 10 assets.", impact: "medium" });
-    }
-
-    // ═══ SINGLE SOURCE OF TRUTH ═══
-    // Fetch pre-computed, server-cached market data from /api/market
-    // This endpoint returns identical data to every device worldwide.
-    let serverAssets = null;
-    let binancePatterns = {};
-    try {
-      const serverRes = await fetch('/api/market');
-      if (serverRes.ok) {
-        const serverData = await serverRes.json();
-        if (serverData.data && serverData.data.length > 0) {
-          serverAssets = serverData.data.map(a => {
-            if (binancePatterns && binancePatterns[a.symbol]) {
-               a.reason = binancePatterns[a.symbol];
-            } else if (!a.reason) {
-               a.reason = generateReason(a, a.score);
-            }
-            return a;
-          }).filter(a => !isStablecoinSymbol(a.symbol, a.name, a.price) && !isScamLikeAsset(a));
-          console.log(`✅ Server market data loaded (source: ${serverData.source}, age: ${serverData.age}s)`);
-        }
-      }
-    } catch(e) {
-      console.warn('⚠️ Server /api/market unavailable, falling back to client-side:', e.message);
-    }
-
-    if (serverAssets) {
-      assets = applyDuneMacroCalibration(serverAssets, LIVE_DUNE_PULSE);
-    } else if (marketData && marketData.length > 0) {
-      // Fallback: compute client-side (only if server endpoint is down)
-      assets = cappedMarketData.map(coin => {
-         const symbol = coin.symbol.toUpperCase();
-         const change24h = coin.price_change_percentage_24h || 0;
-         const volRatio = coin.market_cap > 0 ? (coin.total_volume / coin.market_cap) : 0;
-         const mcapRank = coin.market_cap_rank || 50;
-         const alpha = computeDirectionalNeutralAlpha(change24h, volRatio, mcapRank);
-         const actualReason = (binancePatterns && binancePatterns[symbol]) ? binancePatterns[symbol] : generateReason(coin, alpha);
-         
-         return {
-           symbol, name: coin.name, price: coin.current_price, change: change24h,
-           score: alpha,
-           bias: change24h >= 1 ? 'bullish' : (change24h <= -1 ? 'bearish' : 'neutral'),
-           reason: actualReason, vol: '$' + (coin.total_volume / 1e9).toFixed(1) + 'B'
-         };
-      }).filter(a => !isStablecoinSymbol(a.symbol, a.name, a.price) && !isScamLikeAsset(a));
-      assets = applyDuneMacroCalibration(assets, LIVE_DUNE_PULSE);
+      renderWhalePage();
     }
 
     if (assets.length > 0) {
-      if (statusEl) statusEl.textContent = 'Running momentum intraday swing scan...';
-      assets = await hydrateAssetsWithSignals(assets);
-      assets = applyDirectionalBiasToAssets(assets);
-      assets = enforceTopAssetUniverse(assets);
-    }
-
-    if (assets.length > 0) {
-      
       renderDashboard();
       renderOpportunitiesPage();
       renderProSignals();
-      saveDataCache(); // Persist to localStorage for cross-device consistency
-      if(statusEl) statusEl.textContent = "Live Feed Synced";
+      saveDataCache();
+      if(statusEl) statusEl.textContent = 'Live Feed Synced';
     }
   } catch(e) {
-    console.error("Live sync failed", e);
+    console.error('Live sync failed', e);
   }
 }
 
