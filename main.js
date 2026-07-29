@@ -3426,7 +3426,7 @@ async function renderBetaShadowSignals() {
   container.innerHTML = '<div style="color:var(--text-muted);text-align:center;">Loading shadow signals...</div>';
 
   try {
-    const token = await window.clerk?.session?.getToken();
+    const token = await clerk?.session?.getToken();
     if (!token) {
       container.innerHTML = `<div style="color:var(--danger);text-align:center;padding:2rem;">Unauthorized: No active session token found.</div>`;
       return;
