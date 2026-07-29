@@ -3425,10 +3425,17 @@ async function renderBetaShadowSignals() {
   if (!container) return;
   container.innerHTML = '<div style="color:var(--text-muted);text-align:center;">Loading shadow signals...</div>';
 
-  const userEmail = clerk?.user?.primaryEmailAddress?.emailAddress || '';
   try {
+    const token = await window.clerk?.session?.getToken();
+    if (!token) {
+      container.innerHTML = `<div style="color:var(--danger);text-align:center;padding:2rem;">Unauthorized: No active session token found.</div>`;
+      return;
+    }
+
     const res = await fetch('/api/beta/shadow-signals', {
-      headers: { 'x-user-email': userEmail }
+      headers: { 
+        'Authorization': `Bearer ${token}`
+      }
     });
     const json = await res.json();
     if (!res.ok) {

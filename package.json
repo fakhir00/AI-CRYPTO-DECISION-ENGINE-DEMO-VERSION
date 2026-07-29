@@ -12,6 +12,7 @@
     "vite": "^8.0.10"
   },
   "dependencies": {
+    "@clerk/backend": "^3.13.2",
     "@clerk/clerk-js": "^6.10.1",
     "@supabase/supabase-js": "^2.105.4",
     "ccxt": "^4.5.54",
