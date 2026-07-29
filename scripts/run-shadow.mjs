@@ -3,6 +3,7 @@
 // CLI: Run Shadow Mode (Live Signal Routing)
 // ═══════════════════════════════════════════════════════
 
+import 'dotenv/config';
 import { ensureServerEnv } from '../lib/server-env.js';
 import { ingestAndScore } from '../lib/scoring/engine.js';
 import { logSignal, fetchOpenSignals, updateSignalOutcome } from '../lib/signals/logger.js';
@@ -33,7 +34,7 @@ async function seedCooldowns() {
         .eq('symbol', sym)
         .order('created_at', { ascending: false })
         .limit(1);
-      
+
       if (!error && data && data.length > 0) {
         const lastTime = new Date(data[0].created_at).getTime();
         setCooldown(sym, lastTime);
@@ -85,7 +86,7 @@ export async function evaluateOpenSignals(ingestionReport) {
     for (const sig of openSignals) {
       const lastCheckTime = new Date(sig.updated_at || sig.created_at).getTime();
       const latestCandleTime = candles[candles.length - 1].closeTime || candles[candles.length - 1].openTime;
-      
+
       // Gap warning: 200 candles of 15m is roughly 50 hours (180,000,000 ms). Let's warn if gap > 50h.
       if (latestCandleTime - lastCheckTime > 50 * 60 * 60 * 1000) {
         console.warn(`[WARN] Downtime gap for ${sym} exceeds 50 hours! Some wicks may be missed for signal ${sig.id}.`);
@@ -121,17 +122,17 @@ export function processMissedCandles(sig, missedCandles, COST_PER_SIDE, splitCon
   const isLong = sig.direction === 'long' || sig.direction === 'buy';
   const avgEntry = sig.entries?.[1] || sig.entries?.[0]; // Usually entries[1] is avgEntry
   let currentSl = sig.stop_loss;
-  
+
   const initialRisk = Math.abs(avgEntry - currentSl);
   const effEntry = isLong ? avgEntry * (1 + COST_PER_SIDE) : avgEntry * (1 - COST_PER_SIDE);
-  
+
   if (outcome.highestTpLevel >= 1) {
     currentSl = effEntry;
   }
-  
+
   const tps = sig.take_profits || [];
   if (!avgEntry || !currentSl || tps.length === 0) return { statusChanged: false, closed: false, outcome };
-  
+
   const tpFractions = [];
   let remainingAlloc = 1.0;
   for (let i = 0; i < tps.length; i++) {
@@ -154,10 +155,10 @@ export function processMissedCandles(sig, missedCandles, COST_PER_SIDE, splitCon
       const pnl = isLong ? effExit - effEntry : effEntry - effExit;
       const r = initialRisk > 0 ? pnl / initialRisk : 0;
       outcome.realizedR += r * outcome.remainingSize;
-      
+
       outcome.remainingSize = 0;
       outcome.finalResultStr = outcome.highestTpLevel > 0 ? `tp${outcome.highestTpLevel}_sl` : 'stopped_out';
-      
+
       statusChanged = true;
       closed = true;
       break;
@@ -169,16 +170,16 @@ export function processMissedCandles(sig, missedCandles, COST_PER_SIDE, splitCon
         const effExit = isLong ? tps[t] * (1 - COST_PER_SIDE) : tps[t] * (1 + COST_PER_SIDE);
         const pnl = isLong ? effExit - effEntry : effEntry - effExit;
         const r = initialRisk > 0 ? pnl / initialRisk : 0;
-        
+
         const frac = tpFractions[t];
         outcome.realizedR += r * frac;
         outcome.remainingSize -= frac;
-        
+
         if (outcome.remainingSize < 0.001) outcome.remainingSize = 0;
-        
+
         outcome.highestTpLevel = t + 1;
         statusChanged = true;
-        
+
         if (outcome.highestTpLevel === 1) {
           currentSl = effEntry;
         }
@@ -186,14 +187,14 @@ export function processMissedCandles(sig, missedCandles, COST_PER_SIDE, splitCon
         break; // TPs are ordered
       }
     }
-    
+
     if (outcome.remainingSize <= 0.001) {
       outcome.remainingSize = 0;
       outcome.finalResultStr = `tp${tps.length}_hit`;
       closed = true;
       break;
     }
-    
+
     if (closed) break;
   }
 
@@ -210,19 +211,19 @@ async function run() {
       ...SCORING_CONFIG,
       symbols: SHADOW_SYMBOLS
     };
-    
+
     const { signals, ingestionReport } = await ingestAndScore(cfg);
-    
+
     // Evaluate and exit open signals FIRST
     await evaluateOpenSignals(ingestionReport);
-    
+
     // Then log new signals
     for (const rawSig of signals) {
       const sig = createSignal(rawSig);
-      
+
       const openSignals = await fetchOpenSignals(sig.symbol, true);
       const hasShadow = openSignals.some(s => s.direction === sig.direction);
-      
+
       if (!hasShadow) {
         sig.is_shadow = true;
         console.log(`[shadow] Firing NEW shadow signal for ${sig.symbol} (${sig.direction})`);
