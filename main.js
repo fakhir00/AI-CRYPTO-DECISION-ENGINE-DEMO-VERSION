@@ -1965,9 +1965,15 @@ function startLoadingSequence(loadingScreen, mainApp, loadingBar) {
         loadingScreen.style.opacity = '0';
         setTimeout(() => {
           loadingScreen.classList.add('hidden');
-          mainApp.classList.remove('hidden');
-          // Start the first live sync after showing the UI to ensure no delay
-          syncLiveApis();
+          if (window.location.pathname === '/beta/shadow-signals') {
+            document.getElementById('beta-view-container').classList.remove('hidden');
+            mainApp.classList.add('hidden');
+            renderBetaShadowSignals();
+          } else {
+            mainApp.classList.remove('hidden');
+            // Start the first live sync after showing the UI to ensure no delay
+            syncLiveApis();
+          }
         }, 500);
       }, 500);
     }
@@ -3333,204 +3339,19 @@ function renderProSignals() {
   const grid = document.getElementById('pro-signals-grid');
   if (!grid) return;
 
-  // Use top 15 assets by opportunity score for the Pro Signals grid
-  const top = [...assets]
-    .filter(a => !isStablecoinSymbol(a.symbol, a.name, a.price) && !isScamLikeAsset(a))
-    .sort((a, b) => ((b.opportunityScore ?? b.score) - (a.opportunityScore ?? a.score)) || a.symbol.localeCompare(b.symbol))
-    .slice(0, 15);
-
-  if (!top.length) {
-    grid.innerHTML = `<div style="text-align:center;color:var(--text-muted);padding:3rem;">No assets loaded yet. Live data syncs on startup.</div>`;
-    return;
-  }
-
-  grid.innerHTML = top.map((asset, index) => {
-    const sig = generateSignalForAsset(asset);
-    
-    if (sig.type === 'WAIT') {
-      return `
-        <div class="signal-card" id="signal-${asset.symbol}">
-          <div class="signal-card-header">
-            <div class="signal-pair">
-              <span class="signal-symbol">#${asset.symbol}/USDT</span>
-              <span class="badge" style="background:var(--bg-lighter); color:var(--text-muted); font-size: 0.65rem;">WAIT</span>
-            </div>
-            <div class="signal-strength ${sig.strength.cls}">${sig.strength.label}</div>
-          </div>
-          <div style="padding: 2rem 0; text-align: center; color: var(--text-muted);">
-            <i data-feather="shield" style="margin-bottom: 1rem; opacity: 0.5;"></i>
-            <p style="font-size: 0.85rem;">${sig.waitReason}</p>
-          </div>
-        </div>
-      `;
-    }
-
-    const dirLabel = sig.isBull ? 'LONG' : 'SHORT';
-    const lifecycleStatus = sig.lifecycleStatus || 'ACTIVE';
-    const lifecycleColor = lifecycleStatus === 'ACTIVE'
-      ? 'var(--primary)'
-      : lifecycleStatus === 'TRIGGERED'
-        ? 'var(--green)'
-        : lifecycleStatus === 'COMPLETED'
-          ? 'var(--green)'
-          : lifecycleStatus === 'EXPIRED'
-            ? 'var(--text-muted)'
-            : 'var(--red)';
-    const targetMovePct = (target) => {
-      const base = Number(sig.avgEntry) || Number(asset.price) || 1;
-      const pct = sig.isBull
-        ? ((target - base) / base) * 100
-        : ((base - target) / base) * 100;
-      return Math.max(0, pct).toFixed(2);
-    };
-    const stopMovePct = () => {
-      const base = Number(sig.avgEntry) || Number(asset.price) || 1;
-      return (-Math.abs(((sig.sl - base) / base) * 100)).toFixed(2);
-    };
-    // SaaS Freemium Logic: Lock signals after the 2nd one (Unlocked per user request)
-    const isLocked = false;
-    const lockedOverlay = isLocked ? `
-      <div style="position:absolute;top:0;left:0;width:100%;height:100%;display:flex;align-items:center;justify-content:center;z-index:10;background:rgba(10,12,16,0.65);border-radius:8px;">
-        <span style="background:var(--primary);color:#fff;padding:0.5rem 1.2rem;border-radius:6px;font-size:0.85rem;font-weight:bold;cursor:pointer;box-shadow:0 4px 15px rgba(108,92,231,0.4);">🔒 UPGRADE TO PRO TO UNLOCK</span>
-      </div>
-    ` : '';
-    const blurStyle = isLocked ? 'filter: blur(6px); pointer-events: none; user-select: none; opacity: 0.5;' : '';
-
-    return `
-      <div class="signal-card" id="signal-${asset.symbol}">
-        <!-- Card Header -->
-        <div class="signal-card-header">
-          <div class="signal-pair">
-            <span class="signal-symbol">#${asset.symbol}/USDT</span>
-            <span class="signal-dir-badge ${sig.isBull ? 'sig-long' : 'sig-short'}">${dirLabel}</span>
-            <span class="badge bg-primary ml-2" style="font-size: 0.65rem; border: 1px solid rgba(255,255,255,0.1)">${sig.type}</span>
-            <span class="badge ml-2" style="font-size:0.65rem;border:1px solid rgba(255,255,255,0.12);color:${lifecycleColor};background:rgba(255,255,255,0.04);">${lifecycleStatus}</span>
-          </div>
-          <div class="signal-strength ${sig.strength.cls}">${sig.strength.label}</div>
-        </div>
-
-        <div class="signal-row">
-          <span class="signal-label">Signal ID</span>
-          <span class="signal-value signal-mono">${sig.signalId || 'PENDING'}</span>
-        </div>
-
-        <div class="signal-row">
-          <span class="signal-label">Generated</span>
-          <span class="signal-value">${sig.generatedAtLabel || 'UTC pending'}</span>
-        </div>
-
-        <div class="signal-row">
-          <span class="signal-label">Valid Until</span>
-          <span class="signal-value">${sig.validUntilLabel || 'UTC pending'}</span>
-        </div>
-
-        <!-- Exchanges -->
-        <div class="signal-row">
-          <span class="signal-label">Exchange</span>
-          <span class="signal-value">${sig.exchanges.join(', ')}</span>
-        </div>
-
-        <!-- Leverage -->
-        <div class="signal-row">
-          <span class="signal-label">Leverage</span>
-          <span class="signal-value text-warning">${sig.leverage}</span>
-        </div>
-
-        <div class="signal-row">
-          <span class="signal-label">VOLUME</span>
-          <span class="signal-value">${sig.volumeConfirmation.text}</span>
-        </div>
-
-        <div class="signal-row">
-          <span class="signal-label">STOP REASON</span>
-          <span class="signal-value">${sig.stopReason}</span>
-        </div>
-
-        <!-- Divider -->
-        <div class="signal-divider"></div>
-
-        <!-- Premium Locked Container -->
-        <div style="position:relative;margin-top:1rem;">
-          ${lockedOverlay}
-          <div style="${blurStyle}">
-            <!-- Entry Zone -->
-            <div class="signal-row">
-              <span class="signal-label">Entry Zone</span>
-              <span class="signal-value signal-mono">
-                ${sig.entryZoneRange}
-              </span>
-            </div>
-
-            <div class="signal-row">
-              <span class="signal-label">Avg Entry</span>
-              <span class="signal-value signal-mono">${formatPrice(sig.avgEntry)}</span>
-            </div>
-
-            <div class="signal-row">
-              <span class="signal-label">Entry Width</span>
-              <span class="signal-value">${Number(sig.entryZoneWidthPct).toFixed(2)}%</span>
-            </div>
-
-            <!-- Targets -->
-            <div class="signal-targets">
-              <div class="signal-target-row">
-                <span class="target-num">Target 1</span>
-                <span class="signal-mono text-green">${formatPrice(sig.t1)}</span>
-                <span class="target-pct text-green">+${targetMovePct(sig.t1)}%</span>
-              </div>
-              <div class="signal-target-row">
-                <span class="target-num">Target 2</span>
-                <span class="signal-mono text-green">${formatPrice(sig.t2)}</span>
-                <span class="target-pct text-green">+${targetMovePct(sig.t2)}%</span>
-              </div>
-              <div class="signal-target-row">
-                <span class="target-num">Target 3</span>
-                <span class="signal-mono text-green">${formatPrice(sig.t3)}</span>
-                <span class="target-pct text-green">+${targetMovePct(sig.t3)}%</span>
-              </div>
-              <div class="signal-target-row">
-                <span class="target-num">Target 4</span>
-                <span class="signal-mono text-green">${formatPrice(sig.t4)}</span>
-                <span class="target-pct text-green">+${targetMovePct(sig.t4)}%</span>
-              </div>
-            </div>
-
-            <!-- Stop Loss -->
-            <div class="signal-row signal-sl-row">
-              <span class="signal-label">Stop Loss</span>
-              <span class="signal-mono text-red">${formatPrice(sig.sl)}</span>
-              <span class="target-pct text-red">${stopMovePct()}%</span>
-            </div>
-
-            <div class="signal-row">
-              <span class="signal-label">Invalidation</span>
-              <span class="signal-value">${sig.invalidation}</span>
-            </div>
-
-            <div class="signal-row">
-              <span class="signal-label">Price Invalid.</span>
-              <span class="signal-value">${sig.priceInvalidation?.text || sig.invalidation}</span>
-            </div>
-
-            <div class="signal-row">
-              <span class="signal-label">Time Invalid.</span>
-              <span class="signal-value">${sig.timeInvalidation?.text || 'Cancel if entry is not triggered before expiry'}</span>
-            </div>
-          </div>
-        </div>
-
-        <!-- Footer -->
-        <div class="signal-footer">
-          <span>Alpha: <strong class="text-primary">${asset.opportunityScore ?? asset.score}/100</strong></span>
-          <span>TP1 R:R <strong class="text-green">${Number(sig.rrToTp1 || 0).toFixed(2)}</strong></span>
-          <span>TP2 R:R <strong class="text-green">${Number(sig.rrRatio).toFixed(2)}</strong></span>
-          <span>Risk <strong class="text-warning">${Number(sig.positionRiskPct || 0.5).toFixed(2)}%</strong></span>
-          <span>Stop <strong class="text-red">${Number(sig.riskPct || 0).toFixed(2)}%</strong></span>
-          <span class="signal-brand">NEXUS Pro</span>
-        </div>
-      </div>
-    `;
-  }).join('');
+  grid.innerHTML = `
+    <div style="text-align:center; padding: 4rem 2rem; background: var(--bg-card); border-radius: 8px; border: 1px dashed var(--border); grid-column: 1 / -1;">
+      <i data-feather="cpu" style="width: 48px; height: 48px; color: var(--primary); margin-bottom: 1rem; opacity: 0.5;"></i>
+      <h3 style="margin-bottom: 0.5rem; color: #fff;">Beta Engine in Training</h3>
+      <p style="color: var(--text-muted); margin-bottom: 1.5rem; max-width: 400px; margin-inline: auto;">
+        The legacy heuristic engine has been deprecated. The new 7-category shadow engine is currently running in an isolated environment.
+      </p>
+      <a href="/beta/shadow-signals" style="display: inline-block; padding: 0.75rem 1.5rem; background: var(--primary); color: #fff; text-decoration: none; border-radius: 6px; font-weight: 500;">
+        Access Beta View
+      </a>
+    </div>
+  `;
+  if (typeof feather !== 'undefined') feather.replace();
 }
 
 
@@ -3597,3 +3418,51 @@ document.querySelector('.subscription-body button')?.addEventListener('click', (
     alert('Subscription management is currently in Sandbox mode. Please contact support to upgrade your limits.');
   }, 1000);
 });
+
+// === Beta Shadow View ===
+async function renderBetaShadowSignals() {
+  const container = document.getElementById('beta-signals-list');
+  if (!container) return;
+  container.innerHTML = '<div style="color:var(--text-muted);text-align:center;">Loading shadow signals...</div>';
+
+  const userEmail = clerk?.user?.primaryEmailAddress?.emailAddress || '';
+  try {
+    const res = await fetch('/api/beta/shadow-signals', {
+      headers: { 'x-user-email': userEmail }
+    });
+    const json = await res.json();
+    if (!res.ok) {
+      container.innerHTML = `<div style="color:var(--danger);text-align:center;padding:2rem;">${json.error || 'Failed to fetch signals'}</div>`;
+      return;
+    }
+
+    if (!json.data || json.data.length === 0) {
+      container.innerHTML = '<div style="color:var(--text-muted);text-align:center;padding:2rem;">No signals found. Engine is waiting for strict 0.80+ confluence.</div>';
+      return;
+    }
+
+    container.innerHTML = json.data.map(sig => {
+      const outcomeText = sig.outcome ? JSON.stringify(sig.outcome) : 'PENDING';
+      const color = sig.status === 'CLOSED' ? (sig.outcome?.isWin ? 'var(--success)' : 'var(--danger)') : 'var(--primary)';
+      return `
+        <div style="background:var(--bg-card); border: 1px solid var(--border); border-radius: 8px; padding: 1rem; display: flex; flex-wrap: wrap; gap: 1rem; justify-content: space-between; align-items: center;">
+          <div>
+            <div style="font-size:1.1rem; font-weight:700;">${sig.symbol} <span style="font-size:0.8rem; color:${color}; border:1px solid ${color}; padding:2px 6px; border-radius:4px; margin-left:8px;">${sig.status}</span></div>
+            <div style="color:var(--text-muted); font-size:0.85rem; margin-top:4px;">Direction: ${sig.direction} | Score: ${sig.confluence_score}</div>
+          </div>
+          <div style="font-size: 0.85rem; color:var(--text-muted);">
+            <div>Entry Range: ${JSON.stringify(sig.entry_range)}</div>
+            <div>Take Profits: ${JSON.stringify(sig.take_profits)}</div>
+            <div>Stop Loss: ${sig.stop_loss}</div>
+          </div>
+          <div style="font-size: 0.85rem; color:var(--text-muted); text-align: right;">
+            <div>Created: ${new Date(sig.created_at).toLocaleString()}</div>
+            <div>Outcome: ${outcomeText}</div>
+          </div>
+        </div>
+      `;
+    }).join('');
+  } catch (err) {
+    container.innerHTML = `<div style="color:var(--danger);text-align:center;">Error loading beta signals: ${err.message}</div>`;
+  }
+}
